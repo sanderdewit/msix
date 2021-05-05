@@ -33,3 +33,6 @@ remove-item -path package -Recurse -Force
 write-output "download msixmgr tool"
 invoke-webrequest -uri 'https://aka.ms/msixmgr' -out msixmgr.zip
 expand-archive -path .\msixmgr.zip
+
+#set environment variable
+[Environment]::SetEnvironmentVariable('MsixTool', $((Get-Location).Path), [System.EnvironmentVariableTarget]::User)

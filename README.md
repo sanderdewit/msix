@@ -3,7 +3,7 @@ Cmdlets to make msix packaging easier
 
 Still work in progress.
 
-First run the prepare-environments.ps1
+First run the prepare-environment.ps1
 This will install download several modules;
 - msix-toolkit redist files. https://github.com/microsoft/MSIX-Toolkit
 - Package Support Framework. https://github.com/microsoft/MSIX-PackageSupportFramework

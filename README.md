@@ -7,8 +7,9 @@ First run the prepare-environments.ps1
 This will install download several modules;
 - msix-toolkit redist files. https://github.com/microsoft/MSIX-Toolkit
 - Package Support Framework. https://github.com/microsoft/MSIX-PackageSupportFramework
-- msixmgr. https://aka.ms/msixmgr
-It will also an user environmental variable, which is used in the module to call these files.
+- msixmgr. https://aka.ms/msixmgr /
+
+**Important: It will place an user environmental variable, which is used in the module to call these files.**
 
 
 get-MsixInfo -PackagePath c:\temp\app.msix

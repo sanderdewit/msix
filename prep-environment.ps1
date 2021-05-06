@@ -35,4 +35,5 @@ invoke-webrequest -uri 'https://aka.ms/msixmgr' -out msixmgr.zip
 expand-archive -path .\msixmgr.zip
 
 #set environment variable
+$env:MsixTool = $(Get-Location).Path #to set for direct use
 [Environment]::SetEnvironmentVariable('MsixTool', $((Get-Location).Path), [System.EnvironmentVariableTarget]::User)

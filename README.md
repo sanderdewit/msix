@@ -11,6 +11,20 @@ This will install download several modules;
 
 **Important: It will place an user environmental variable, which is used in the module to call these files.**
 
+import-module msix.psm1
+
+Current cmdlets;
+- get-MsixInfo
+- updateMsixSigner
+- start-MsixCmd
+
+current in progress:
+- Add-MsixPsf (incl monitor & fixups options)
+
+todo:
+- new-MsixAAImage (AppAttach)
+- option to auto debug issues in the Msix package
+- add-MsixAlias
 
 get-MsixInfo -PackagePath c:\temp\app.msix
 This will retrieve information around the Msix package.

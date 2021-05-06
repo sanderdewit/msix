@@ -15,7 +15,7 @@ import-module msix.psm1
 
 Current cmdlets;
 - get-MsixInfo
-- updateMsixSigner
+- update-MsixSigner
 - start-MsixCmd
 
 current in progress:

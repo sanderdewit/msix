@@ -25,6 +25,7 @@ todo:
 - new-MsixAAImage (AppAttach)
 - option to auto debug issues in the Msix package
 - add-MsixAlias
+- Add-MsixStartMenuGroup
 
 get-MsixInfo -PackagePath c:\temp\app.msix
 This will retrieve information around the Msix package.

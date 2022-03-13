@@ -1,7 +1,31 @@
-﻿#new 23-06-2021
+﻿#new 13-03-2022
 ##############################################################################################################
 # HELPER Functions
 ##############################################################################################################
+Function Get-PublisherIdFromPublisher ($Publisher) {
+    $EncUTF16LE = [system.Text.Encoding]::Unicode
+    $EncSha256 = [System.Security.Cryptography.HashAlgorithm]::Create("SHA256")
+
+    # Convert to UTF16 Little Endian
+    $UTF16LE = $EncUTF16LE.GetBytes($Publisher)
+
+    # Calculate SHA256 hash on UTF16LE Byte array. Store first 8 bytes in new Byte Array
+    $Bytes = @()
+    (($EncSha256.ComputeHasH($UTF16LE))[0..7]) | ForEach-Object { $Bytes += '{0:x2}' -f $_ }
+
+    # Convert Byte Array to Binary string; Adding padding zeros on end to it has 13*5 bytes
+    $BytesAsBinaryString = -join $Bytes.ForEach{ [convert]::tostring([convert]::ToByte($_,16),2).padleft(8,'0') }
+    $BytesAsBinaryString = $BytesAsBinaryString.PadRight(65,'0')
+
+    # Crockford Base32 encode. Read each 5 bits; convert to decimal. Lookup position in lookup table
+    $null = $Coded
+    For ($i=0;$i -lt (($BytesAsBinaryString.Length)); $i+=5) {
+        $String = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+        [int]$Int = [convert]::Toint32($BytesAsBinaryString.Substring($i,5),2)
+        $Coded += $String.Substring($Int,1)
+    }
+    Return $Coded.tolower()
+}
 
 function get-MsixAppXManifest {
     [CmdletBinding()]
@@ -12,7 +36,7 @@ function get-MsixAppXManifest {
             ValueFromPipelineByPropertyName = $true,
             Position = 0
             )]
-        [string[]]  $sourcefile,
+        [string[]]  $PackagePath,
         [Parameter(
             Mandatory = $true,
             ValueFromPipeline = $true,
@@ -23,15 +47,15 @@ function get-MsixAppXManifest {
     )
     BEGIN {
     Add-Type -Assembly System.IO.Compression.FileSystem
-    $item = Get-Item -Path $sourcefile
+    $item = Get-Item -Path $PackagePath
     }
     PROCESS {
     $zip = [IO.Compression.ZipFile]::OpenRead($($item.FullName))
-    $zip.Entries | Where-Object {$_.Name -eq 'AppxManifest.xml'} | ForEach-Object {[System.IO.Compression.ZipFileExtensions]::ExtractToFile($_, "$extractfolder\AppxManifest.xml", $true)}
+    $zip.Entries | Where-Object {$_.Name -eq 'AppxManifest.xml'} | ForEach-Object {[System.IO.Compression.ZipFileExtensions]::ExtractToFile($_, "${0}\AppxManifest.xml", $true)} -f $extractFolder
     $zip.Dispose()
     }
     END {
-    Clear-Variable sourcefile, extractfolder, item, zip
+    Clear-Variable PackagePath, extractfolder, item, zip
     }
 }
 
@@ -108,7 +132,7 @@ function start-MsixSigntool {
         [string[]]  $pfxpassword
     )
     BEGIN {
-    $msix_module_ver = (Get-Module msix -ListAvailable |select -ExpandProperty version|Sort-Object)[-1]
+    $msix_module_ver = (Get-Module msix -ListAvailable |select-object -ExpandProperty version|Sort-Object)[-1]
     $msixmodule = Get-Module msix -ListAvailable|Where-Object {$_.version -eq $msix_module_ver}
     $msixtool = $msixmodule.ModuleBase
 
@@ -116,14 +140,16 @@ function start-MsixSigntool {
     if ($pfx){
     if (!($pfxpassword)){throw 'missing pfx password'}
     $cert = Get-Item -Path $pfx
-    $arguments = "sign /v /tr http://timestamp.digicert.com /fd sha256 /f $($cert.FullName) /p $pfxpassword $($fileinfo.FullName)"
+	write-verbose $($cert.fullname)
+    $arguments = "sign /v /tr http://timestamp.digicert.com /fd sha256 /f `"$($cert.FullName)`" /p $pfxpassword `"$($fileinfo.FullName)`""
     }
     else {
-    $arguments = "sign /v /tr http://timestamp.digicert.com /fd sha256 /a $($fileinfo.FullName)"
+    $arguments = "sign /v /tr http://timestamp.digicert.com /fd sha256 /a `"$($fileinfo.FullName)`""
     }
 
     }
     PROCESS {
+write-verbose $arguments
     $signing = start-MsixProcess -Process "$msixtool\tools\signtool.exe" -arguments $arguments
     if ($($signing.exitcode) -ne '0'){write-error -Message "signing went wrong: $($signing.stderr)" -RecommendedAction "please check eventlog Microsoft\Windows\AppxPackagingom"}
     }
@@ -198,14 +224,14 @@ function new-MsixPsfJson {
     }
     PROCESS {
     $applications = $appinfo.Package.Applications.Application
-    
+
     $appjson = foreach ($app in $applications){
     [pscustomobject]@{
     'id' = $app.id
     'executable' = $app.executable.replace('\','/')
     }
     }
-    
+
     if ($fixup -eq 'FileRedirectionFixup'){
     $json = @{
         'applications' = [array]$appjson
@@ -245,9 +271,9 @@ function new-MsixPsfJson {
             }
     }
     }
-    
+
     return $json|ConvertTo-Json -Depth 10
-    
+
     }
     END {
     Clear-Variable appjson, applications, app, appinfo, manifest
@@ -308,7 +334,7 @@ Function Get-MsixInfo {
     try {
     write-verbose 'calling makeappx to unpack package'
     #$null = .\Tools\MakeAppx.exe unpack /p $($fileinfo.FullName) /d $tempdir /o
-    get-MsixAppXManifest -sourcefile $fileinfo.FullName -extractfolder $tempdir
+    get-MsixAppXManifest -PackagePath $fileinfo.FullName -extractfolder $tempdir
     }catch {
     Write-Error "unable to extract the msix package"
     }
@@ -465,10 +491,11 @@ Function update-MsixSigner {
     )
 
     BEGIN {
-    $msix_module_ver = (Get-Module msix -ListAvailable |select -ExpandProperty version|Sort-Object)[-1]
+    $msix_module_ver = (Get-Module msix -ListAvailable |select-object -ExpandProperty version|Sort-Object)[-1]
     $msixmodule = Get-Module msix -ListAvailable|Where-Object {$_.version -eq $msix_module_ver}
     $msixtool = $msixmodule.ModuleBase
     Write-Verbose -Message "unpacking msix to temp folder"
+    if (!(Test-Path -Path $PackagePath)){throw ('file could not be found')}
     $fileinfo = Get-Item -Path $PackagePath
     $tempdir = "$env:temp\msix\$($fileinfo.BaseName)"
     if (!(Test-Path -Path $tempdir)){
@@ -490,17 +517,21 @@ Function update-MsixSigner {
         if ($($appinfo.Package.Identity.Publisher) -ceq $publisher)
             {
              Write-Output -InputObject "not changing the publisher, as it is already a match"
-             #Microsoft MSIX team recommends to use of signtool over powershell Get-AuthenticodeSignature
+             #Microsoft MSIX team recommends to use of signtool over powershell Set-AuthenticodeSignature
              start-Msixsigntool -PackagePath $($fileinfo.FullName) -pfx $pfx -pfxpassword $pfxpassword
-        }
-        else
-        {
+        }else{
+         $PublisherId = get-PublisherIdFromPublisher -Publisher $appinfo.Package.Identity.Publisher
+         Write-Verbose $PublisherId
          $appinfo.Package.Identity.Publisher = [string]$publisher
          Write-Output -InputObject "modifying msix publisher"
          $appinfo.Save("$tempdir\AppxManifest.xml")
-         Write-Output -InputObject "packing up MSIX again"
-         $null = start-MsixProcess -Process "$msixtool\tools\MakeAppx.exe" -arguments "pack /p `"$($fileinfo.FullName)`" /d $tempdir /o"
-         start-Msixsigntool -PackagePath $($fileinfo.FullName) -pfx $pfx -pfxpassword $pfxpassword
+         $newPublisherId = get-PublisherIdFromPublisher -Publisher $publisher
+         $savename = $($fileinfo.fullname).replace($PublisherId,$newPublisherId)
+         Write-Output -InputObject "packing up MSIX again to $savename"
+         write-verbose $savename
+         $null = start-MsixProcess -Process "$msixtool\tools\MakeAppx.exe" -arguments "pack /p `"$savename`" /d $tempdir /o"
+         start-Msixsigntool -PackagePath $($savename) -pfx $pfx -pfxpassword $pfxpassword
+         Write-Output -InputObject "$savename has been created"
         }
      }
      #no publisher specified
@@ -599,10 +630,10 @@ Function add-MsixPsf {
     )
 
     BEGIN {
-    $msix_module_ver = (Get-Module msix -ListAvailable |select -ExpandProperty version|Sort-Object)[-1]
+    $msix_module_ver = (Get-Module msix -ListAvailable |select-object -ExpandProperty version|Sort-Object)[-1]
     $msixmodule = Get-Module msix -ListAvailable|Where-Object {$_.version -eq $msix_module_ver}
     $msixtool = $msixmodule.ModuleBase
-    
+
     $fileinfo = Get-Item -Path $PackagePath
     $tempdir = "$env:temp\msix\$($fileinfo.BaseName)"
     if (!(Test-Path -Path $tempdir)){
@@ -627,7 +658,7 @@ Function add-MsixPsf {
     $appfolder = "$tempdir\$($appinfo.Package.Applications.Application[0].Executable.substring(0,$($appinfo.Package.Applications.Application[0].Executable.LastIndexOf('\'))))"
     }
     if($PSCmdlet.ShouldProcess("$appfolder\config.json", "Writing config.json")){
-    $json = new-MsixPsfJson -AppxManiFest "$tempdir\AppxManifest.xml" -fixup $fixup -patterns $patterns -base $base -hive $hive -access $access 
+    $json = new-MsixPsfJson -AppxManiFest "$tempdir\AppxManifest.xml" -fixup $fixup -patterns $patterns -base $base -hive $hive -access $access
     Write-Verbose $json
     $json|Out-File "$appfolder\config.json"
     }
@@ -659,12 +690,16 @@ Function add-MsixPsf {
         else
         {
         if($PSCmdlet.ShouldProcess($application.Executable.replace($application.Executable.split('\')[-1],"PsfLauncher.exe"), "copying and adding in manifest")){
-         $application.Executable = $application.Executable.replace($application.Executable.split('\')[-1],"PsfLauncher.exe$($I)")
+         $application.Executable = $application.Executable.replace($application.Executable.split('\')[-1],"PsfLauncher$($I).exe")
         if ($application.Executable -like '*ProgramFilesX64*'){
          Copy-Item -Path "$msixtool\PSF\PsfLauncher64.exe" -Destination "$appfolder\PsfLauncher$($I).exe"
          }else {
          Copy-Item -Path "$msixtool\PSF\PsfLauncher32.exe" -Destination "$appfolder\PsfLauncher$($I).exe"}         }
         }
+      if ($application.Extensions.Extension.AppExecutionAlias.ExecutionAlias){
+        $Extension = $application.Extensions.Extension|where-object {$_.category -eq 'windows.appExecutionAlias'}
+        $Extension.Executable = $application.Executable.replace($application.Executable.split('\')[-1],"PsfLauncher$($I).exe")
+      }
     }
     if($PSCmdlet.ShouldProcess("AppXManifest.XML", "updating manifest")){
     $appinfo.Save("$tempdir\AppxManifest.xml")
@@ -677,7 +712,7 @@ Function add-MsixPsf {
 
     #detect PSF executables
 
-     $decision = $Host.UI.PromptForChoice($($app.executable), "edit the config.json before packing", $choices, 1) 
+     $decision = $Host.UI.PromptForChoice($($app.executable), "edit the config.json before packing", $choices, 1)
      if ($decision -eq '0'){
     Start-Process -FilePath 'notepad.exe' -Wait -ArgumentList "$appfolder\config.json"
     }
@@ -741,7 +776,7 @@ function add-MsixAlias {
         [string[]]  $pfxpassword
     )
     BEGIN {
-    $msix_module_ver = (Get-Module msix -ListAvailable |select -ExpandProperty version|Sort-Object)[-1]
+    $msix_module_ver = (Get-Module msix -ListAvailable |select-object -ExpandProperty version|Sort-Object)[-1]
     $msixmodule = Get-Module msix -ListAvailable|Where-Object {$_.version -eq $msix_module_ver}
     $msixtool = $msixmodule.ModuleBase
     Write-Verbose -Message "unpacking msix to temp folder"
@@ -756,7 +791,7 @@ function add-MsixAlias {
     write-verbose -Message 'calling makeappx to unpack package'
     Write-Verbose "$($fileinfo.fullname)"
     $null = start-MsixProcess -Process "$msixtool\Tools\MakeAppx.exe" -arguments "unpack /p `"$($fileinfo.FullName)`" /d $tempdir /o"
-    if ($pfx -and $pfxpassword -eq $null){throw 'missing pfx password when pfx specified'}
+    if ($null -eq $pfxpassword -and $pfx){throw 'missing pfx password when pfx specified'}
     }
 
     PROCESS {
@@ -785,7 +820,7 @@ function add-MsixAlias {
 
     #detect PSF executables
 
-     $decision = $Host.UI.PromptForChoice($($app.executable), "add alias for $($app.executable)?", $choices, 1) 
+     $decision = $Host.UI.PromptForChoice($($app.executable), "add alias for $($app.executable)?", $choices, 1)
      #detecting if alias already exists
      if ($app.Extensions.Extension.AppExecutionAlias.ExecutionAlias){$detected = '1'
      Write-Warning -Message "alias already detected for $($app.Extensions.Extension.AppExecutionAlias.ExecutionAlias.alias)"
@@ -799,7 +834,14 @@ function add-MsixAlias {
      $config = get-content "$tempdir\$($executable.Substring(0,$executable.IndexOf($executable.Split('/')[-1])))\config.json"|ConvertFrom-Json
      $executable = ($config.applications|Where-Object {$_.id -eq $app.Id}).executable.replace('\','/')
      }
-     $ExtensionChild = $appinfo.CreateElement('Extensions',$appinfo.Package.NamespaceURI)
+      if (!($appinfo.GetElementsByTagName('Extensions'))){
+       $ExtensionChild = $appinfo.CreateElement('Extensions',$appinfo.Package.NamespaceURI)
+       $extension = $app.AppendChild($ExtensionChild)
+      }
+      else {
+      $Extension = $app.Extensions
+      }
+
      $uap3 = $appinfo.CreateElement('uap3:Extension',$appinfo.Package.uap3)
      $uap3.SetAttribute('EntryPoint','Windows.FullTrustApplication')
      $uap3.SetAttribute('desktop:Executable',$Executable)
@@ -808,7 +850,6 @@ function add-MsixAlias {
      $Desktopexecutionalias = $appinfo.CreateElement('desktop:ExecutionAlias','http://schemas.microsoft.com/appx/manifest/desktop/windows10')
      $Desktopexecutionalias.SetAttribute('Alias',$($executable.Split('/')[-1]))
 
-     $extension = $app.AppendChild($ExtensionChild)
      $ext = $extension.AppendChild($uap3)
      $uap3alias = $ext.AppendChild($UAP3executionalias)
      $null = $uap3alias.AppendChild($Desktopexecutionalias)
@@ -834,13 +875,11 @@ function remove-MsixStartMenuEntry {
 .SYNOPSIS
     remove msix start menu entry from application
 
-
 .NOTES
     Name: remove-MsixStartMenuEntry
     Author: Sander de Wit
     Version: 1.0
     DateCreated: 09-06-2021
-
 
 .EXAMPLE
     remove-MsixStartMenuEntry -PackagePath c:\temp\app.msix
@@ -850,7 +889,7 @@ function remove-MsixStartMenuEntry {
 
 #>
 
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(
             Mandatory = $true,
@@ -869,7 +908,7 @@ function remove-MsixStartMenuEntry {
         [string[]]  $pfxpassword
     )
     BEGIN {
-    $msix_module_ver = (Get-Module msix -ListAvailable |select -ExpandProperty version|Sort-Object)[-1]
+    $msix_module_ver = (Get-Module msix -ListAvailable |select-object -ExpandProperty version|Sort-Object)[-1]
     $msixmodule = Get-Module msix -ListAvailable|Where-Object {$_.version -eq $msix_module_ver}
     $msixtool = $msixmodule.ModuleBase
     Write-Verbose -Message "unpacking msix to temp folder"
@@ -884,7 +923,7 @@ function remove-MsixStartMenuEntry {
     write-verbose -Message 'calling makeappx to unpack package'
     Write-Verbose "$($fileinfo.fullname)"
     $null = start-MsixProcess -Process "$msixtool\Tools\MakeAppx.exe" -arguments "unpack /p `"$($fileinfo.FullName)`" /d $tempdir /o"
-    if ($pfx -and $pfxpassword -eq $null){throw 'missing pfx password when pfx specified'}
+    if ($null -eq $pfxpassword -and $pfx){throw 'missing pfx password when pfx specified'}
     }
 
     PROCESS {
@@ -908,7 +947,7 @@ function remove-MsixStartMenuEntry {
      $choices.Add((New-Object Management.Automation.Host.ChoiceDescription -ArgumentList '&Yes'))
      $choices.Add((New-Object Management.Automation.Host.ChoiceDescription -ArgumentList '&No'))
 
-     $decision = $Host.UI.PromptForChoice($($app.executable), "remove startmenu entry for $($app.executable)?", $choices, 1) 
+     $decision = $Host.UI.PromptForChoice($($app.executable), "remove startmenu entry for $($app.executable)?", $choices, 1)
      #detecting if alias already exists
 
         if ($decision -eq 0) {
@@ -980,7 +1019,7 @@ function add-MsixStartMenuFolder {
         [string[]]  $pfxpassword
     )
     BEGIN {
-    $msix_module_ver = (Get-Module msix -ListAvailable |select -ExpandProperty version|Sort-Object)[-1]
+    $msix_module_ver = (Get-Module msix -ListAvailable |select-object -ExpandProperty version|Sort-Object)[-1]
     $msixmodule = Get-Module msix -ListAvailable|Where-Object {$_.version -eq $msix_module_ver}
     $msixtool = $msixmodule.ModuleBase
     Write-Verbose -Message "unpacking msix to temp folder"
@@ -996,7 +1035,7 @@ function add-MsixStartMenuFolder {
     write-verbose -Message 'calling makeappx to unpack package'
     Write-Verbose "$($fileinfo.fullname)"
     $null = start-MsixProcess -Process "$msixtool\Tools\MakeAppx.exe" -arguments "unpack /p `"$($fileinfo.FullName)`" /d $tempdir /o"
-    if ($pfx -and $pfxpassword -eq $null){throw 'missing pfx password when pfx specified'}
+    if ($null -eq $pfxpassword -and $pfx){throw 'missing pfx password when pfx specified'}
     }
 
     PROCESS {

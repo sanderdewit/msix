@@ -1,0 +1,102 @@
+name: Package and Sign Notepad++ from Winget
+
+on:
+  workflow_dispatch:
+
+jobs:
+  download_and_prepare:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v2
+
+    - name: Download Notepad++ Installer with Winget
+      run: |
+        $installerPath = "C:\actions\workspace\NotepadPlus_Installer.exe"
+        # Download installer without executing
+        winget install -e --id Notepad++.Notepad++ --silent --override "/savePath=$installerPath"
+
+    - name: Install Notepad++ with Winget
+      run: |
+        winget install -e --id Notepad++.Notepad++
+
+    - name: Verify Installation
+      run: |
+        if (!(Test-Path "C:\Program Files\Notepad++\notepad++.exe")) {
+          Write-Error "Notepad++ installation failed."
+        }
+
+  generate_cat_file:
+    runs-on: windows-latest
+    needs: download_and_prepare
+
+    steps:
+    - name: Generate Code Integrity Policy Including Installer Hash
+      run: |
+        $appFolderPath = "C:\Program Files\Notepad++"
+        $installerPath = "C:\actions\workspace\NotepadPlus_Installer.exe"
+        $ciPolicyPath = "C:\actions\workspace\NotepadPlus_CIPolicy.xml"
+
+        # Generate CI Policy with hashes for all executables and installer
+        New-CIPolicy -Level Hash -FilePath $ciPolicyPath -ScanPath $appFolderPath, $installerPath
+
+    - name: Generate CAT File Including All Executables and Installer
+      run: |
+        $outputCatFile = "C:\actions\workspace\NotepadPlus.cat"
+        $catalogFileInput = "C:\actions\workspace\CatalogFileInput.ddf"
+
+        # Read CI Policy XML for file paths and generate DDF file
+        $fileList = Get-Content -Path $ciPolicyPath | Select-Xml -XPath "//FileRule"
+        $ddfContent = @(
+            "[CatalogFile]"
+            "Name=$outputCatFile"
+            ""
+            "[CatalogFiles]"
+        )
+        foreach ($file in $fileList) {
+            $relativePath = $file.Node.FileName
+            if (Test-Path $relativePath) {
+                $ddfContent += "$relativePath=$relativePath"
+            } else {
+                # Use full path for installer
+                $ddfContent += "NotepadPlus_Installer.exe=$installerPath"
+            }
+        }
+        $ddfContent | Set-Content -Path $catalogFileInput
+
+        # Generate the catalog file using MakeCat.exe
+        & "C:\Program Files (x86)\Windows Kits\10\bin\x64\makecat.exe" /f $catalogFileInput
+      shell: powershell
+
+    - name: Upload CAT File Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: cat-file
+        path: C:\actions\workspace\NotepadPlus.cat
+
+  package_as_msix:
+    runs-on: windows-latest
+    needs: generate_cat_file
+
+    steps:
+    - name: Package Application for MSIX
+      run: |
+        $appFolderPath = "C:\Program Files\Notepad++"
+        $msixOutput = "C:\actions\workspace\NotepadPlus.msix"
+        msix-packaging-tool package --input $appFolderPath --output $msixOutput --app-name "Notepad++" --publisher "CN=YourPublisher" --version "1.0.0.0"
+      shell: powershell
+
+    - name: Upload MSIX File Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: msix-file
+        path: C:\actions\workspace\NotepadPlus.msix
+
+    - name: Upload Signed Files
+      uses: actions/upload-artifact@v3
+      with:
+        name: signed-msix-and-cat-files
+        path: |
+          C:\actions\workspace\NotepadPlus.msix
+          C:\actions\workspace\NotepadPlus.cat

@@ -11,6 +11,9 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v2
 
+    - name: Install winget
+      uses: Cyberboss/install-winget@v1
+
     - name: Download Notepad++ Installer with Winget
       run: |
         $installerPath = "C:\actions\workspace\NotepadPlus_Installer.exe"

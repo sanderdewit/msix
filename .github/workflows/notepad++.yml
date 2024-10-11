@@ -14,21 +14,11 @@ jobs:
     - name: Install winget
       uses: Cyberboss/install-winget@v1
 
-    - name: Accept Winget Agreements
-      run: |
-        # Set region to avoid interactive prompt
-        New-item -path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" -Force
-        Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" -Name "Region" -Value "NL" -force
-
-        # Accept terms for msstore source
-        winget source reset --force
-        winget source update
-
     - name: Download Notepad++ Installer with Winget
       run: |
         $installerPath = "C:\actions\workspace\NotepadPlus_Installer.exe"
         # Download installer without executing
-        winget install -e --id Notepad++.Notepad++ --silent --override "/savePath=$installerPath"
+        winget install -e --id Notepad++.Notepad++ --silent --override "/savePath=$installerPath" --disable-interactivity --accept-source-agreements
 
     - name: Install Notepad++ with Winget
       run: |

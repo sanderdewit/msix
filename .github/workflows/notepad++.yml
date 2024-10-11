@@ -14,10 +14,10 @@ jobs:
     - name: Install winget
       uses: Cyberboss/install-winget@v1
 
-    - name: Install Windows Package Inspector for Catalog Creation
-      run: |
-        winget install --id Microsoft.DesktopAppAssure -e --silent --accept-package-agreements --accept-source-agreements
-      shell: powershell
+#    - name: Install Windows Package Inspector for Catalog Creation
+#      run: |
+#        winget install --id Microsoft.DesktopAppAssure -e --silent --accept-package-agreements --accept-source-agreements
+#      shell: powershell
 
     - name: Start Package Inspector to Monitor Changes
       run: |

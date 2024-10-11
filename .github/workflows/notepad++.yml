@@ -16,13 +16,49 @@ jobs:
 
     - name: Download Notepad++ Installer with Winget
       run: |
-        $installerPath = "C:\actions\workspace\NotepadPlus_Installer.exe"
         # Download installer without executing
-        winget install -e --id Notepad++.Notepad++ --silent --override "/savePath=$installerPath" --disable-interactivity --accept-source-agreements
+        winget download -e --id Notepad++.Notepad++ --disable-interactivity --accept-source-agreements --download-directory "C:\actions\workspace"
 
-    - name: Install Notepad++ with Winget
+    - name: Parse YAML for Installer Details
+      id: parse_yaml
       run: |
-        winget install -e --id Notepad++.Notepad++
+        $yamlFile = Get-ChildItem -Path "C:\actions\workspace" -Filter *.yaml | Select-Object -First 1
+        if ($yamlFile) {
+            $installerUrl = ""
+            $silentSwitch = ""
+            $lines = Get-Content -Path $yamlFile.FullName
+          
+            # Parse lines manually to extract InstallerUrl and Silent switch
+            foreach ($line in $lines) {
+                if ($line -match "InstallerUrl:\s*(.+)") {
+                    $installerUrl = $matches[1].Trim()
+                }
+                if ($line -match "Silent:\s*(.+)") {
+                    $silentSwitch = $matches[1].Trim()
+                }
+            }
+
+            # Extract installer filename from URL
+            $installerFileName = [System.IO.Path]::GetFileName($installerUrl)
+            $installerPath = Join-Path -Path "C:\actions\workspace\installer" -ChildPath $installerFileName
+
+            # Set extracted values as outputs
+            Write-Output "Installer URL: $installerUrl"
+            Write-Output "Silent Install Switch: $silentSwitch"
+            echo "::set-output name=installer_url::$installerUrl"
+            echo "::set-output name=installer_path::$installerPath"
+            echo "::set-output name=silent_switch::$silentSwitch"
+        } else {
+            Write-Error "YAML manifest file not found."
+        }
+      shell: powershell
+  
+    - name: Install Notepad++
+      run: |
+        $installerPath = "${{ steps.parse_yaml.outputs.installer_path }}"
+        $silentSwitch = "${{ steps.parse_yaml.outputs.silent_switch }}"
+        Start-Process -FilePath $installerPath -ArgumentList $silentSwitch -Wait
+      shell: powershell
 
     - name: Verify Installation
       run: |

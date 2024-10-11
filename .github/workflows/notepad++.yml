@@ -26,9 +26,21 @@ jobs:
       shell: powershell
 
     - name: Download Notepad++ Installer with Winget
+      id: download_installer
       run: |
-        # Download installer without executing
-        winget download -e --id Notepad++.Notepad++ --disable-interactivity --accept-source-agreements --download-directory "C:\actions\workspace"
+        # Download installer and capture the output to find actual file path
+        $downloadDir = "C:\actions\workspace"
+        $wingetOutput = winget download -e --id Notepad++.Notepad++ --disable-interactivity --accept-source-agreements --download-directory $downloadDir | Out-String
+        Write-Output $wingetOutput
+        
+        # Extract installer file path from the output
+        if ($wingetOutput -match "Installer downloaded: (.+\.exe)") {
+            $installerPath = $matches[1].Trim()
+            Write-Output "Installer path found: $installerPath"
+            echo "::set-output name=installer_path::$installerPath"
+        } else {
+            Write-Error "Installer file path not found in winget output."
+        }
       shell: powershell
 
     - name: Parse YAML for Installer Details
@@ -58,7 +70,6 @@ jobs:
             Write-Output "Installer URL: $installerUrl"
             Write-Output "Silent Install Switch: $silentSwitch"
             echo "::set-output name=installer_url::$installerUrl"
-            echo "::set-output name=installer_path::$installerPath"
             echo "::set-output name=silent_switch::$silentSwitch"
         } else {
             Write-Error "YAML manifest file not found."
@@ -67,7 +78,7 @@ jobs:
 
     - name: Install Notepad++ with Logging
       run: |
-        $installerPath = "${{ steps.parse_yaml.outputs.installer_path }}"
+        $installerPath = "${{ steps.download_installer.outputs.installer_path }}"
         $silentSwitch = "${{ steps.parse_yaml.outputs.silent_switch }}"
         $logFile = "C:\actions\workspace\install_log.txt"
         Start-Process -FilePath $installerPath -ArgumentList "$silentSwitch /LOG=$logFile" -Wait
@@ -90,4 +101,4 @@ jobs:
         path: |
           C:\actions\workspace\NPP.cat
           C:\actions\workspace\NPP.cdf
-          ${{ steps.parse_yaml.outputs.installer_path }}
+          ${{ steps.download_installer.outputs.installer_path }}

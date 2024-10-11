@@ -17,7 +17,8 @@ jobs:
     - name: Accept Winget Agreements
       run: |
         # Set region to avoid interactive prompt
-        Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" -Name "Region" -Value "NL"
+        New-item -path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" -Force
+        Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" -Name "Region" -Value "NL" -force
 
         # Accept terms for msstore source
         winget source reset --force

@@ -25,13 +25,13 @@ jobs:
     - name: Download MSIX Packaging Tool
       run: |
         $url = "https://download.microsoft.com/download/e/2/e/e2e923b2-7a3a-4730-969d-ab37001fbb5e/MSIXPackagingtoolv1.2024.405.0.msixbundle"  # Replace with actual download link
-        $downloadPath = "C:\actions\workspace\MSIXPackagingTool.appxbundle"
+        $downloadPath = "C:\actions\workspace\MSIXPackagingTool.msixbundle"
         Invoke-WebRequest -Uri $url -OutFile $downloadPath
       shell: powershell
 
     - name: Install MSIX Packaging Tool
       run: |
-        $packagePath = "C:\actions\workspace\MSIXPackagingTool.appxbundle"
+        $packagePath = "C:\actions\workspace\MSIXPackagingTool.msixbundle"
         Add-AppxPackage -Path $packagePath
       shell: powershell
       

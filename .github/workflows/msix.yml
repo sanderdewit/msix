@@ -31,7 +31,7 @@ jobs:
         $licdownloadPath = "C:\actions\workspace\MSIXPackagingToollicense.xml"
         $licurl = "https://download.microsoft.com/download/e/2/e/e2e923b2-7a3a-4730-969d-ab37001fbb5e/MSIXPackagingtoolv1.2024.405.0.License.xml"
         Invoke-WebRequest -Uri $url -OutFile $downloadPath
-        Invoke-WebRequest -Uri $url -OutFile $licdownloadPath
+        Invoke-WebRequest -Uri $licurl -OutFile $licdownloadPath
       shell: powershell
 
     - name: Install MSIX Packaging Tool

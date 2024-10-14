@@ -12,17 +12,17 @@ jobs:
   test-variable:
     runs-on: windows-latest
     steps:
-      # Step 1: Set a variable by writing to $GITHUB_ENV
+      # Step 1: Set a variable in $GITHUB_ENV using PowerShell
       - name: Set variable in $GITHUB_ENV
-        shell: bash
-        run: echo "test=test123" >> $GITHUB_ENV
-        
-
-      # Step 2: Access the variable in a subsequent step
-      - name: Check variable
-        shell: bash
-        run: echo "The value of test is $test"
-
-      - name: Check variable in PowerShell
         shell: pwsh
-        run: echo "The value of test is $env:test"
+        run: echo "test=test123" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # Step 2: Access the variable in PowerShell
+      - name: Check variable in PowerShell (Step 2)
+        shell: pwsh
+        run: Write-Output "The value of test is $env:test"
+
+      # Step 3: Access the variable again in PowerShell
+      - name: Check variable in PowerShell (Step 3)
+        shell: pwsh
+        run: Write-Output "The value of test is $env:test"

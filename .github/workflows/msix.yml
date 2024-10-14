@@ -1,0 +1,99 @@
+name: Package Installers as MSIX
+
+on:
+  workflow_dispatch:
+
+jobs:
+  package_installers:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        # This allows the action to push changes back to the repository
+        persist-credentials: false
+
+    - name: Set up Git User
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      shell: bash
+
+    - name: Install MSIX Packaging Tool
+      run: |
+        winget install -e --id Microsoft.MSIXPackagingTool -h --accept-package-agreements --accept-source-agreements
+      shell: powershell
+
+    - name: Convert Installers to MSIX
+      run: |
+        # Set paths within the repository
+        $root = "${{ github.workspace }}\Installers"
+        $ConversionTemplate = Join-Path -Path $root -ChildPath "MsixTemplate.xml"
+        $MSIXSaveLocation = "${{ github.workspace }}\Converted"
+
+        # Create the save location if it doesn't exist
+        if (!(Test-Path -Path $MSIXSaveLocation)) {
+          New-Item -ItemType Directory -Path $MSIXSaveLocation | Out-Null
+        }
+
+        # Define valid installer extensions
+        $validExtensions = @(".msi", ".exe", ".appx")
+
+        Get-ChildItem -Path $root -Recurse | Where-Object { $validExtensions -contains $_.Extension.ToLower() } | ForEach-Object {
+            
+            $InstallerPath = $_.FullName
+            $FileName = $_.BaseName
+            $XML_Path = Join-Path -Path $root -ChildPath "${FileName}_ConversionTemplate.xml"
+            $PackagePath = Join-Path -Path $MSIXSaveLocation -ChildPath "${FileName}.msix"
+
+            # Load the conversion template XML
+            [xml]$XmlDocument = Get-Content $ConversionTemplate
+
+            # Set installer-specific paths
+            $XmlDocument.MSIXPackagingToolTemplate.Installer.Path = $InstallerPath
+
+            # Set installer arguments based on file extension
+            switch ($_.Extension.ToLower()) {
+                ".msi" {
+                    $XmlDocument.MSIXPackagingToolTemplate.Installer.Arguments = "/qb"
+                }
+                ".exe" {
+                    # Set default silent install switch for executables (update as needed for specific apps)
+                    $XmlDocument.MSIXPackagingToolTemplate.Installer.Arguments = "/S"
+                }
+                default {
+                    $XmlDocument.MSIXPackagingToolTemplate.Installer.Arguments = ""
+                }
+            }
+
+            # Set the installation location and package path
+            $XmlDocument.MSIXPackagingToolTemplate.Installer.InstallLocation = "C:\Program Files (x86)\"
+            $XmlDocument.MSIXPackagingToolTemplate.SaveLocation.PackagePath = $PackagePath
+
+            # Configure package metadata
+            $XmlDocument.MSIXPackagingToolTemplate.PackageInformation.PublisherName = "CN=DWA, O=DWA, C=NL"
+            $XmlDocument.MSIXPackagingToolTemplate.PackageInformation.PublisherDisplayName = $FileName
+            $XmlDocument.MSIXPackagingToolTemplate.PackageInformation.PackageName = $FileName
+            $XmlDocument.MSIXPackagingToolTemplate.PackageInformation.PackageDisplayName = $FileName
+            $XmlDocument.MSIXPackagingToolTemplate.PackageInformation.Applications.Application.ExecutableName = $FileName + ".exe"
+            $XmlDocument.MSIXPackagingToolTemplate.PackageInformation.Applications.Application.DisplayName = $FileName
+            $XmlDocument.MSIXPackagingToolTemplate.PackageInformation.Applications.Application.Description = $FileName
+            $XmlDocument.MSIXPackagingToolTemplate.PackageInformation.Applications.Application.ID = $FileName + "1"
+
+            # Save the modified XML template
+            $XmlDocument.Save($XML_Path)
+
+            # Run MSIX Packaging Tool to create the package
+            MsixPackagingTool.exe create-package --template $XML_Path
+        }
+      shell: powershell
+
+    - name: Commit and Push MSIX Files to Repository
+      run: |
+        git add Converted/
+        git commit -m "Add MSIX packages"
+        git push origin HEAD:${{ github.ref_name }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      shell: bash

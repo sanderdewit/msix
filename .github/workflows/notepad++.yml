@@ -37,7 +37,7 @@ jobs:
         if ($wingetOutput -match "Installer downloaded: (.+\.exe)") {
             $installerPath = $matches[1].Trim()
             Write-Output "Installer path found: $installerPath"
-            echo "::set-output name=installer_path::$installerPath"
+            echo "installer_path=$installerPath" >> $GITHUB_ENV           
         } else {
             Write-Error "Installer file path not found in winget output."
         }
@@ -48,29 +48,23 @@ jobs:
       run: |
         $yamlFile = Get-ChildItem -Path "C:\actions\workspace" -Filter *.yaml | Select-Object -First 1
         if ($yamlFile) {
-            $installerUrl = ""
             $silentSwitch = ""
             $lines = Get-Content -Path $yamlFile.FullName
           
             # Parse lines manually to extract InstallerUrl and Silent switch
             foreach ($line in $lines) {
-                if ($line -match "InstallerUrl:\s*(.+)") {
-                    $installerUrl = $matches[1].Trim()
-                }
                 if ($line -match "Silent:\s*(.+)") {
                     $silentSwitch = $matches[1].Trim()
                 }
             }
 
-            # Extract installer filename from URL
-            $installerFileName = [System.IO.Path]::GetFileName($installerUrl)
+            # join installer filename with install path
             $installerPath = Join-Path -Path "C:\actions\workspace" -ChildPath $installerFileName
 
             # Set extracted values as outputs
+            echo "silent_switch=$silentSwitch" >> $GITHUB_ENV           
             Write-Output "Installer URL: $installerUrl"
             Write-Output "Silent Install Switch: $silentSwitch"
-            echo "::set-output name=installer_url::$installerUrl"
-            echo "::set-output name=silent_switch::$silentSwitch"
         } else {
             Write-Error "YAML manifest file not found."
         }

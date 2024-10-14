@@ -14,11 +14,6 @@ jobs:
     - name: Install winget
       uses: Cyberboss/install-winget@v1
 
-#    - name: Install Windows Package Inspector for Catalog Creation
-#      run: |
-#        winget install --id Microsoft.DesktopAppAssure -e --silent --accept-package-agreements --accept-source-agreements
-#      shell: powershell
-
     - name: Start Package Inspector to Monitor Changes
       run: |
         # Start Package Inspector on drive C: to capture changes
@@ -67,10 +62,19 @@ jobs:
 
     - name: Install Notepad++ with Logging
       run: |
-        $installerPath = "$env:installer_path"
-        $silentSwitch = "$env:silent_switch"
+        # Log environment variables for debugging
+        Write-Output "Installer Path: $env:installer_path"
+        Write-Output "Silent Switch: $env:silent_switch"
+        
+        $installerPath = $env:installer_path
+        $silentSwitch = $env:silent_switch
         $logFile = "C:\actions\workspace\install_log.txt"
-        Start-Process -FilePath $installerPath -ArgumentList "$silentSwitch /LOG=$logFile" -Wait
+        
+        if ($installerPath -and $silentSwitch) {
+          Start-Process -FilePath $installerPath -ArgumentList "$silentSwitch /LOG=$logFile" -Wait
+        } else {
+          Write-Error "Installer path or silent switch is not set."
+        }
       shell: powershell
 
     - name: Stop Package Inspector and Generate CAT/CDF Files

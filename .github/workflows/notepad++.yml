@@ -32,7 +32,7 @@ jobs:
         if ($wingetOutput -match "Installer downloaded: (.+\.exe)") {
             $installerPath = $matches[1].Trim()
             Write-Output "Installer path found: $installerPath"
-            echo "installer_path=$installerPath" >> $GITHUB_ENV           
+            echo "installer_path=$installerPath" >> "$GITHUB_ENV"
         } else {
             Write-Error "Installer file path not found in winget output."
         }
@@ -54,7 +54,7 @@ jobs:
             }
 
             # Set silent switch in environment variable
-            echo "silent_switch=$silentSwitch" >> $GITHUB_ENV           
+            echo "silent_switch=$silentSwitch" >> "$GITHUB_ENV"
         } else {
             Write-Error "YAML manifest file not found."
         }
@@ -63,11 +63,11 @@ jobs:
     - name: Install Notepad++ with Logging
       run: |
         # Log environment variables for debugging
-        Write-Output "Installer Path: $env:installer_path"
-        Write-Output "Silent Switch: $env:silent_switch"
-        
-        $installerPath = $env:installer_path
-        $silentSwitch = $env:silent_switch
+        Write-Output "Installer Path: ${{ env.installer_path }}"
+        Write-Output "Silent Switch: ${{ env.silent_switch }}"
+    
+        $installerPath = "${{ env.installer_path }}"
+        $silentSwitch = "${{ env.silent_switch }}"
         $logFile = "C:\actions\workspace\install_log.txt"
         
         if ($installerPath -and $silentSwitch) {

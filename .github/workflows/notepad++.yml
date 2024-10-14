@@ -63,11 +63,11 @@ jobs:
     - name: Install Notepad++ with Logging
       run: |
         # Log environment variables for debugging
-        Write-Output "Installer Path: ${{ env.installer_path }}"
-        Write-Output "Silent Switch: ${{ env.silent_switch }}"
+        Write-Output "Installer Path: ${{ $installer_path }}"
+        Write-Output "Silent Switch: ${{ $silent_switch }}"
     
-        $installerPath = "${{ env.installer_path }}"
-        $silentSwitch = "${{ env.silent_switch }}"
+        $installerPath = "${{ $installer_path }}"
+        $silentSwitch = "${{ $silent_switch }}"
         $logFile = "C:\actions\workspace\install_log.txt"
         
         if ($installerPath -and $silentSwitch) {
@@ -94,4 +94,4 @@ jobs:
         path: |
           C:\actions\workspace\NPP.cat
           C:\actions\workspace\NPP.cdf
-          ${{ env.installer_path }}
+          ${{ $installer_path }}

@@ -1,0 +1,59 @@
+PackageIdentifier: Notepad++.Notepad++
+PackageVersion: 8.7
+Moniker: notepad++
+Documentations:
+- DocumentLabel: Wiki
+  DocumentUrl: https://github.com/notepad-plus-plus/notepad-plus-plus/wiki
+Tags:
+- development
+- editor
+- foss
+- notepad
+- open-source
+- text
+- text-editor
+PackageLocale: en-US
+Author: Don Ho
+Copyright: Copyright (C)2021 Don HO <don.h@free.fr>.
+CopyrightUrl: https://raw.githubusercontent.com/notepad-plus-plus/notepad-plus-plus/master/LICENSE
+Description: "Notepad++ is a free (as in \u201Cfree speech\u201D and also as in \u201Cfree
+  beer\u201D) source code editor and Notepad replacement that supports several languages.\nRunning
+  in the MS Windows environment, its use is governed by GNU General Public License."
+ShortDescription: Notepad++ is a free source code editor that supports several languages.
+License: GPL-3.0-or-later
+LicenseUrl: https://raw.githubusercontent.com/notepad-plus-plus/notepad-plus-plus/master/LICENSE
+PackageName: Notepad++
+PackageUrl: https://notepad-plus-plus.org
+Publisher: Notepad++ Team
+PublisherSupportUrl: https://notepad-plus-plus.org/online-help
+PublisherUrl: https://notepad-plus-plus.org
+ReleaseNotesUrl: https://github.com/notepad-plus-plus/notepad-plus-plus/releases/tag/v8.7
+Installers:
+- Architecture: x64
+  InstallerType: nullsoft
+  InstallerSha256: 23d8e9bde3d08df26626af9978a09f8837d7162fd1accf563248d0eef89006fe
+  InstallerUrl: https://github.com/notepad-plus-plus/notepad-plus-plus/releases/download/v8.7/npp.8.7.Installer.x64.exe
+  Scope: machine
+  ElevationRequirement: elevatesSelf
+  ReleaseDate: 2024-09-17
+  InstallerAbortsTerminal: false
+  InstallLocationRequired: false
+  RequireExplicitUpgrade: false
+  DisplayInstallWarnings: false
+  DownloadCommandProhibited: false
+  UpgradeBehavior: install
+  RepairBehavior: unknown
+  AppsAndFeaturesEntries:
+  - DisplayName: Notepad++ (64-bit x64)
+  ExpectedReturnCodes:
+  - InstallerReturnCode: 5
+    ReturnResponse: packageInUse
+  InstallerSwitches:
+    Silent: /S
+    SilentWithProgress: /S
+    InstallLocation: /D=<INSTALLPATH>
+  InstallModes:
+  - interactive
+  - silent
+ManifestVersion: 1.6.0
+ManifestType: merged

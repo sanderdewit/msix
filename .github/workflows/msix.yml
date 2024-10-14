@@ -28,7 +28,7 @@ jobs:
     - name: Convert Installers to MSIX
       run: |
         # Set paths within the repository
-        $root = "${{ github.workspace }}\Installers"
+        $root = "${{ github.workspace }}\Installer"
         $ConversionTemplate = Join-Path -Path $root -ChildPath "MsixTemplate.xml"
         $MSIXSaveLocation = "${{ github.workspace }}\Converted"
 

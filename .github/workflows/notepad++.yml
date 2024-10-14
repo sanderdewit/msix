@@ -43,7 +43,7 @@ jobs:
         }
       shell: powershell
 
-    - name: Parse YAML for Installer Details
+    - name: Parse YAML for Silent Switch
       id: parse_yaml
       run: |
         $yamlFile = Get-ChildItem -Path "C:\actions\workspace" -Filter *.yaml | Select-Object -First 1
@@ -51,20 +51,15 @@ jobs:
             $silentSwitch = ""
             $lines = Get-Content -Path $yamlFile.FullName
           
-            # Parse lines manually to extract InstallerUrl and Silent switch
+            # Parse lines manually to extract Silent switch
             foreach ($line in $lines) {
                 if ($line -match "Silent:\s*(.+)") {
                     $silentSwitch = $matches[1].Trim()
                 }
             }
 
-            # join installer filename with install path
-            $installerPath = Join-Path -Path "C:\actions\workspace" -ChildPath $installerFileName
-
-            # Set extracted values as outputs
+            # Set silent switch in environment variable
             echo "silent_switch=$silentSwitch" >> $GITHUB_ENV           
-            Write-Output "Installer URL: $installerUrl"
-            Write-Output "Silent Install Switch: $silentSwitch"
         } else {
             Write-Error "YAML manifest file not found."
         }
@@ -72,8 +67,8 @@ jobs:
 
     - name: Install Notepad++ with Logging
       run: |
-        $installerPath = "${{ steps.download_installer.outputs.installer_path }}"
-        $silentSwitch = "${{ steps.parse_yaml.outputs.silent_switch }}"
+        $installerPath = "$env:installer_path"
+        $silentSwitch = "$env:silent_switch"
         $logFile = "C:\actions\workspace\install_log.txt"
         Start-Process -FilePath $installerPath -ArgumentList "$silentSwitch /LOG=$logFile" -Wait
       shell: powershell
@@ -95,4 +90,4 @@ jobs:
         path: |
           C:\actions\workspace\NPP.cat
           C:\actions\workspace\NPP.cdf
-          ${{ steps.download_installer.outputs.installer_path }}
+          ${{ env.installer_path }}

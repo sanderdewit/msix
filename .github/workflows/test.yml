@@ -14,10 +14,13 @@ jobs:
     steps:
       # Step 1: Set a variable by writing to $GITHUB_ENV
       - name: Set variable in $GITHUB_ENV
+        shell: bash
         run: echo "test=test123" >> $GITHUB_ENV
+        
 
       # Step 2: Access the variable in a subsequent step
       - name: Check variable
+        shell: bash
         run: echo "The value of test is $test"
 
       - name: Check variable in PowerShell

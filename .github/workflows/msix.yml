@@ -25,7 +25,7 @@ jobs:
       
     - name: Install MSIX Packaging Tool
       run: |
-        winget install -e --id Microsoft.MSIXPackagingTool -h --accept-package-agreements --accept-source-agreements
+        winget install -e --id 9N5LW3JBCXKF -h --accept-package-agreements --accept-source-agreements
       shell: powershell
 
     - name: Convert Installers to MSIX

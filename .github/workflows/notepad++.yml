@@ -81,7 +81,7 @@ jobs:
     - name: Download IntuneWinAppUtil.exe
       run: |
         New-Item "c:\actions\intune" -ItemType Directory -Force
-        $url = "https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool/raw/master/IntuneWinAppUtil.exe"
+        $url = "https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool/raw/refs/heads/master/IntuneWinAppUtil.exe"
         $downloadPath = "C:\actions\intune\IntuneWinAppUtil.exe"
         Invoke-WebRequest -Uri $url -OutFile $downloadPath
       shell: powershell
@@ -99,7 +99,7 @@ jobs:
         echo "installerIntune=$installerIntune" | Out-File -FilePath $env:GITHUB_ENV -Append
         
         # Run IntuneWinAppUtil to package the application
-        Start-Process -FilePath $intuneWinAppUtil -ArgumentList "-c $outputPath -s $installerName -o $outputPath -q" -Wait
+        Start-Process -FilePath $intuneWinAppUtil -ArgumentList "-c $outputPath -s $installerName -o $outputPath" -Wait
       shell: powershell
       
     - name: Upload CAT File, Intunewin, and Installer to GitHub

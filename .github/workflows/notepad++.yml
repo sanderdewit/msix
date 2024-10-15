@@ -107,7 +107,7 @@ jobs:
       with:
         name: artifacts
         path: |
-          C:\actions\workspace\NPP.cat
-          C:\actions\workspace\NPP.cdf
-          ${{ env.installerIntune }}
+          C:\actions\workspace\NPP.cat `
+          C:\actions\workspace\NPP.cdf `
+          ${{ env.installerIntune }} `
           ${{ env.installer_path }}

@@ -16,23 +16,19 @@ jobs:
 
     - name: Start Package Inspector to Monitor Changes
       run: |
-        # Start Package Inspector on drive C: to capture changes
         PackageInspector.exe Start C:
       shell: powershell
 
     - name: Download Notepad++ Installer with Winget
       id: download_installer
       run: |
-        # Download installer and capture the output to find actual file path
         $downloadDir = "C:\actions\workspace"
         $wingetOutput = winget download -e --id Notepad++.Notepad++ --disable-interactivity --accept-source-agreements --download-directory $downloadDir | Out-String
         Write-Output $wingetOutput
         
-        # Extract installer file path from the output
         if ($wingetOutput -match "Installer downloaded: (.+\.exe)") {
             $installerPath = $matches[1].Trim()
             Write-Output "Installer path found: $installerPath"
-            # Corrected to properly write to GITHUB_ENV
             echo "installer_path=$installerPath" | Out-File -FilePath $env:GITHUB_ENV -Append
         } else {
             Write-Error "Installer file path not found in winget output."
@@ -46,14 +42,11 @@ jobs:
         if ($yamlFile) {
             $silentSwitch = ""
             $lines = Get-Content -Path $yamlFile.FullName
-          
-            # Parse lines manually to extract Silent switch
             foreach ($line in $lines) {
                 if ($line -match "Silent:\s*(.+)") {
                     $silentSwitch = $matches[1].Trim()
                 }
             }
-            # Set silent switch in environment variable
             echo "silent_switch=$silentSwitch" | Out-File -FilePath $env:GITHUB_ENV -Append
         } else {
             Write-Error "YAML manifest file not found."
@@ -62,7 +55,6 @@ jobs:
 
     - name: Install Notepad++ with Logging
       run: |
-        # Log environment variables for debugging
         Write-Output "Installer Path: $env:installer_path"
         Write-Output "Silent Switch: $env:silent_switch"
     
@@ -83,7 +75,6 @@ jobs:
         $catFileName = Join-Path -Path $outputPath -ChildPath "NPP.cat"
         $cdfFileName = Join-Path -Path $outputPath -ChildPath "NPP.cdf"
         
-        # Stop Package Inspector to capture changes in a CAT file
         PackageInspector.exe Stop C: -Name $catFileName -cdfpath $cdfFileName
       shell: powershell
       
@@ -99,20 +90,22 @@ jobs:
       run: |
         $intuneWinAppUtil = 'C:\actions\intune\IntuneWinAppUtil.exe'
         $installerPath = "$env:installer_path"
-        $silentSwitch = "$env:silent_switch"
-        $installerName = [System.IO.Path]::GetFileName($installerPath)
-        $installerName = join-path -Path 'c:\actions\workspace' -ChildPath $installerName.Replace('.exe','.intunewin')
-        echo "installerName=$installerName" | Out-File -FilePath $env:GITHUB_ENV -Append
-        $packagingArgs = "-c c:\actions\workspace -s $installerName -o c:\actions\workspace"
-        Start-Process -FilePath $intuneWinAppUtil -ArgumentList $packagingArgs -Wait
+        $outputPath = "C:\actions\workspace"
+        $intunewinOutput = Join-Path -Path $outputPath -ChildPath "Notepad++.intunewin"
+        
+        # Update GITHUB_ENV with the output file path for later reference
+        echo "intunewin_output=$intunewinOutput" | Out-File -FilePath $env:GITHUB_ENV -Append
+        
+        # Run IntuneWinAppUtil to package the application
+        Start-Process -FilePath $intuneWinAppUtil -ArgumentList "-c $outputPath -s $installerPath -o $outputPath -q" -Wait
       shell: powershell
       
-    - name: Upload CAT File and Installer to GitHub
+    - name: Upload CAT File, Intunewin, and Installer to GitHub
       uses: actions/upload-artifact@v4
       with:
         name: artifacts
         path: |
           C:\actions\workspace\NPP.cat
           C:\actions\workspace\NPP.cdf
-          ${{ env.installerName }}
+          ${{ env.intunewin_output }}
           ${{ env.installer_path }}

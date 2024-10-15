@@ -91,13 +91,15 @@ jobs:
         $intuneWinAppUtil = 'C:\actions\intune\IntuneWinAppUtil.exe'
         $installerPath = "$env:installer_path"
         $installerName = [System.IO.Path]::GetFileName($installerPath)
+        $IntuneName = $installerName.replace('.exe','.intunewin')
+        $installerIntune = join-path -Path 'c:\actions\workspace' -ChildPath $IntuneName
         $outputPath = "C:\actions\workspace"
         
         # Update GITHUB_ENV with the output file path for later reference
-        echo "installerName=$installerName" | Out-File -FilePath $env:GITHUB_ENV -Append
+        echo "installerIntune=$installerIntune" | Out-File -FilePath $env:GITHUB_ENV -Append
         
         # Run IntuneWinAppUtil to package the application
-        Start-Process -FilePath $intuneWinAppUtil -ArgumentList "-c $outputPath -s $installerPath -o $outputPath -q" -Wait
+        Start-Process -FilePath $intuneWinAppUtil -ArgumentList "-c $outputPath -s $installerName -o $outputPath -q" -Wait
       shell: powershell
       
     - name: Upload CAT File, Intunewin, and Installer to GitHub
@@ -107,5 +109,5 @@ jobs:
         path: |
           C:\actions\workspace\NPP.cat
           C:\actions\workspace\NPP.cdf
-          ${{ env.installerName }}
+          ${{ env.installerIntune }}
           ${{ env.installer_path }}

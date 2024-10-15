@@ -103,7 +103,7 @@ jobs:
         $installerName = [System.IO.Path]::GetFileName($installerPath)
         $installerName = join-path -Path 'c:\actions\workspace' -ChildPath $installerName.Replace('.exe','.intunewin')
         echo "installerName=$installerName" | Out-File -FilePath $env:GITHUB_ENV -Append
-        $packagingArgs = "-c c:\actions\workspace -s $installerName -o ."
+        $packagingArgs = "-c c:\actions\workspace -s $installerName -o c:\actions\workspace"
         Start-Process -FilePath $intuneWinAppUtil -ArgumentList $packagingArgs -Wait
       shell: powershell
       

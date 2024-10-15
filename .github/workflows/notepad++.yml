@@ -86,7 +86,27 @@ jobs:
         # Stop Package Inspector to capture changes in a CAT file
         PackageInspector.exe Stop C: -Name $catFileName -cdfpath $cdfFileName
       shell: powershell
+      
+    - name: Download IntuneWinAppUtil.exe
+      run: |
+        New-Item "c:\actions\intune" -ItemType Directory -Force
+        $url = "https://github.com/microsoft/Microsoft-Win32-Content-Prep-Tool/raw/master/IntuneWinAppUtil.exe"
+        $downloadPath = "C:\actions\intune\IntuneWinAppUtil.exe"
+        Invoke-WebRequest -Uri $url -OutFile $downloadPath
+      shell: powershell
 
+    - name: Package Notepad++ win32 app
+      run: |
+        $intuneWinAppUtil = 'C:\actions\intune\IntuneWinAppUtil.exe'
+        $installerPath = "$env:installer_path"
+        $silentSwitch = "$env:silent_switch"
+        $installerName = [System.IO.Path]::GetFileName($installerPath)
+        $installerName = join-path -Path 'c:\actions\workspace', $installerName.Replace('.exe','.intunewin')
+        echo "installerName=$installerName" | Out-File -FilePath $env:GITHUB_ENV -Append
+        $packagingArgs = "-c c:\actions\workspace -s $installerName -o ."
+        Start-Process -FilePath $intuneWinAppUtil -ArgumentList $packagingArgs -Wait
+      shell: powershell
+      
     - name: Upload CAT File and Installer to GitHub
       uses: actions/upload-artifact@v4
       with:
@@ -94,4 +114,5 @@ jobs:
         path: |
           C:\actions\workspace\NPP.cat
           C:\actions\workspace\NPP.cdf
+          ${{ env.installerName }}
           ${{ env.installer_path }}

@@ -90,11 +90,11 @@ jobs:
       run: |
         $intuneWinAppUtil = 'C:\actions\intune\IntuneWinAppUtil.exe'
         $installerPath = "$env:installer_path"
+        $installerName = [System.IO.Path]::GetFileName($installerPath)
         $outputPath = "C:\actions\workspace"
-        $intunewinOutput = Join-Path -Path $outputPath -ChildPath "Notepad++.intunewin"
         
         # Update GITHUB_ENV with the output file path for later reference
-        echo "intunewin_output=$intunewinOutput" | Out-File -FilePath $env:GITHUB_ENV -Append
+        echo "installerName=$installerName" | Out-File -FilePath $env:GITHUB_ENV -Append
         
         # Run IntuneWinAppUtil to package the application
         Start-Process -FilePath $intuneWinAppUtil -ArgumentList "-c $outputPath -s $installerPath -o $outputPath -q" -Wait
@@ -107,5 +107,5 @@ jobs:
         path: |
           C:\actions\workspace\NPP.cat
           C:\actions\workspace\NPP.cdf
-          ${{ env.intunewin_output }}
+          ${{ env.installerName }}
           ${{ env.installer_path }}

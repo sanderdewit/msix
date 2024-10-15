@@ -113,8 +113,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: artifacts
-        path: |
-          C:\actions\workspace\NPP.cat
-          C:\actions\workspace\NPP.cdf
-          ${{ env.installerIntune }}
-          ${{ env.installer_path }}
+        path: C:\actions\workspace\*

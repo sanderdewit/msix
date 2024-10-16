@@ -5,7 +5,8 @@ on:
 
 jobs:
   package_installers:
-    runs-on: windows-latest
+    #runs-on: windows-latest
+    runs-on: self-hosted
 
     steps:
     - name: Checkout Repository

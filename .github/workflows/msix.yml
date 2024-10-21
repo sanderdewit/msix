@@ -15,32 +15,32 @@ jobs:
         # This allows the action to push changes back to the repository
         persist-credentials: false
 
-    - name: Set up Git User
-      run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
-      shell: bash
+#    - name: Set up Git User
+#      run: |
+#        git config --global user.name "github-actions[bot]"
+#        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+#      shell: bash
       
-    - name: Install winget
-      uses: Cyberboss/install-winget@v1
+#    - name: Install winget
+#      uses: Cyberboss/install-winget@v1
       
-    - name: Download MSIX Packaging Tool #https://learn.microsoft.com/en-us/windows/msix/packaging-tool/disconnected-environment
-      run: |
-        new-item c:\actions\workspace -Force -ItemType Directory
-        $url = "https://download.microsoft.com/download/e/2/e/e2e923b2-7a3a-4730-969d-ab37001fbb5e/MSIXPackagingtoolv1.2024.405.0.msixbundle"  # Replace with actual download link
-        $downloadPath = "C:\actions\workspace\MSIXPackagingTool.msixbundle"
-        $licdownloadPath = "C:\actions\workspace\MSIXPackagingToollicense.xml"
-        $licurl = "https://download.microsoft.com/download/e/2/e/e2e923b2-7a3a-4730-969d-ab37001fbb5e/MSIXPackagingtoolv1.2024.405.0.License.xml"
-        Invoke-WebRequest -Uri $url -OutFile $downloadPath
-        Invoke-WebRequest -Uri $licurl -OutFile $licdownloadPath
-      shell: powershell
+#    - name: Download MSIX Packaging Tool #https://learn.microsoft.com/en-us/windows/msix/packaging-tool/disconnected-environment
+#      run: |
+#        new-item c:\actions\workspace -Force -ItemType Directory
+#        $url = "https://download.microsoft.com/download/e/2/e/e2e923b2-7a3a-4730-969d-ab37001fbb5e/MSIXPackagingtoolv1.2024.405.0.msixbundle"  # Replace with actual download link
+#        $downloadPath = "C:\actions\workspace\MSIXPackagingTool.msixbundle"
+#        $licdownloadPath = "C:\actions\workspace\MSIXPackagingToollicense.xml"
+#        $licurl = "https://download.microsoft.com/download/e/2/e/e2e923b2-7a3a-4730-969d-ab37001fbb5e/MSIXPackagingtoolv1.2024.405.0.License.xml"
+#        Invoke-WebRequest -Uri $url -OutFile $downloadPath
+#        Invoke-WebRequest -Uri $licurl -OutFile $licdownloadPath
+#      shell: powershell
 
-    - name: Install MSIX Packaging Tool
-      run: |
-        $packagePath = "C:\actions\workspace\MSIXPackagingTool.msixbundle"
-        $licensePath = "C:\actions\workspace\MSIXPackagingToollicense.xml"
-        Add-AppxProvisionedPackage -Online -PackagePath $packagePath -LicensePath $licensePath
-      shell: powershell
+#    - name: Install MSIX Packaging Tool
+#      run: |
+#        $packagePath = "C:\actions\workspace\MSIXPackagingTool.msixbundle"
+#        $licensePath = "C:\actions\workspace\MSIXPackagingToollicense.xml"
+#        Add-AppxProvisionedPackage -Online -PackagePath $packagePath -LicensePath $licensePath
+#      shell: powershell
       
 #    - name: Install MSIX Packaging Tool
 #      run: |

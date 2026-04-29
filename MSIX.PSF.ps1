@@ -1,0 +1,523 @@
+# Registry of known fixups: name -> { Dll (generic), HasBitSuffix }
+# Bit-suffixed DLLs are stored as FileRedirectionFixup32.dll / 64.dll on disk
+# but referenced as FileRedirectionFixup.dll inside the package/config.json.
+$script:PsfFixupRegistry = [ordered]@{
+    FileRedirectionFixup = @{ HasBitSuffix = $true  }
+    MFRFixup             = @{ HasBitSuffix = $true  }   # TMurgent fork only
+    RegLegacyFixups      = @{ HasBitSuffix = $true  }
+    EnvVarFixup          = @{ HasBitSuffix = $true  }
+    DynamicLibraryFixup  = @{ HasBitSuffix = $true  }
+    TraceFixup           = @{ HasBitSuffix = $true  }
+    WaitForDebuggerFixup = @{ HasBitSuffix = $true  }
+    KernelTraceControl   = @{ HasBitSuffix = $false }
+}
+
+#region --- Config builders -------------------------------------------------
+
+function New-MsixPsfFileRedirectionConfig {
+    <#
+    .SYNOPSIS
+        Builds a FileRedirectionFixup config hashtable for use with Add-MsixPsfV2.
+    .EXAMPLE
+        New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log','.*\.tmp'
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Base,
+        [Parameter(Mandatory)]
+        [string[]]$Patterns,
+        [ValidateSet('packageRelative', 'packageDriveRelative', 'knownFolderRelative')]
+        [string]$PathType = 'packageRelative'
+    )
+    return @{
+        dll    = 'FileRedirectionFixup.dll'
+        config = @{
+            redirectedPaths = @{
+                $PathType = @(@{ base = $Base; patterns = [array]$Patterns })
+            }
+        }
+    }
+}
+
+function New-MsixPsfRegLegacyConfig {
+    <#
+    .SYNOPSIS
+        Builds a RegLegacyFixups config hashtable. Supports all four types
+        documented by the TMurgent PSF fork:
+
+          - ModifyKeyAccess   downgrade FULL/RW masks (default)
+          - FakeDelete        deny "key not found" for legacy uninstallers
+          - DeletionMarker    suppress reads of explicitly-deleted keys
+          - Hklm2Hkcu         redirect HKLM writes to HKCU (per-user)
+
+    .EXAMPLE
+        # Modify access mask
+        New-MsixPsfRegLegacyConfig -Type ModifyKeyAccess -Hive HKCU `
+            -Access Full2MaxAllowed -Patterns 'SOFTWARE\App\*'
+
+    .EXAMPLE
+        # Pretend the key doesn't exist (legacy uninstaller probes)
+        New-MsixPsfRegLegacyConfig -Type FakeDelete -Hive HKLM `
+            -Patterns 'SOFTWARE\App\Uninstall'
+
+    .EXAMPLE
+        # Send legacy HKLM writes to HKCU instead
+        New-MsixPsfRegLegacyConfig -Type Hklm2Hkcu -Hive HKLM -Patterns 'SOFTWARE\App\*'
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('HKCU', 'HKLM')]
+        [string]$Hive,
+        [Parameter(Mandatory)]
+        [string[]]$Patterns,
+        [ValidateSet('ModifyKeyAccess', 'FakeDelete', 'DeletionMarker', 'Hklm2Hkcu')]
+        [string]$Type = 'ModifyKeyAccess',
+        # Required only for ModifyKeyAccess
+        [ValidateSet('Full2RW','Full2R','Full2MaxAllowed','RW2R','RW2MaxAllowed','NotAllowed')]
+        [string]$Access
+    )
+
+    if ($Type -eq 'ModifyKeyAccess' -and -not $Access) {
+        throw '-Access is required when -Type ModifyKeyAccess. Try Full2MaxAllowed.'
+    }
+
+    $remediation = [ordered]@{
+        hive     = $Hive
+        patterns = [array]$Patterns
+    }
+    if ($Type -eq 'ModifyKeyAccess') {
+        $remediation['access'] = $Access
+    }
+
+    return @{
+        dll    = 'RegLegacyFixups.dll'
+        config = @{
+            type        = $Type
+            remediation = @($remediation)
+        }
+    }
+}
+
+function New-MsixPsfEnvVarConfig {
+    <#
+    .SYNOPSIS
+        Builds an EnvVarFixup config hashtable for use with Add-MsixPsfV2.
+    .EXAMPLE
+        New-MsixPsfEnvVarConfig -Variables @{ MY_VAR = 'value'; ANOTHER = 'val2' }
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable]$Variables
+    )
+    return @{
+        dll    = 'EnvVarFixup.dll'
+        config = @{ envVars = $Variables }
+    }
+}
+
+function New-MsixPsfArguments {
+    <#
+    .SYNOPSIS
+        Returns a hashtable describing per-application command-line arguments
+        and (optionally) a working directory. Pass to Add-MsixPsfV2 -AppOptions.
+
+        Maps to the top-level `applications[].arguments` field documented at
+        https://learn.microsoft.com/en-us/windows/msix/psf/psf-launch-apps-with-parameters
+    .EXAMPLE
+        New-MsixPsfArguments -AppId 'App' -Arguments '/bootfromsettingshortcut'
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$AppId,
+        [string]$Arguments,
+        [string]$WorkingDirectory
+    )
+    $h = @{ id = $AppId }
+    if ($Arguments)        { $h['arguments']        = $Arguments }
+    if ($WorkingDirectory) { $h['workingDirectory'] = $WorkingDirectory }
+    return $h
+}
+
+function New-MsixPsfStartScriptConfig {
+    <#
+    .SYNOPSIS
+        Builds a PSF startScript / endScript block (per-application).
+
+    .DESCRIPTION
+        Used by PSFLauncher to run a PowerShell script before (startScript) or
+        after (endScript) the target application. Requires StartingScriptWrapper.ps1
+        from PSFBinaries.zip alongside the script in the package.
+
+        See https://learn.microsoft.com/en-us/windows/msix/psf/create-shortcut-with-script-package-support-framework
+
+    .PARAMETER AppId
+        Application Id this script attaches to.
+
+    .PARAMETER ScriptPath
+        Package-relative path to the .ps1 script (e.g. "ContosoExpenses\createshortcut.ps1").
+
+    .PARAMETER ScriptArguments
+        Optional argument string passed to the script.
+
+    .PARAMETER RunInVirtualEnvironment
+        If true, the script runs inside the package container; otherwise on the host.
+
+    .PARAMETER RunOnce
+        If true, the script runs only the first time the application is launched.
+
+    .PARAMETER ShowWindow
+        If true, the PowerShell host window is visible.
+
+    .PARAMETER WaitForScriptToFinish
+        If true, the application start blocks until the script exits.
+
+    .PARAMETER StopOnScriptError
+        If true, application launch is aborted when the script returns non-zero.
+
+    .PARAMETER Timeout
+        Seconds to wait for the script before giving up. 0 = no timeout.
+
+    .PARAMETER EndScript
+        If specified, returned as endScript instead of startScript.
+
+    .EXAMPLE
+        New-MsixPsfStartScriptConfig -AppId 'App' -ScriptPath 'createshortcut.ps1' -RunOnce -WaitForScriptToFinish
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$AppId,
+        [Parameter(Mandatory)]
+        [string]$ScriptPath,
+        [string]$ScriptArguments,
+        [switch]$RunInVirtualEnvironment,
+        [switch]$RunOnce,
+        [switch]$ShowWindow,
+        [switch]$WaitForScriptToFinish,
+        [switch]$StopOnScriptError,
+        [int]$Timeout = 0,
+        [switch]$EndScript
+    )
+    $script = [ordered]@{
+        scriptPath              = $ScriptPath
+        runInVirtualEnvironment = [bool]$RunInVirtualEnvironment
+        runOnce                 = [bool]$RunOnce
+        showWindow              = [bool]$ShowWindow
+        waitForScriptToFinish   = [bool]$WaitForScriptToFinish
+        stopOnScriptError       = [bool]$StopOnScriptError
+    }
+    if ($ScriptArguments) { $script['scriptArguments'] = $ScriptArguments }
+    if ($Timeout -gt 0)   { $script['timeout']         = $Timeout }
+
+    return @{
+        appId  = $AppId
+        kind   = if ($EndScript) { 'endScript' } else { 'startScript' }
+        block  = $script
+    }
+}
+
+function New-MsixPsfTraceConfig {
+    <#
+    .SYNOPSIS
+        Builds a TraceFixup config hashtable for use with Add-MsixPsfV2.
+    .EXAMPLE
+        New-MsixPsfTraceConfig -FilesystemLevel allFailures
+    #>
+    [OutputType([hashtable])]
+    param(
+        [ValidateSet('allFailures', 'unexpectedFailures', 'ignore')]
+        [string]$FilesystemLevel = 'unexpectedFailures',
+        [ValidateSet('allFailures', 'unexpectedFailures', 'ignore')]
+        [string]$RegistryLevel   = 'ignore'
+    )
+    return @{
+        dll    = 'TraceFixup.dll'
+        config = @{
+            traceLevels = @{
+                filesystem = $FilesystemLevel
+                registry   = $RegistryLevel
+            }
+        }
+    }
+}
+
+#endregion
+
+#region --- Config.json generation -----------------------------------------
+
+function New-MsixPsfConfig {
+    <#
+    .SYNOPSIS
+        Generates a complete PSF config.json string from a manifest, fixups, and
+        optional per-application options (arguments, workingDirectory, startScript,
+        endScript).
+    .PARAMETER AppOptions
+        Hashtables produced by New-MsixPsfArguments and New-MsixPsfStartScriptConfig.
+        Each is merged into the matching application entry by AppId.
+    .OUTPUTS
+        [string] JSON
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [xml]$Manifest,
+        [Parameter(Mandatory)]
+        [hashtable[]]$Fixups,
+        [string]$WorkingDirectory,
+        [hashtable[]]$AppOptions
+    )
+
+    $apps = @($Manifest.Package.Applications.Application)
+
+    # Index AppOptions by app id and kind so we can merge into entries
+    $argsById   = @{}
+    $startById  = @{}
+    $endById    = @{}
+    foreach ($opt in @($AppOptions)) {
+        if (-not $opt) { continue }
+        if ($opt.kind -eq 'startScript') { $startById[$opt.appId] = $opt.block; continue }
+        if ($opt.kind -eq 'endScript')   { $endById[$opt.appId]   = $opt.block; continue }
+        # Otherwise treat as arguments hashtable from New-MsixPsfArguments
+        if ($opt.id) { $argsById[$opt.id] = $opt }
+    }
+
+    $appEntries = foreach ($app in $apps) {
+        $entry = [ordered]@{
+            id         = $app.Id
+            executable = $app.Executable.Replace('\', '/')
+        }
+        if ($WorkingDirectory) { $entry['workingDirectory'] = $WorkingDirectory }
+
+        if ($argsById.ContainsKey($app.Id)) {
+            $a = $argsById[$app.Id]
+            if ($a.arguments)        { $entry['arguments']        = $a.arguments }
+            if ($a.workingDirectory) { $entry['workingDirectory'] = $a.workingDirectory }
+        }
+        if ($startById.ContainsKey($app.Id)) { $entry['startScript'] = $startById[$app.Id] }
+        if ($endById.ContainsKey($app.Id))   { $entry['endScript']   = $endById[$app.Id] }
+        $entry
+    }
+
+    # One process block per application, all sharing the same fixup set
+    $processEntries = foreach ($app in $apps) {
+        $exeName = $app.Executable.Split('\')[-1] -replace '\.exe$', ''
+        [ordered]@{
+            executable = $exeName
+            fixups     = [array]$Fixups
+        }
+    }
+
+    return [ordered]@{
+        applications = [array]$appEntries
+        processes    = [array]$processEntries
+    } | ConvertTo-Json -Depth 15
+}
+
+#endregion
+
+#region --- PSF injection ---------------------------------------------------
+
+function Add-MsixPsfV2 {
+    <#
+    .SYNOPSIS
+        Injects the Package Support Framework into an MSIX package.
+
+    .DESCRIPTION
+        Unpacks the MSIX to an isolated workspace, copies PSF runtime files,
+        generates a valid config.json, updates the AppxManifest to point each
+        Application at the correct PsfLauncher, repacks, and re-signs.
+
+    .PARAMETER PackagePath
+        Path to the .msix file to modify (modified in-place).
+
+    .PARAMETER Fixups
+        One or more fixup config hashtables from New-MsixPsf*Config helpers.
+
+    .PARAMETER PsfSourcePath
+        Override the folder containing PSF binaries (PsfLauncher*.exe, etc.).
+        Defaults to the 'psf' subfolder under the module tools root.
+
+    .PARAMETER WorkingDirectory
+        Optional package-relative working directory written to config.json.
+
+    .PARAMETER Pfx
+        Path to PFX certificate for signing. Omit to use the machine store.
+
+    .PARAMETER PfxPassword
+        Password for the PFX file (required when -Pfx is specified).
+
+    .EXAMPLE
+        $fix = New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log'
+        Add-MsixPsfV2 -PackagePath app.msix -Fixups $fix -Pfx cert.pfx -PfxPassword 'P@ss'
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)]
+        [string]$PackagePath,
+        [Parameter(Mandatory)]
+        [hashtable[]]$Fixups,
+        [string]$PsfSourcePath,
+        [string]$WorkingDirectory,
+        [hashtable[]]$AppOptions,
+        [string[]]$AdditionalFiles,        # extra files to copy into the package (e.g. a startScript .ps1)
+        # Output path for dry-run mode. If set, the modified package is written
+        # there instead of overwriting -PackagePath. Useful for staged pipelines.
+        [string]$OutputPath,
+        # If $true, the repacked output is NOT signed. Use this when chaining
+        # multiple PSF / manifest mutations and signing only at the very end.
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [string]$PfxPassword
+    )
+
+    $toolsRoot = Get-MsixToolsRoot
+    if (-not $PsfSourcePath) { $PsfSourcePath = Join-Path $toolsRoot 'psf' }
+
+    $fileinfo = Get-Item $PackagePath
+    $workspace = New-MsixWorkspace $fileinfo.BaseName
+
+    try {
+        Write-MsixLog Info "Unpacking: $($fileinfo.FullName)"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+
+        Test-MsixManifest "$workspace\AppxManifest.xml"
+        [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
+        $apps = Get-MsixManifestApplications $manifest
+
+        # Determine bitness from first app's executable path
+        $is64       = $apps[0].Executable -match 'x64|ProgramFilesX64'
+        $bitSuffix  = if ($is64) { '64' } else { '32' }
+
+        # Resolve the subfolder that contains the first app's executable
+        $firstExe   = $apps[0].Executable
+        $relDir     = if ($firstExe.Contains('\')) { $firstExe.Substring(0, $firstExe.LastIndexOf('\')) } else { '' }
+        $appFolder  = if ($relDir) { Join-Path $workspace $relDir } else { $workspace }
+
+        # --- config.json (placed alongside the app executable) ---
+        $configPath = Join-Path $appFolder 'config.json'
+        $psfJson    = New-MsixPsfConfig -Manifest $manifest `
+                                        -Fixups $Fixups `
+                                        -WorkingDirectory $WorkingDirectory `
+                                        -AppOptions $AppOptions
+
+        if ($PSCmdlet.ShouldProcess($configPath, 'Write PSF config.json')) {
+            $psfJson | Out-File $configPath -Encoding utf8 -Force
+            Write-MsixLog Info "PSF config written: $configPath"
+        }
+
+        Test-MsixPsfConfig $configPath
+
+        # --- Copy PSF runtime binaries ---
+        $runtimeFiles = @(
+            "PsfLauncher$bitSuffix.exe",
+            "PsfRuntime$bitSuffix.dll",
+            "PsfRunDll$bitSuffix.exe"
+        )
+        foreach ($f in $runtimeFiles) {
+            $src = Join-Path $PsfSourcePath $f
+            if (Test-Path $src) {
+                if ($PSCmdlet.ShouldProcess($src, "Copy PSF runtime")) {
+                    Copy-Item $src $appFolder -Force
+                    Write-MsixLog Debug "Copied: $f"
+                }
+            } else {
+                Write-MsixLog Warning "PSF runtime not found: $src"
+            }
+        }
+
+        # --- Copy fixup DLLs (strip bit suffix for package naming) ---
+        foreach ($fixup in $Fixups) {
+            $dllName = $fixup.dll                           # e.g. FileRedirectionFixup.dll
+            $dllBase = $dllName -replace '\.dll$', ''      # e.g. FileRedirectionFixup
+            $meta    = $script:PsfFixupRegistry[$dllBase]
+
+            if ($meta -and $meta.HasBitSuffix) {
+                $src = Join-Path $PsfSourcePath "${dllBase}${bitSuffix}.dll"
+            } else {
+                $src = Join-Path $PsfSourcePath $dllName
+            }
+
+            if (Test-Path $src) {
+                if ($PSCmdlet.ShouldProcess($src, "Copy fixup DLL")) {
+                    Copy-Item $src (Join-Path $appFolder $dllName) -Force
+                    Write-MsixLog Debug "Fixup copied: $dllName"
+                }
+            } else {
+                Write-MsixLog Warning "Fixup DLL not found: $src"
+            }
+        }
+
+        # --- Optional extra files (e.g. start scripts, .lnk, icons) ---
+        if ($AdditionalFiles) {
+            foreach ($extra in $AdditionalFiles) {
+                if (Test-Path $extra) {
+                    Copy-Item $extra $appFolder -Force
+                    Write-MsixLog Debug "Extra file copied: $extra"
+                } else {
+                    Write-MsixLog Warning "Additional file not found: $extra"
+                }
+            }
+            # If any startScript is in use, ship StartingScriptWrapper.ps1 too
+            $needsWrapper = @($AppOptions) | Where-Object { $_.kind -in 'startScript','endScript' }
+            if ($needsWrapper) {
+                $wrapper = Join-Path $PsfSourcePath 'StartingScriptWrapper.ps1'
+                if (Test-Path $wrapper) {
+                    Copy-Item $wrapper $appFolder -Force
+                    Write-MsixLog Debug "StartingScriptWrapper.ps1 copied"
+                } else {
+                    Write-MsixLog Warning "StartingScriptWrapper.ps1 not found in $PsfSourcePath"
+                }
+            }
+        }
+
+        # --- Update manifest: point each Application at PsfLauncher ---
+        $i = 0
+        foreach ($app in $apps) {
+            $i++
+            # App 1 → PsfLauncher64.exe, App 2+ → PsfLauncher64_2.exe, etc.
+            if ($i -eq 1) {
+                $launcherName = "PsfLauncher$bitSuffix.exe"
+            } else {
+                $launcherName = "PsfLauncher${bitSuffix}_$i.exe"
+                Copy-Item (Join-Path $PsfSourcePath "PsfLauncher$bitSuffix.exe") `
+                          (Join-Path $appFolder $launcherName) -Force
+            }
+
+            $oldLeaf        = $app.Executable.Split('\')[-1]
+            $app.Executable = $app.Executable -replace [regex]::Escape($oldLeaf), $launcherName
+
+            # Keep AppExecutionAlias in sync if present
+            $aliasExt = $app.Extensions.Extension |
+                        Where-Object { $_.Category -eq 'windows.appExecutionAlias' }
+            if ($aliasExt) {
+                $aliasExt.Executable = $app.Executable
+                Write-MsixLog Debug "AppExecutionAlias updated for $($app.Id)"
+            }
+        }
+
+        if ($PSCmdlet.ShouldProcess("$workspace\AppxManifest.xml", 'Save updated manifest')) {
+            Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
+        }
+
+        # --- Repack ---
+        $repackTarget = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
+        Write-MsixLog Info "Repacking: $repackTarget"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$repackTarget`" /d `"$workspace`" /o"
+        Assert-MsixProcessSuccess $r 'MakeAppx pack'
+
+        if ($SkipSigning) {
+            Write-MsixLog Info "Skipping signing (use Invoke-MsixSigning later, or chain another PSF call)."
+        } else {
+            Invoke-MsixSigning -PackagePath $repackTarget -Pfx $Pfx -PfxPassword $PfxPassword
+        }
+
+    } finally {
+        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+#endregion

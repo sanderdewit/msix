@@ -1,0 +1,71 @@
+BeforeAll {
+    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psm1')) -Force
+
+    $script:SampleManifest = @'
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         IgnorableNamespaces="uap">
+  <Identity Name="Contoso.App" Publisher="CN=Contoso, O=Contoso, C=NL" Version="1.0.0.0" />
+  <Properties><DisplayName>Contoso</DisplayName><PublisherDisplayName>Contoso</PublisherDisplayName><Logo>l.png</Logo></Properties>
+  <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" /></Dependencies>
+  <Resources><Resource Language="en-us" /></Resources>
+  <Applications>
+    <Application Id="App" Executable="VFS\ProgramFilesX64\App\App.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="App" Description="App" BackgroundColor="transparent" Square150x150Logo="l.png" Square44x44Logo="l.png" />
+    </Application>
+  </Applications>
+</Package>
+'@
+}
+
+AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
+
+Describe 'Manifest helpers' -Tag 'Manifest' {
+
+    Context 'Add-MsixManifestNamespace' {
+        It 'Adds rescap namespace if missing' {
+            [xml]$x = $script:SampleManifest
+            Add-MsixManifestNamespace -Manifest $x -Prefix 'rescap'
+            $x.Package.Attributes['xmlns:rescap'].Value | Should -Be 'http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities'
+            $x.Package.IgnorableNamespaces | Should -Match '\brescap\b'
+        }
+        It 'Is idempotent on second call' {
+            [xml]$x = $script:SampleManifest
+            Add-MsixManifestNamespace -Manifest $x -Prefix 'desktop'
+            Add-MsixManifestNamespace -Manifest $x -Prefix 'desktop'
+            ($x.Package.Attributes | Where-Object { $_.Value -eq 'http://schemas.microsoft.com/appx/manifest/desktop/windows10' }).Count |
+                Should -Be 1
+        }
+        It 'Throws on unknown prefix' {
+            [xml]$x = $script:SampleManifest
+            { Add-MsixManifestNamespace -Manifest $x -Prefix 'nopenope' } | Should -Throw
+        }
+    }
+
+    Context 'Set-MsixManifestMaxVersionTested' {
+        It 'Bumps when below threshold' {
+            [xml]$x = $script:SampleManifest
+            Set-MsixManifestMaxVersionTested -Manifest $x -MinBuild 21301
+            $x.Package.Dependencies.TargetDeviceFamily.MaxVersionTested |
+                Should -Be '10.0.21301.0'
+        }
+        It 'Leaves version alone when at/above threshold' {
+            [xml]$x = $script:SampleManifest
+            $x.Package.Dependencies.TargetDeviceFamily.MaxVersionTested = '10.0.26100.0'
+            Set-MsixManifestMaxVersionTested -Manifest $x -MinBuild 21301
+            $x.Package.Dependencies.TargetDeviceFamily.MaxVersionTested |
+                Should -Be '10.0.26100.0'
+        }
+    }
+
+    Context 'Get-MsixManifestApplications' {
+        It 'Returns Application elements as an array' {
+            [xml]$x = $script:SampleManifest
+            $apps = Get-MsixManifestApplications -Manifest $x
+            ,$apps -is [array]   | Should -BeTrue
+            @($apps).Count       | Should -Be 1
+            @($apps)[0].Id       | Should -Be 'App'
+        }
+    }
+}

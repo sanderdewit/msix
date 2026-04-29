@@ -1,0 +1,260 @@
+﻿<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<test-results xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="nunit_schema_2.5.xsd" name="Pester" total="79" errors="0" failures="0" not-run="0" inconclusive="0" ignored="0" skipped="0" invalid="0" date="2026-04-29" time="15:11:42">
+  <environment platform="Microsoft Windows 11 Enterprise|C:\WINDOWS|\Device\Harddisk0\Partition3" cwd="C:\temp\msix" user-domain="AzureAD" os-version="10.0.26200" nunit-version="2.5.8.0" user="SanderdeWit" clr-version="9.0.14" machine-name="STUDIO" />
+  <culture-info current-culture="en-NL" current-uiculture="en-US" />
+  <test-suite type="TestFixture" name="Pester" executed="True" result="Success" success="True" time="14.4753" asserts="0" description="Pester">
+    <results>
+      <test-suite type="TestFixture" name="C:\temp\msix\MSIX\MSIX.Tests\MSIX.AppIsolation.Tests.ps1" executed="True" result="Success" success="True" time="5.2159" asserts="0" description="C:\temp\msix\MSIX\MSIX.Tests\MSIX.AppIsolation.Tests.ps1">
+        <results>
+          <test-suite type="TestFixture" name="Win32 App Isolation" executed="True" result="Success" success="True" time="0.6711" asserts="0" description="Win32 App Isolation">
+            <results>
+              <test-case description="Get-MsixIsolationCapabilities returns a list with promptForAccess" name="Win32 App Isolation.Get-MsixIsolationCapabilities returns a list with promptForAccess" time="0.3892" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="All capabilities follow isolatedWin32- naming" name="Win32 App Isolation.All capabilities follow isolatedWin32- naming" time="0.063" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+        </results>
+      </test-suite>
+      <test-suite type="TestFixture" name="C:\temp\msix\MSIX\MSIX.Tests\MSIX.Builders.Tests.ps1" executed="True" result="Success" success="True" time="1.3419" asserts="0" description="C:\temp\msix\MSIX\MSIX.Tests\MSIX.Builders.Tests.ps1">
+        <results>
+          <test-suite type="TestFixture" name="PSF builders" executed="True" result="Success" success="True" time="0.6569" asserts="0" description="PSF builders">
+            <results>
+              <test-suite type="TestFixture" name="PSF builders.New-MsixPsfFileRedirectionConfig" executed="True" result="Success" success="True" time="0.2244" asserts="0" description="PSF builders.New-MsixPsfFileRedirectionConfig">
+                <results>
+                  <test-case description="Returns FileRedirectionFixup.dll" name="PSF builders.New-MsixPsfFileRedirectionConfig.Returns FileRedirectionFixup.dll" time="0.0903" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Defaults to packageRelative" name="PSF builders.New-MsixPsfFileRedirectionConfig.Defaults to packageRelative" time="0.0389" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Honours -PathType" name="PSF builders.New-MsixPsfFileRedirectionConfig.Honours -PathType" time="0.0444" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Wraps single Patterns into an array" name="PSF builders.New-MsixPsfFileRedirectionConfig.Wraps single Patterns into an array" time="0.0402" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+              <test-suite type="TestFixture" name="PSF builders.New-MsixPsfRegLegacyConfig" executed="True" result="Success" success="True" time="0.3998" asserts="0" description="PSF builders.New-MsixPsfRegLegacyConfig">
+                <results>
+                  <test-case description="Sets type=ModifyKeyAccess" name="PSF builders.New-MsixPsfRegLegacyConfig.Sets type=ModifyKeyAccess" time="0.0403" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Validates Hive enum" name="PSF builders.New-MsixPsfRegLegacyConfig.Validates Hive enum" time="0.0755" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Validates Access enum" name="PSF builders.New-MsixPsfRegLegacyConfig.Validates Access enum" time="0.0496" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+              <test-suite type="TestFixture" name="PSF builders.New-MsixPsfEnvVarConfig" executed="True" result="Success" success="True" time="0.4469" asserts="0" description="PSF builders.New-MsixPsfEnvVarConfig">
+                <results>
+                  <test-case description="Returns EnvVarFixup.dll with envVars hashtable" name="PSF builders.New-MsixPsfEnvVarConfig.Returns EnvVarFixup.dll with envVars hashtable" time="0.0364" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+              <test-suite type="TestFixture" name="PSF builders.New-MsixPsfTraceConfig" executed="True" result="Success" success="True" time="0.4979" asserts="0" description="PSF builders.New-MsixPsfTraceConfig">
+                <results>
+                  <test-case description="Has filesystem + registry levels" name="PSF builders.New-MsixPsfTraceConfig.Has filesystem + registry levels" time="0.0372" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+              <test-suite type="TestFixture" name="PSF builders.New-MsixPsfArguments" executed="True" result="Success" success="True" time="0.5688" asserts="0" description="PSF builders.New-MsixPsfArguments">
+                <results>
+                  <test-case description="Returns app id and arguments" name="PSF builders.New-MsixPsfArguments.Returns app id and arguments" time="0.0357" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Omits empty fields" name="PSF builders.New-MsixPsfArguments.Omits empty fields" time="0.0283" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+              <test-suite type="TestFixture" name="PSF builders.New-MsixPsfStartScriptConfig" executed="True" result="Success" success="True" time="0.649" asserts="0" description="PSF builders.New-MsixPsfStartScriptConfig">
+                <results>
+                  <test-case description="Builds startScript by default" name="PSF builders.New-MsixPsfStartScriptConfig.Builds startScript by default" time="0.0504" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Switches to endScript when -EndScript" name="PSF builders.New-MsixPsfStartScriptConfig.Switches to endScript when -EndScript" time="0.0234" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+            </results>
+          </test-suite>
+        </results>
+      </test-suite>
+      <test-suite type="TestFixture" name="C:\temp\msix\MSIX\MSIX.Tests\MSIX.Heuristics.Tests.ps1" executed="True" result="Success" success="True" time="0.6258" asserts="0" description="C:\temp\msix\MSIX\MSIX.Tests\MSIX.Heuristics.Tests.ps1">
+        <results>
+          <test-suite type="TestFixture" name="Heuristic catalogues (v0.9)" executed="True" result="Success" success="True" time="0.1813" asserts="0" description="Heuristic catalogues (v0.9)">
+            <results>
+              <test-suite type="TestFixture" name="Heuristic catalogues (v0.9).Get-MsixKnownCapabilities" executed="True" result="Success" success="True" time="0.0949" asserts="0" description="Heuristic catalogues (v0.9).Get-MsixKnownCapabilities">
+                <results>
+                  <test-case description="Returns at least 10 entries" name="Heuristic catalogues (v0.9).Get-MsixKnownCapabilities.Returns at least 10 entries" time="0.0332" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Tags rescap entries correctly" name="Heuristic catalogues (v0.9).Get-MsixKnownCapabilities.Tags rescap entries correctly" time="0.0297" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Tags standard entries correctly" name="Heuristic catalogues (v0.9).Get-MsixKnownCapabilities.Tags standard entries correctly" time="0.0249" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+              <test-suite type="TestFixture" name="Heuristic catalogues (v0.9).Invoke-MsixAutoFix DryRun" executed="True" result="Success" success="True" time="0.1734" asserts="0" description="Heuristic catalogues (v0.9).Invoke-MsixAutoFix DryRun">
+                <results>
+                  <test-case description="Returns DryRun=true and lists planned stages without mutating" name="Heuristic catalogues (v0.9).Invoke-MsixAutoFix DryRun.Returns DryRun=true and lists planned stages without mutating" time="0.048" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Skips PSF stage when no fixups provided" name="Heuristic catalogues (v0.9).Invoke-MsixAutoFix DryRun.Skips PSF stage when no fixups provided" time="0.0237" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+            </results>
+          </test-suite>
+        </results>
+      </test-suite>
+      <test-suite type="TestFixture" name="C:\temp\msix\MSIX\MSIX.Tests\MSIX.Limitations.Tests.ps1" executed="True" result="Success" success="True" time="0.6714" asserts="0" description="C:\temp\msix\MSIX\MSIX.Tests\MSIX.Limitations.Tests.ps1">
+        <results>
+          <test-suite type="TestFixture" name="Limitations knowledge base" executed="True" result="Success" success="True" time="0.2804" asserts="0" description="Limitations knowledge base">
+            <results>
+              <test-case description="Has at least 10 entries" name="Limitations knowledge base.Has at least 10 entries" time="0.0443" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="Filters by severity" name="Limitations knowledge base.Filters by severity" time="0.0458" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="Filters by id" name="Limitations knowledge base.Filters by id" time="0.033" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="-ExcludeVendor drops non-msft-docs" name="Limitations knowledge base.-ExcludeVendor drops non-msft-docs" time="0.0611" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="Every entry has the required fields" name="Limitations knowledge base.Every entry has the required fields" time="0.0895" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+        </results>
+      </test-suite>
+      <test-suite type="TestFixture" name="C:\temp\msix\MSIX\MSIX.Tests\MSIX.Manifest.Tests.ps1" executed="True" result="Success" success="True" time="0.8104" asserts="0" description="C:\temp\msix\MSIX\MSIX.Tests\MSIX.Manifest.Tests.ps1">
+        <results>
+          <test-suite type="TestFixture" name="Manifest helpers" executed="True" result="Success" success="True" time="0.2847" asserts="0" description="Manifest helpers">
+            <results>
+              <test-suite type="TestFixture" name="Manifest helpers.Add-MsixManifestNamespace" executed="True" result="Success" success="True" time="0.1627" asserts="0" description="Manifest helpers.Add-MsixManifestNamespace">
+                <results>
+                  <test-case description="Adds rescap namespace if missing" name="Manifest helpers.Add-MsixManifestNamespace.Adds rescap namespace if missing" time="0.0611" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Is idempotent on second call" name="Manifest helpers.Add-MsixManifestNamespace.Is idempotent on second call" time="0.0514" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Throws on unknown prefix" name="Manifest helpers.Add-MsixManifestNamespace.Throws on unknown prefix" time="0.044" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+              <test-suite type="TestFixture" name="Manifest helpers.Set-MsixManifestMaxVersionTested" executed="True" result="Success" success="True" time="0.2424" asserts="0" description="Manifest helpers.Set-MsixManifestMaxVersionTested">
+                <results>
+                  <test-case description="Bumps when below threshold" name="Manifest helpers.Set-MsixManifestMaxVersionTested.Bumps when below threshold" time="0.0497" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Leaves version alone when at/above threshold" name="Manifest helpers.Set-MsixManifestMaxVersionTested.Leaves version alone when at/above threshold" time="0.0241" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+              <test-suite type="TestFixture" name="Manifest helpers.Get-MsixManifestApplications" executed="True" result="Success" success="True" time="0.2794" asserts="0" description="Manifest helpers.Get-MsixManifestApplications">
+                <results>
+                  <test-case description="Returns Application elements as an array" name="Manifest helpers.Get-MsixManifestApplications.Returns Application elements as an array" time="0.0311" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+            </results>
+          </test-suite>
+        </results>
+      </test-suite>
+      <test-suite type="TestFixture" name="C:\temp\msix\MSIX\MSIX.Tests\MSIX.MFR.Tests.ps1" executed="True" result="Success" success="True" time="1.0463" asserts="0" description="C:\temp\msix\MSIX\MSIX.Tests\MSIX.MFR.Tests.ps1">
+        <results>
+          <test-suite type="TestFixture" name="MFR builders" executed="True" result="Success" success="True" time="0.5198" asserts="0" description="MFR builders">
+            <results>
+              <test-suite type="TestFixture" name="MFR builders.Get-MsixMfrKnownFolders" executed="True" result="Success" success="True" time="0.091" asserts="0" description="MFR builders.Get-MsixMfrKnownFolders">
+                <results>
+                  <test-case description="Mode Traditional contains ProgramFilesX64" name="MFR builders.Get-MsixMfrKnownFolders.Mode Traditional contains ProgramFilesX64" time="0.0251" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Mode Local contains ThisPCDesktopFolder" name="MFR builders.Get-MsixMfrKnownFolders.Mode Local contains ThisPCDesktopFolder" time="0.0278" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Mode Both returns combined object with COW options" name="MFR builders.Get-MsixMfrKnownFolders.Mode Both returns combined object with COW options" time="0.0299" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+              <test-suite type="TestFixture" name="MFR builders.New-MsixMfrTraditionalRule" executed="True" result="Success" success="True" time="0.2643" asserts="0" description="MFR builders.New-MsixMfrTraditionalRule">
+                <results>
+                  <test-case description="Validates KnownFolder against known list" name="MFR builders.New-MsixMfrTraditionalRule.Validates KnownFolder against known list" time="0.0796" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Returns hashtable with knownFolder/relativePath/patterns" name="MFR builders.New-MsixMfrTraditionalRule.Returns hashtable with knownFolder/relativePath/patterns" time="0.0283" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Honours -Cow" name="MFR builders.New-MsixMfrTraditionalRule.Honours -Cow" time="0.0259" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Honours -IlvAware" name="MFR builders.New-MsixMfrTraditionalRule.Honours -IlvAware" time="0.0275" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+              <test-suite type="TestFixture" name="MFR builders.New-MsixMfrLocalRule" executed="True" result="Success" success="True" time="0.3914" asserts="0" description="MFR builders.New-MsixMfrLocalRule">
+                <results>
+                  <test-case description="Rejects a Traditional folder name" name="MFR builders.New-MsixMfrLocalRule.Rejects a Traditional folder name" time="0.0873" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Accepts ThisPCDesktopFolder" name="MFR builders.New-MsixMfrLocalRule.Accepts ThisPCDesktopFolder" time="0.0291" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+              <test-suite type="TestFixture" name="MFR builders.New-MsixPsfMfrConfig" executed="True" result="Success" success="True" time="0.5135" asserts="0" description="MFR builders.New-MsixPsfMfrConfig">
+                <results>
+                  <test-case description="Returns MFRFixup.dll" name="MFR builders.New-MsixPsfMfrConfig.Returns MFRFixup.dll" time="0.0507" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Splits Traditional and Local into separate paths" name="MFR builders.New-MsixPsfMfrConfig.Splits Traditional and Local into separate paths" time="0.0281" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Honours -GlobalIlvAware and -GlobalCow" name="MFR builders.New-MsixPsfMfrConfig.Honours -GlobalIlvAware and -GlobalCow" time="0.0235" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+            </results>
+          </test-suite>
+        </results>
+      </test-suite>
+      <test-suite type="TestFixture" name="C:\temp\msix\MSIX\MSIX.Tests\MSIX.Recommendations.Tests.ps1" executed="True" result="Success" success="True" time="0.5626" asserts="0" description="C:\temp\msix\MSIX\MSIX.Tests\MSIX.Recommendations.Tests.ps1">
+        <results>
+          <test-suite type="TestFixture" name="Get-MsixDebugRecommendations" executed="True" result="Success" success="True" time="0.146" asserts="0" description="Get-MsixDebugRecommendations">
+            <results>
+              <test-case description="Emits a friendly no-issue message when Findings is empty" name="Get-MsixDebugRecommendations.Emits a friendly no-issue message when Findings is empty" time="0.0309" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="Renders an Add-MsixPsfV2 line for FileRedirectionFixup findings" name="Get-MsixDebugRecommendations.Renders an Add-MsixPsfV2 line for FileRedirectionFixup findings" time="0.0343" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="Renders -WorkingDirectory for WorkingDirectory findings" name="Get-MsixDebugRecommendations.Renders -WorkingDirectory for WorkingDirectory findings" time="0.0243" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="Substitutes -Pfx and -PfxPassword" name="Get-MsixDebugRecommendations.Substitutes -Pfx and -PfxPassword" time="0.0224" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="Numbers each recommendation" name="Get-MsixDebugRecommendations.Numbers each recommendation" time="0.0266" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+        </results>
+      </test-suite>
+      <test-suite type="TestFixture" name="C:\temp\msix\MSIX\MSIX.Tests\MSIX.RegLegacy.Tests.ps1" executed="True" result="Success" success="True" time="0.5683" asserts="0" description="C:\temp\msix\MSIX\MSIX.Tests\MSIX.RegLegacy.Tests.ps1">
+        <results>
+          <test-suite type="TestFixture" name="RegLegacyFixups types (v0.9)" executed="True" result="Success" success="True" time="0.196" asserts="0" description="RegLegacyFixups types (v0.9)">
+            <results>
+              <test-case description="ModifyKeyAccess requires -Access" name="RegLegacyFixups types (v0.9).ModifyKeyAccess requires -Access" time="0.0461" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="ModifyKeyAccess includes access in remediation" name="RegLegacyFixups types (v0.9).ModifyKeyAccess includes access in remediation" time="0.0282" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="FakeDelete omits access field" name="RegLegacyFixups types (v0.9).FakeDelete omits access field" time="0.0235" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="DeletionMarker passes through" name="RegLegacyFixups types (v0.9).DeletionMarker passes through" time="0.0264" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="Hklm2Hkcu passes through" name="RegLegacyFixups types (v0.9).Hklm2Hkcu passes through" time="0.0229" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="Validates Type enum" name="RegLegacyFixups types (v0.9).Validates Type enum" time="0.042" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+        </results>
+      </test-suite>
+      <test-suite type="TestFixture" name="C:\temp\msix\MSIX\MSIX.Tests\MSIX.Scripts.Tests.ps1" executed="True" result="Success" success="True" time="1.2917" asserts="0" description="C:\temp\msix\MSIX\MSIX.Tests\MSIX.Scripts.Tests.ps1">
+        <results>
+          <test-suite type="TestFixture" name="Standard scripts" executed="True" result="Success" success="True" time="0.7004" asserts="0" description="Standard scripts">
+            <results>
+              <test-case description="Get-MsixStandardScripts lists all five templates" name="Standard scripts.Get-MsixStandardScripts lists all five templates" time="0.0397" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="Each catalogue entry points to a real template file" name="Standard scripts.Each catalogue entry points to a real template file" time="0.0317" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="New-MsixStandardScript renders CreateShortcut substituting parameters" name="Standard scripts.New-MsixStandardScript renders CreateShortcut substituting parameters" time="0.3416" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="Throws when a required parameter is missing" name="Standard scripts.Throws when a required parameter is missing" time="0.0857" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="Validates Name against the catalogue" name="Standard scripts.Validates Name against the catalogue" time="0.0488" asserts="0" success="True" result="Success" executed="True" />
+              <test-case description="Applies defaults for optional parameters" name="Standard scripts.Applies defaults for optional parameters" time="0.1356" asserts="0" success="True" result="Success" executed="True" />
+            </results>
+          </test-suite>
+        </results>
+      </test-suite>
+      <test-suite type="TestFixture" name="C:\temp\msix\MSIX\MSIX.Tests\MSIX.Trace.Tests.ps1" executed="True" result="Success" success="True" time="1.0466" asserts="0" description="C:\temp\msix\MSIX\MSIX.Tests\MSIX.Trace.Tests.ps1">
+        <results>
+          <test-suite type="TestFixture" name="Trace Fixup parser" executed="True" result="Success" success="True" time="0.5466" asserts="0" description="Trace Fixup parser">
+            <results>
+              <test-suite type="TestFixture" name="Trace Fixup parser.ConvertFrom-MsixTraceLine" executed="True" result="Success" success="True" time="0.1398" asserts="0" description="Trace Fixup parser.ConvertFrom-MsixTraceLine">
+                <results>
+                  <test-case description="Parses a filesystem failure line" name="Trace Fixup parser.ConvertFrom-MsixTraceLine.Parses a filesystem failure line" time="0.0362" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Parses a registry SUCCESS line" name="Trace Fixup parser.ConvertFrom-MsixTraceLine.Parses a registry SUCCESS line" time="0.0234" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Returns nothing on a non-matching line" name="Trace Fixup parser.ConvertFrom-MsixTraceLine.Returns nothing on a non-matching line" time="0.0379" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Returns nothing on an empty line" name="Trace Fixup parser.ConvertFrom-MsixTraceLine.Returns nothing on an empty line" time="0.0336" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+              <test-suite type="TestFixture" name="Trace Fixup parser.Get-MsixTraceFailures" executed="True" result="Success" success="True" time="0.4109" asserts="0" description="Trace Fixup parser.Get-MsixTraceFailures">
+                <results>
+                  <test-case description="Returns only failing rows" name="Trace Fixup parser.Get-MsixTraceFailures.Returns only failing rows" time="0.1381" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Drops unparseable lines" name="Trace Fixup parser.Get-MsixTraceFailures.Drops unparseable lines" time="0.0455" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+              <test-suite type="TestFixture" name="Trace Fixup parser.ConvertFrom-MsixTraceToFindings" executed="True" result="Success" success="True" time="0.5402" asserts="0" description="Trace Fixup parser.ConvertFrom-MsixTraceToFindings">
+                <results>
+                  <test-case description="Maps WindowsApps writes to FileRedirectionFixup" name="Trace Fixup parser.ConvertFrom-MsixTraceToFindings.Maps WindowsApps writes to FileRedirectionFixup" time="0.0316" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Maps SysWOW64 reads to WorkingDirectory" name="Trace Fixup parser.ConvertFrom-MsixTraceToFindings.Maps SysWOW64 reads to WorkingDirectory" time="0.0262" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Maps HKLM access denied to RegLegacyFixups" name="Trace Fixup parser.ConvertFrom-MsixTraceToFindings.Maps HKLM access denied to RegLegacyFixups" time="0.0412" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Deduplicates by category + leaf" name="Trace Fixup parser.ConvertFrom-MsixTraceToFindings.Deduplicates by category + leaf" time="0.024" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+            </results>
+          </test-suite>
+        </results>
+      </test-suite>
+      <test-suite type="TestFixture" name="C:\temp\msix\MSIX\MSIX.Tests\MSIX.Validation.Tests.ps1" executed="True" result="Success" success="True" time="1.2946" asserts="0" description="C:\temp\msix\MSIX\MSIX.Tests\MSIX.Validation.Tests.ps1">
+        <results>
+          <test-suite type="TestFixture" name="Validation" executed="True" result="Success" success="True" time="0.7413" asserts="0" description="Validation">
+            <results>
+              <test-suite type="TestFixture" name="Validation.Test-MsixManifest" executed="True" result="Success" success="True" time="0.4013" asserts="0" description="Validation.Test-MsixManifest">
+                <results>
+                  <test-case description="Throws when file does not exist" name="Validation.Test-MsixManifest.Throws when file does not exist" time="0.0491" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Throws on malformed XML" name="Validation.Test-MsixManifest.Throws on malformed XML" time="0.0763" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Throws when Identity is missing required fields" name="Validation.Test-MsixManifest.Throws when Identity is missing required fields" time="0.0839" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Throws when Applications is empty" name="Validation.Test-MsixManifest.Throws when Applications is empty" time="0.1002" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Returns true for a complete manifest" name="Validation.Test-MsixManifest.Returns true for a complete manifest" time="0.085" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+              <test-suite type="TestFixture" name="Validation.Test-MsixPsfConfig" executed="True" result="Success" success="True" time="0.5906" asserts="0" description="Validation.Test-MsixPsfConfig">
+                <results>
+                  <test-case description="Throws on missing keys" name="Validation.Test-MsixPsfConfig.Throws on missing keys" time="0.0759" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Accepts a valid PSF config" name="Validation.Test-MsixPsfConfig.Accepts a valid PSF config" time="0.098" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+              <test-suite type="TestFixture" name="Validation.Assert-MsixProcessSuccess" executed="True" result="Success" success="True" time="0.7358" asserts="0" description="Validation.Assert-MsixProcessSuccess">
+                <results>
+                  <test-case description="Throws on non-zero exit" name="Validation.Assert-MsixProcessSuccess.Throws on non-zero exit" time="0.0984" asserts="0" success="True" result="Success" executed="True" />
+                  <test-case description="Stays silent on zero exit" name="Validation.Assert-MsixProcessSuccess.Stays silent on zero exit" time="0.0371" asserts="0" success="True" result="Success" executed="True" />
+                </results>
+              </test-suite>
+            </results>
+          </test-suite>
+        </results>
+      </test-suite>
+    </results>
+  </test-suite>
+</test-results>

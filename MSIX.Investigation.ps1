@@ -252,15 +252,24 @@ function Get-MsixStaticAnalysis {
         [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
         $apps = @($manifest.Package.Applications.Application)
 
-        # Detect existing PSF
-        $hasPsf = ($apps.Executable -match 'PsfLauncher').Count -gt 0
+        # Detect existing PSF.
+        # Use GetAttribute() rather than the PowerShell XML shorthand to avoid member-enumeration
+        # edge cases when the manifest has a single Application element (shorthand returns a scalar;
+        # -match on a scalar yields $true/$false whose .Count is always 1, creating false positives).
+        # Also require config.json to be present — PsfLauncher without config.json is not valid PSF.
+        $psfApps = @($apps | Where-Object { $_.GetAttribute('Executable') -match 'PsfLauncher' })
+        $hasPsf  = $psfApps.Count -gt 0
+        if ($hasPsf) {
+            $cfgJson = @(Get-ChildItem $workspace -Recurse -Filter 'config.json' -ErrorAction SilentlyContinue)
+            $hasPsf  = $cfgJson.Count -gt 0   # bare PsfLauncher with no config.json is not real PSF
+        }
         if ($hasPsf) {
             $findings += [pscustomobject]@{
                 Severity     = 'Info'
                 Category     = 'PSF'
                 Symptom      = 'Package already wraps applications with PsfLauncher.'
                 Recommendation = 'Inspect existing config.json before adding more fixups.'
-                AppId        = ($apps | Where-Object Executable -match 'PsfLauncher').Id -join ','
+                AppId        = ($psfApps | ForEach-Object { $_.GetAttribute('Id') }) -join ','
             }
         }
 

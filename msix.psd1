@@ -7,106 +7,81 @@
     RootModule        = 'MSIX.psm1'
 
     FunctionsToExport = @(
-        # Logging
         'Write-MsixLog', 'Set-MsixLogLevel', 'Set-MsixLogFile',
-        # Core / tools
         'Get-MsixToolsRoot', 'Set-MsixToolsRoot',
         'New-MsixWorkspace', 'Invoke-MsixProcess', 'Get-MsixPublisherId',
-        # Validation
         'Test-MsixManifest', 'Test-MsixPsfConfig', 'Assert-MsixProcessSuccess',
-        # Manifest helpers
-        'Get-MsixManifest', 'Save-MsixManifest', 'Add-MsixManifestNamespace',
-        'Get-MsixManifestApplications', 'Get-MsixManifestNamespaceUri',
-        'Set-MsixManifestMaxVersionTested',
-        # PSF builders
+        'Get-MsixManifest', 'New-MsixManifestDocument',
+        'Select-MsixManifestNode', 'Select-MsixManifestNodes',
+        'Save-MsixManifest', 'Add-MsixManifestNamespace',
+        'Get-MsixManifestApplications', 'Get-MsixManifestApplication',
+        'Get-MsixManifestNamespaceUri', 'Set-MsixManifestMaxVersionTested',
         'New-MsixPsfFileRedirectionConfig', 'New-MsixPsfRegLegacyConfig',
         'New-MsixPsfEnvVarConfig', 'New-MsixPsfTraceConfig',
         'New-MsixPsfArguments', 'New-MsixPsfStartScriptConfig',
         'New-MsixPsfDynamicLibraryConfig', 'New-MsixPsfWaitForDebuggerConfig',
         'New-MsixPsfConfig', 'Add-MsixPsfV2',
-        # Signing
         'Invoke-MsixSigning',
-        # Context menus
         'Add-MsixLegacyContextMenu', 'Add-MsixFileExplorerContextMenu',
-        # Pipeline
         'Invoke-MsixPipeline',
-        # Investigation
         'Invoke-MsixInvestigation', 'Get-MsixCompatibilityReport',
         'Get-MsixStaticAnalysis', 'Invoke-MsixProcMonCapture',
         'Get-MsixProcMonFailures', 'Add-MsixDiagnosticTrace',
         'Resolve-MsixProcMonPath',
-        # AppData / out-of-package
         'Get-MsixContainerAppData', 'Get-MsixOrphanedAppData',
         'Copy-MsixHostAppDataIntoPackage', 'Invoke-MsixContainerCommand',
         'Get-MsixPackageStorageSummary',
-        # Accelerators
         'Import-MsixAccelerator', 'Invoke-MsixAccelerator',
         'ConvertFrom-MsixYamlAccelerator',
-        # PSF binaries / procmon / SDK tools (auto-install + auto-update)
         'Install-MsixPsfBinaries', 'Update-MsixPsfBinaries',
         'Get-MsixPsfBinariesVersion', 'Install-MsixProcMon',
-        'Update-MsixProcMon',
-        'Install-MsixSdkTools', 'Update-MsixSdkTools', 'Get-MsixSdkToolsVersion',
+        'Update-MsixProcMon', 'Install-MsixSdkTools',
+        'Update-MsixSdkTools', 'Get-MsixSdkToolsVersion',
         'Initialize-MsixToolchain',
-        # Debug + sandbox
         'Start-MsixDebugSession', 'Get-MsixDebugRecommendations',
         'New-MsixSandboxConfig', 'Start-MsixSandbox',
         'Resolve-MsixDebugViewPath',
-        # App Attach (VHDX / CIM)
         'New-MsixAppAttachImage', 'Mount-MsixAppAttachImage',
         'Dismount-MsixAppAttachImage', 'Test-MsixAppAttachImage',
         'Resolve-MsixMgrPath',
-        # Win32 App Isolation
         'Add-MsixAppIsolation', 'Remove-MsixAppIsolation',
         'Get-MsixIsolationCapabilities',
-        # Limitations / know-your-installer
         'Get-MsixLimitations', 'Test-MsixAgainstLimitations',
-        # Trace Fixup parser
         'ConvertFrom-MsixTraceLine', 'Get-MsixTraceOutput',
         'Get-MsixTraceFailures', 'ConvertFrom-MsixTraceToFindings',
-        # msixmgr (App Attach binary)
         'Install-MsixMgr', 'Update-MsixMgr', 'Get-MsixMgrVersion',
-        # Standard scripts (PSADT-flavoured)
         'Get-MsixStandardScripts', 'New-MsixStandardScript',
         'Set-MsixScriptSignature', 'Add-MsixStandardScript',
-        # MFR (Modern File Redirection — TMurgent fork)
         'New-MsixMfrTraditionalRule', 'New-MsixMfrLocalRule',
         'New-MsixPsfMfrConfig', 'Get-MsixMfrKnownFolders',
-        # VC++ runtime detection / bundling
         'Get-MsixVcRuntimeReferences', 'Add-MsixVcRuntimeBundle',
-        # TMEditX-style heuristic auto-fixers
         'Get-MsixKnownCapabilities', 'Add-MsixCapability',
         'Get-MsixUninstallerCandidates', 'Get-MsixUninstallRegistryEntries',
         'Remove-MsixUninstallerArtifacts',
-        'Get-MsixRunKeyEntries', 'Get-MsixAliasCandidates',
+        'Get-MsixRunKeyEntries', 'Get-MsixShellContextMenuEntries',
+        'Get-MsixComServerEntries', 'Get-MsixAliasCandidates',
         'Add-MsixSplashScreen', 'Update-MsixPackageVersion',
         'Get-MsixHeuristicFindings', 'Invoke-MsixAutoFix',
         'Invoke-MsixAutoFixFromAnalysis',
-        # Auto-detection scanners
         'Get-MsixFontCandidates', 'Get-MsixDesktopShortcutCandidates',
-        'Get-MsixCapabilityHints',
-        # Package compare
+        'Get-MsixCapabilityHints', 'Get-MsixNestedPackageCandidates',
         'Compare-MsixPackage',
-        # Manifest-only fixers (alternatives to PSF DLL injection)
         'Set-MsixFileSystemWriteVirtualization',
         'Set-MsixRegistryWriteVirtualization',
         'Set-MsixInstalledLocationVirtualization',
-        'Add-MsixLoaderSearchPathOverride',
-        'Add-MsixFirewallRule',
-        'Add-MsixProtocolHandler',
-        'Add-MsixFileTypeAssociation',
-        'Add-MsixStartupTask',
-        'Add-MsixFontExtension', 'Set-MsixBrandMetadata',
-        'Remove-MsixDesktopShortcuts',
-        # Public (legacy package ops)
+        'Add-MsixLoaderSearchPathOverride', 'Add-MsixFirewallRule',
+        'Add-MsixProtocolHandler', 'Add-MsixFileTypeAssociation',
+        'Add-MsixStartupTask', 'Add-MsixFontExtension',
+        'Set-MsixBrandMetadata', 'Add-MsixShellVerbExtension',
+        'Add-MsixComServerExtension', 'Remove-MsixDesktopShortcuts',
         'Get-MsixInfo', 'Invoke-MsixCommand', 'Update-MsixSigner',
         'New-MsixPsfJson', 'Add-MsixAlias',
         'Remove-MsixStartMenuEntry', 'Add-MsixStartMenuFolder'
     )
 
     AliasesToExport   = @(
-        'Invoke-MsixCmd', 'start-MsixCmd', 'update-MsixSigner', 'add-MsixPsf',
-        'new-MsixPsfJson', 'add-MsixAlias',
+        'Invoke-MsixCmd', 'start-MsixCmd', 'update-MsixSigner',
+        'add-MsixPsf', 'new-MsixPsfJson', 'add-MsixAlias',
         'remove-MsixStartMenuEntry', 'add-MsixStartMenuFolder',
         'Get-PublisherIdFromPublisher'
     )

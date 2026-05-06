@@ -16,6 +16,100 @@ $script:KnownNamespaces = [ordered]@{
     virtualization = 'http://schemas.microsoft.com/appx/manifest/virtualization/windows10'
 }
 
+function New-MsixManifestDocument {
+    <#
+    .SYNOPSIS
+        Creates a test-friendly manifest document wrapper with namespace-aware
+        XPath helpers.
+
+    .DESCRIPTION
+        This is the pure parser/navigator entry point. It accepts raw XML text,
+        an existing XmlDocument, or a path that Get-MsixManifest can read. The
+        returned object keeps the XmlDocument and XmlNamespaceManager together
+        so tests and transform helpers can use consistent XPath without package
+        unpack/repack IO.
+
+    .EXAMPLE
+        $m = New-MsixManifestDocument -XmlText $sampleManifest
+        Get-MsixManifestApplication -Manifest $m -AppId App
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'Path')]
+    param(
+        [Parameter(Mandatory, ParameterSetName = 'Path', Position = 0)]
+        [string]$Path,
+        [Parameter(Mandatory, ParameterSetName = 'XmlText')]
+        [string]$XmlText,
+        [Parameter(Mandatory, ParameterSetName = 'Document')]
+        [xml]$Document
+    )
+
+    if ($PSCmdlet.ParameterSetName -eq 'Path') {
+        $Document = Get-MsixManifest -Path $Path
+    } elseif ($PSCmdlet.ParameterSetName -eq 'XmlText') {
+        $Document = New-Object System.Xml.XmlDocument
+        $Document.PreserveWhitespace = $true
+        $Document.XmlResolver = $null
+        $Document.LoadXml($XmlText)
+    }
+
+    $nsMgr = New-Object System.Xml.XmlNamespaceManager($Document.NameTable)
+    $nsMgr.AddNamespace('f', 'http://schemas.microsoft.com/appx/manifest/foundation/windows10')
+    foreach ($prefix in $script:KnownNamespaces.Keys) {
+        $nsMgr.AddNamespace($prefix, $script:KnownNamespaces[$prefix])
+    }
+
+    return [pscustomobject]@{
+        PSTypeName         = 'MSIX.ManifestDocument'
+        Document           = $Document
+        NamespaceManager   = $nsMgr
+        Package            = $Document.DocumentElement
+    }
+}
+
+function Select-MsixManifestNode {
+    <#
+    .SYNOPSIS
+        Selects the first manifest node matching a namespace-aware XPath.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        $Manifest,
+        [Parameter(Mandatory)]
+        [string]$XPath
+    )
+
+    $manifestDocument = if ($Manifest.PSTypeNames -contains 'MSIX.ManifestDocument') {
+        $Manifest
+    } else {
+        New-MsixManifestDocument -Document $Manifest
+    }
+
+    return $manifestDocument.Document.SelectSingleNode($XPath, $manifestDocument.NamespaceManager)
+}
+
+function Select-MsixManifestNodes {
+    <#
+    .SYNOPSIS
+        Selects all manifest nodes matching a namespace-aware XPath.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        $Manifest,
+        [Parameter(Mandatory)]
+        [string]$XPath
+    )
+
+    $manifestDocument = if ($Manifest.PSTypeNames -contains 'MSIX.ManifestDocument') {
+        $Manifest
+    } else {
+        New-MsixManifestDocument -Document $Manifest
+    }
+
+    return @($manifestDocument.Document.SelectNodes($XPath, $manifestDocument.NamespaceManager))
+}
+
 function Get-MsixManifest {
     <#
     .SYNOPSIS
@@ -143,10 +237,7 @@ function Get-MsixManifestApplications {
         [xml]$Manifest
     )
 
-    # Namespace-aware XPath (preferred path)
-    $nsMgr = New-Object System.Xml.XmlNamespaceManager($Manifest.NameTable)
-    $nsMgr.AddNamespace('f', 'http://schemas.microsoft.com/appx/manifest/foundation/windows10')
-    $nodes = $Manifest.SelectNodes('//f:Application', $nsMgr)
+    $nodes = Select-MsixManifestNodes -Manifest $Manifest -XPath '//f:Application'
 
     if ($nodes -and $nodes.Count -gt 0) {
         return @($nodes)
@@ -159,6 +250,41 @@ function Get-MsixManifestApplications {
     }
 
     return @()
+}
+
+function Get-MsixManifestApplication {
+    <#
+    .SYNOPSIS
+        Returns a single Application element by Id, or the first Application
+        when no Id is supplied.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        $Manifest,
+        [string]$AppId
+    )
+
+    $manifestDocument = if ($Manifest.PSTypeNames -contains 'MSIX.ManifestDocument') {
+        $Manifest
+    } else {
+        New-MsixManifestDocument -Document $Manifest
+    }
+
+    if ($AppId) {
+        $escapedId = $AppId.Replace("'", "&apos;")
+        $node = $manifestDocument.Document.SelectSingleNode("//f:Application[@Id='$escapedId']", $manifestDocument.NamespaceManager)
+    } else {
+        $node = $manifestDocument.Document.SelectSingleNode('//f:Application[1]', $manifestDocument.NamespaceManager)
+    }
+
+    if ($node) { return $node }
+
+    $apps = @($manifestDocument.Document.SelectNodes('//*[local-name()="Application"]'))
+    if ($AppId) {
+        return $apps | Where-Object { $_.GetAttribute('Id') -eq $AppId } | Select-Object -First 1
+    }
+    return $apps | Select-Object -First 1
 }
 
 function Get-MsixManifestNamespaceUri {

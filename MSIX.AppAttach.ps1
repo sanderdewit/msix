@@ -90,7 +90,7 @@ function Update-MsixMgr {
         Refreshes msixmgr if the local copy is older than -MaxAgeDays
         (default 60). Microsoft updates msixmgr infrequently.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$Destination,
         [int]$MaxAgeDays = 60
@@ -99,13 +99,19 @@ function Update-MsixMgr {
     $marker = Join-Path $Destination 'msixmgr.installed'
 
     if (-not (Test-Path $marker)) {
-        return Install-MsixMgr -Destination $Destination
+        if ($PSCmdlet.ShouldProcess($Destination, 'Install missing msixmgr')) {
+            return Install-MsixMgr -Destination $Destination
+        }
+        return
     }
     $stamp = [datetime](Get-Content $marker -Raw).Trim()
     $age   = (Get-Date) - $stamp
     if ($age.TotalDays -gt $MaxAgeDays) {
         Write-MsixLog Info "msixmgr is $([int]$age.TotalDays) days old; refreshing."
-        return Install-MsixMgr -Destination $Destination -Force
+        if ($PSCmdlet.ShouldProcess($Destination, 'Refresh msixmgr')) {
+            return Install-MsixMgr -Destination $Destination -Force
+        }
+        return
     }
     Write-MsixLog Info "msixmgr is fresh ($([int]$age.TotalDays) days old; threshold $MaxAgeDays)."
     return [pscustomobject]@{ Path = $Destination; Updated = $false }
@@ -239,9 +245,9 @@ function New-MsixAppAttachImage {
         $first = $true
         foreach ($p in $PackagePath) {
             $createFlag = if ($first) { '-create' } else { '' }
-            $args = "-Unpack -packagePath `"$p`" -destination `"$OutputPath`" -fileType cim $createFlag $aclFlag"
+            $msixMgrArgs = "-Unpack -packagePath `"$p`" -destination `"$OutputPath`" -fileType cim $createFlag $aclFlag"
             if ($PSCmdlet.ShouldProcess($OutputPath, "Add $p to CIM")) {
-                $r = Invoke-MsixProcess $msixmgr $args
+                $r = Invoke-MsixProcess $msixmgr $msixMgrArgs
                 Assert-MsixProcessSuccess $r 'msixmgr CIM'
             }
             $first = $false
@@ -278,8 +284,8 @@ function New-MsixAppAttachImage {
             $info  = _MsixGetPackageInfo $p
             $folder = "${drive}\$($info.Name)_$($info.Version)"
             Write-MsixLog Info "Expanding $p -> $folder"
-            $args = "-Unpack -packagePath `"$p`" -destination `"$folder`" $aclFlag"
-            $r = Invoke-MsixProcess $msixmgr $args
+            $msixMgrArgs = "-Unpack -packagePath `"$p`" -destination `"$folder`" $aclFlag"
+            $r = Invoke-MsixProcess $msixmgr $msixMgrArgs
             Assert-MsixProcessSuccess $r 'msixmgr unpack-to-vhd'
         }
 
@@ -309,7 +315,7 @@ function Mount-MsixAppAttachImage {
 
     if (-not (Test-Path $ImagePath)) { throw "Image not found: $ImagePath" }
 
-    $img = Mount-DiskImage -ImagePath $ImagePath -PassThru
+    Mount-DiskImage -ImagePath $ImagePath -PassThru | Out-Null
     Start-Sleep -Milliseconds 500
     $disk = Get-DiskImage -ImagePath $ImagePath
     $vol  = Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue |

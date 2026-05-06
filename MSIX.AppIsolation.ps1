@@ -110,6 +110,8 @@ function Add-MsixAppIsolation {
         }
     }
 
+    if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Add App Isolation capabilities')) { return }
+
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
         -Activity 'Add App Isolation capabilities' -Mutate {
@@ -182,6 +184,8 @@ function Remove-MsixAppIsolation {
             Write-MsixLog Info 'No isolation capabilities found; nothing to do.'
             return
         }
+
+        if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Remove App Isolation capabilities')) { return }
 
         _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
             -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `

@@ -68,4 +68,30 @@ Describe 'Manifest helpers' -Tag 'Manifest' {
             @($apps)[0].Id       | Should -Be 'App'
         }
     }
+
+    Context 'New-MsixManifestDocument' {
+        It 'Parses XML text without package IO' {
+            $m = New-MsixManifestDocument -XmlText $script:SampleManifest
+
+            $m.PSTypeNames | Should -Contain 'MSIX.ManifestDocument'
+            $m.Package.LocalName | Should -Be 'Package'
+            (Select-MsixManifestNodes -Manifest $m -XPath '//f:Application').Count |
+                Should -Be 1
+        }
+
+        It 'Returns an application by Id' {
+            $m = New-MsixManifestDocument -XmlText $script:SampleManifest
+            $app = Get-MsixManifestApplication -Manifest $m -AppId 'App'
+
+            $app.GetAttribute('Executable') | Should -Be 'VFS\ProgramFilesX64\App\App.exe'
+        }
+
+        It 'Supports raw XmlDocument callers for compatibility' {
+            [xml]$x = $script:SampleManifest
+
+            $app = Get-MsixManifestApplication -Manifest $x
+
+            $app.GetAttribute('Id') | Should -Be 'App'
+        }
+    }
 }

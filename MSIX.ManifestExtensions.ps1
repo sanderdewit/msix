@@ -106,13 +106,9 @@ function _MsixGetOrCreateApplicationExtensions {
     # Returns the Application XmlElement, creating its <Extensions> child if absent.
     # When $AppId is empty, defaults to the first Application in the manifest.
     param([xml]$Manifest, [string]$AppId)
-    $apps = @($Manifest.Package.Applications.Application)
-    $app  = if ($AppId) {
-        $apps | Where-Object { $_.GetAttribute('Id') -eq $AppId } | Select-Object -First 1
-    } else {
-        $apps | Select-Object -First 1
-    }
+    $app = Get-MsixManifestApplication -Manifest $Manifest -AppId $AppId
     if (-not $app) {
+        $apps = @(Get-MsixManifestApplications -Manifest $Manifest)
         if ($AppId) { throw "Application '$AppId' not found. Available: $(($apps | ForEach-Object { $_.GetAttribute('Id') }) -join ', ')" }
         else        { throw 'No Application elements found in the manifest.' }
     }
@@ -1258,5 +1254,4 @@ function Add-MsixComServerExtension {
 }
 
 #endregion
-
 

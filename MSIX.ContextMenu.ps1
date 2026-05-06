@@ -124,6 +124,13 @@
         }
         if (-not $app) { throw "Application '$AppId' not found in the manifest." }
 
+        # ── Idempotency: skip if this CLSID is already declared ──────────
+        $existingClass = $manifest.SelectSingleNode("//*[local-name()='Class' and @Id='$ClsidBare']")
+        if ($existingClass) {
+            Write-MsixLog Info "COM class $ClsidBare already declared in manifest — skipping Add-MsixLegacyContextMenu."
+            return
+        }
+
         # ── Application-level Extensions node ────────────────────────────
         $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
         if (-not $appExt) {

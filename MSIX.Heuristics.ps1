@@ -1824,8 +1824,10 @@ function Get-MsixHeuristicFindings {
                 $hasRegVirt = [bool]($mf.Package.Properties.SelectSingleNode(
                     "*[local-name()='RegistryWriteVirtualization' and namespace-uri()='$d6Uri']"))
                 $hasInstVirt = ($exts.Category -contains 'windows.installedLocationVirtualization')
+                # LoaderSearchPathOverride can be at Package-level OR Application-level
+                # (the function was moved to Application-level; check both for idempotency).
                 $hasLoaderOv = $false
-                foreach ($e in $exts) {
+                foreach ($e in (@($exts) + @($appExts))) {
                     if ($e.SelectSingleNode('*[local-name()="LoaderSearchPathOverride"]')) {
                         $hasLoaderOv = $true; break
                     }
@@ -1888,8 +1890,9 @@ function Get-MsixHeuristicFindings {
                     })
                 }
 
-                # Suppress ShellExt finding if the manifest already declares desktop9 COM handlers
-                $hasLegacyCtxMenu = $exts | Where-Object {
+                # Suppress ShellExt finding if the manifest already declares desktop9 COM handlers.
+                # desktop9 extensions are at Application-level ($appExts); check both levels for safety.
+                $hasLegacyCtxMenu = (@($exts) + @($appExts)) | Where-Object {
                     $_.Category -in @('windows.fileExplorerClassicContextMenuHandler','windows.fileExplorerClassicDragDropContextMenuHandler')
                 }
                 if ($hasLegacyCtxMenu) {

@@ -122,7 +122,9 @@ function Get-MsixOrphanedAppData {
             try {
                 $size = (Get-ChildItem $folder.FullName -Recurse -File -ErrorAction SilentlyContinue |
                          Measure-Object -Property Length -Sum).Sum
-            } catch {}
+            } catch {
+                Write-MsixLog Debug "Could not measure orphaned AppData folder '$($folder.FullName)': $_"
+            }
             [pscustomobject]@{
                 Path          = $folder.FullName
                 Name          = $folder.Name
@@ -217,21 +219,23 @@ function Invoke-MsixContainerCommand {
         [string]$AppId
     )
 
-    $appx = Get-AppxPackage -Name $PackageName -ErrorAction SilentlyContinue
-    if (-not $appx) { $appx = Get-AppxPackage | Where-Object { $_.Name -like "*$PackageName*" } }
-    if (-not $appx) { throw "No installed package matches '$PackageName'." }
-    if (@($appx).Count -gt 1) { throw "Multiple packages match '$PackageName'. Be specific." }
+    PROCESS {
+        $appx = Get-AppxPackage -Name $PackageName -ErrorAction SilentlyContinue
+        if (-not $appx) { $appx = Get-AppxPackage | Where-Object { $_.Name -like "*$PackageName*" } }
+        if (-not $appx) { throw "No installed package matches '$PackageName'." }
+        if (@($appx).Count -gt 1) { throw "Multiple packages match '$PackageName'. Be specific." }
 
-    if (-not $AppId) {
-        $manifest = Get-AppPackageManifest -Package $appx.PackageFullName
-        $AppId = (@($manifest.Package.Applications.Application))[0].Id
+        if (-not $AppId) {
+            $manifest = Get-AppPackageManifest -Package $appx.PackageFullName
+            $AppId = (@($manifest.Package.Applications.Application))[0].Id
+        }
+
+        Write-MsixLog Info "Container exec: $($appx.PackageFamilyName)!$AppId -> $Command"
+        Invoke-CommandInDesktopPackage -PackageFamilyName $appx.PackageFamilyName `
+                                       -AppId $AppId `
+                                       -Command $Command `
+                                       -PreventBreakaway
     }
-
-    Write-MsixLog Info "Container exec: $($appx.PackageFamilyName)!$AppId -> $Command"
-    Invoke-CommandInDesktopPackage -PackageFamilyName $appx.PackageFamilyName `
-                                   -AppId $AppId `
-                                   -Command $Command `
-                                   -PreventBreakaway
 }
 
 
@@ -247,24 +251,26 @@ function Get-MsixPackageStorageSummary {
         [string]$PackageName
     )
 
-    $info = Get-MsixContainerAppData -PackageName $PackageName
-    $appx = Get-AppxPackage -Name $info.Name | Select-Object -First 1
+    PROCESS {
+        $info = Get-MsixContainerAppData -PackageName $PackageName
+        $appx = Get-AppxPackage -Name $info.Name | Select-Object -First 1
 
-    function _size($p) {
-        if (-not (Test-Path $p)) { return 0 }
-        $s = (Get-ChildItem $p -Recurse -File -ErrorAction SilentlyContinue |
-              Measure-Object -Property Length -Sum).Sum
-        [math]::Round(([double]$s) / 1MB, 2)
-    }
+        function _size($p) {
+            if (-not (Test-Path $p)) { return 0 }
+            $s = (Get-ChildItem $p -Recurse -File -ErrorAction SilentlyContinue |
+                  Measure-Object -Property Length -Sum).Sum
+            [math]::Round(([double]$s) / 1MB, 2)
+        }
 
-    [pscustomobject]@{
-        Name              = $info.Name
-        PackageFamilyName = $info.PackageFamilyName
-        InstallLocation   = $appx.InstallLocation
-        InstallSizeMB     = _size $appx.InstallLocation
-        RoamingMB         = _size $info.VirtualRoaming
-        LocalMB           = _size $info.VirtualLocal
-        TempMB            = _size $info.VirtualTemp
-        PackageRoot       = $info.PackageRoot
+        [pscustomobject]@{
+            Name              = $info.Name
+            PackageFamilyName = $info.PackageFamilyName
+            InstallLocation   = $appx.InstallLocation
+            InstallSizeMB     = _size $appx.InstallLocation
+            RoamingMB         = _size $info.VirtualRoaming
+            LocalMB           = _size $info.VirtualLocal
+            TempMB            = _size $info.VirtualTemp
+            PackageRoot       = $info.PackageRoot
+        }
     }
 }

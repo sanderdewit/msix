@@ -50,52 +50,31 @@ function Get-MsixInfo {
         [switch]$Detailed
     )
 
-    BEGIN {
-        Add-Type -Assembly System.IO.Compression.FileSystem
-    }
-
     PROCESS {
         $fileinfo  = Get-Item $PackagePath
-        $workspace = New-MsixWorkspace $fileinfo.BaseName
+        [xml]$appinfo = Get-MsixManifest -Path $fileinfo.FullName
+        $signinfo     = Get-AuthenticodeSignature -FilePath $fileinfo
 
-        try {
-            # Extract only AppxManifest.xml using ZipFile (no MakeAppx needed)
-            $zip = [IO.Compression.ZipFile]::OpenRead($fileinfo.FullName)
-            try {
-                $entry = $zip.Entries | Where-Object { $_.Name -eq 'AppxManifest.xml' }
-                if (-not $entry) { throw 'AppxManifest.xml not found in package' }
-                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, "$workspace\AppxManifest.xml", $true)
-            } finally {
-                $zip.Dispose()
-            }
-
-            [xml]$appinfo = Get-Content "$workspace\AppxManifest.xml" -Raw
-            $signinfo     = Get-AuthenticodeSignature -FilePath $fileinfo
-
-            $result = [pscustomobject]@{
-                Name                   = $appinfo.Package.Identity.Name
-                DisplayName            = $appinfo.Package.Properties.DisplayName
-                Publisher              = $appinfo.Package.Identity.Publisher
-                PublisherDisplayName   = $appinfo.Package.Properties.PublisherDisplayName
-                Version                = $appinfo.Package.Identity.Version
-                ProcessorArchitecture  = $appinfo.Package.Identity.ProcessorArchitecture
-                Description            = $appinfo.Package.Properties.Description
-                Signed                 = $signinfo.Status
-                SignedBy               = $signinfo.SignerCertificate.Subject
-                Thumbprint             = $signinfo.SignerCertificate.Thumbprint
-                TimestampCertificate   = $signinfo.TimeStamperCertificate
-            }
-
-            if ($Detailed) {
-                $result | Add-Member -NotePropertyName Applications `
-                                     -NotePropertyValue @($appinfo.Package.Applications.Application)
-            }
-
-            return $result
-
-        } finally {
-            Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        $result = [pscustomobject]@{
+            Name                   = $appinfo.Package.Identity.Name
+            DisplayName            = $appinfo.Package.Properties.DisplayName
+            Publisher              = $appinfo.Package.Identity.Publisher
+            PublisherDisplayName   = $appinfo.Package.Properties.PublisherDisplayName
+            Version                = $appinfo.Package.Identity.Version
+            ProcessorArchitecture  = $appinfo.Package.Identity.ProcessorArchitecture
+            Description            = $appinfo.Package.Properties.Description
+            Signed                 = $signinfo.Status
+            SignedBy               = $signinfo.SignerCertificate.Subject
+            Thumbprint             = $signinfo.SignerCertificate.Thumbprint
+            TimestampCertificate   = $signinfo.TimeStamperCertificate
         }
+
+        if ($Detailed) {
+            $result | Add-Member -NotePropertyName Applications `
+                                 -NotePropertyValue @(Get-MsixManifestApplications -Manifest $appinfo)
+        }
+
+        return $result
     }
 }
 
@@ -239,6 +218,11 @@ function New-MsixPsfJson {
         with New-MsixPsfConfig for new scripts. This function is retained for
         backward compatibility with v1 scripts.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSUseShouldProcessForStateChangingFunctions',
+        '',
+        Justification = 'This compatibility helper only returns JSON and does not change system state.'
+    )]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -337,6 +321,11 @@ function Add-MsixAlias {
     )
 
     PROCESS {
+        if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Add AppExecutionAlias')) { return }
+
+        $targetAll = $All
+        $targetAppIds = $AppIds
+
         _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
             -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
             -Activity 'Add AppExecutionAlias' -Mutate {
@@ -349,8 +338,8 @@ function Add-MsixAlias {
             $desktopUri = Get-MsixManifestNamespaceUri 'desktop'
 
             $targets = @($manifest.Package.Applications.Application)
-            if (-not $All -and $AppIds) {
-                $targets = $targets | Where-Object { $AppIds -contains $_.Id }
+            if (-not $targetAll -and $targetAppIds) {
+                $targets = $targets | Where-Object { $targetAppIds -contains $_.Id }
             }
 
             foreach ($app in $targets) {
@@ -447,14 +436,19 @@ function Remove-MsixStartMenuEntry {
     )
 
     PROCESS {
+        if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Remove Start menu entry')) { return }
+
+        $targetAll = $All
+        $targetAppIds = $AppIds
+
         _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
             -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
             -Activity 'Remove Start menu entry' -Mutate {
             param([xml]$manifest)
 
             $targets = @($manifest.Package.Applications.Application)
-            if (-not $All -and $AppIds) {
-                $targets = $targets | Where-Object { $AppIds -contains $_.Id }
+            if (-not $targetAll -and $targetAppIds) {
+                $targets = $targets | Where-Object { $targetAppIds -contains $_.Id }
             }
 
             foreach ($app in $targets) {
@@ -509,6 +503,8 @@ function Add-MsixStartMenuFolder {
     )
 
     PROCESS {
+        if (-not $PSCmdlet.ShouldProcess($PackagePath, "Set VisualGroup '$FolderName'")) { return }
+
         _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
             -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
             -Activity "Set VisualGroup '$FolderName'" -Mutate {
@@ -556,9 +552,13 @@ Export-ModuleMember -Function @(
     'Assert-MsixProcessSuccess'
     # Manifest helpers
     'Get-MsixManifest'
+    'New-MsixManifestDocument'
+    'Select-MsixManifestNode'
+    'Select-MsixManifestNodes'
     'Save-MsixManifest'
     'Add-MsixManifestNamespace'
     'Get-MsixManifestApplications'
+    'Get-MsixManifestApplication'
     'Get-MsixManifestNamespaceUri'
     'Set-MsixManifestMaxVersionTested'
     # PSF builders
@@ -648,6 +648,8 @@ Export-ModuleMember -Function @(
     'Get-MsixUninstallRegistryEntries'
     'Remove-MsixUninstallerArtifacts'
     'Get-MsixRunKeyEntries'
+    'Get-MsixShellContextMenuEntries'
+    'Get-MsixComServerEntries'
     'Get-MsixAliasCandidates'
     'Add-MsixSplashScreen'
     'Update-MsixPackageVersion'
@@ -658,6 +660,7 @@ Export-ModuleMember -Function @(
     'Get-MsixFontCandidates'
     'Get-MsixDesktopShortcutCandidates'
     'Get-MsixCapabilityHints'
+    'Get-MsixNestedPackageCandidates'
     # Package compare
     'Compare-MsixPackage'
     # Manifest-only fixers (alternatives to PSF)
@@ -671,6 +674,8 @@ Export-ModuleMember -Function @(
     'Add-MsixStartupTask'
     'Add-MsixFontExtension'
     'Set-MsixBrandMetadata'
+    'Add-MsixShellVerbExtension'
+    'Add-MsixComServerExtension'
     'Remove-MsixDesktopShortcuts'
     # Signing
     'Invoke-MsixSigning'

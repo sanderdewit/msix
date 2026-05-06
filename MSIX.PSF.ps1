@@ -1,4 +1,4 @@
-# Registry of known fixups: name -> { Dll (generic), HasBitSuffix }
+﻿# Registry of known fixups: name -> { Dll (generic), HasBitSuffix }
 # Bit-suffixed DLLs are stored as FileRedirectionFixup32.dll / 64.dll on disk
 # but referenced as FileRedirectionFixup.dll inside the package/config.json.
 $script:PsfFixupRegistry = [ordered]@{
@@ -117,6 +117,85 @@ function New-MsixPsfEnvVarConfig {
         config = @{ envVars = $Variables }
     }
 }
+
+function New-MsixPsfDynamicLibraryConfig {
+    <#
+    .SYNOPSIS
+        Builds a DynamicLibraryFixup config hashtable. Maps DLL imports to
+        package-relative replacement DLLs at runtime.
+
+    .DESCRIPTION
+        Use when an app imports a DLL by name and the OS loader can't find it
+        (because it's vendored at a non-standard relative path). Each entry
+        names a DLL and where the runtime should redirect to.
+
+        For the "just add a search path" case, prefer the manifest-only fix:
+        Add-MsixLoaderSearchPathOverride.
+
+    .PARAMETER Mappings
+        Array of hashtables: @{ name='foo.dll'; filepath='VFS/ProgramFilesX64/App/lib/foo.dll' }
+
+    .EXAMPLE
+        $dyn = New-MsixPsfDynamicLibraryConfig -Mappings @(
+            @{ name='liba.dll'; filepath='VFS/ProgramFilesX64/App/lib/liba.dll' }
+            @{ name='libb.dll'; filepath='VFS/ProgramFilesX64/App/lib/libb.dll' }
+        )
+        Add-MsixPsfV2 -PackagePath app.msix -Fixups @($dyn) -Pfx cert.pfx -PfxPassword 'P@ss'
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)]
+        [hashtable[]]$Mappings
+    )
+    foreach ($m in $Mappings) {
+        if (-not $m.name)     { throw "Each mapping needs 'name'." }
+        if (-not $m.filepath) { throw "Each mapping needs 'filepath'." }
+    }
+    return @{
+        dll    = 'DynamicLibraryFixup.dll'
+        config = @{
+            relativePaths = @($Mappings | ForEach-Object {
+                [ordered]@{ name = $_.name; filepath = $_.filepath }
+            })
+        }
+    }
+}
+
+
+function New-MsixPsfWaitForDebuggerConfig {
+    <#
+    .SYNOPSIS
+        Builds a WaitForDebuggerFixup config hashtable.
+
+    .DESCRIPTION
+        At process startup the fixup blocks until a debugger attaches —
+        invaluable when investigating apps that crash before you can attach.
+
+        Strip this fixup before shipping a production package; it's a
+        diagnostic helper only.
+
+    .PARAMETER Processes
+        Optional array of process names (without .exe) the fixup should block
+        on. If omitted, the fixup applies to whatever process loads it.
+
+    .EXAMPLE
+        $wait = New-MsixPsfWaitForDebuggerConfig
+        Add-MsixPsfV2 -PackagePath app.msix -Fixups @($wait) -Pfx cert.pfx -PfxPassword 'P@ss'
+    #>
+    [OutputType([hashtable])]
+    param(
+        [string[]]$Processes
+    )
+    $cfg = @{}
+    if ($Processes) {
+        $cfg['processes'] = @($Processes | ForEach-Object { @{ executable = $_ } })
+    }
+    return @{
+        dll    = 'WaitForDebuggerFixup.dll'
+        config = $cfg
+    }
+}
+
 
 function New-MsixPsfArguments {
     <#
@@ -287,7 +366,7 @@ function New-MsixPsfConfig {
     $appEntries = foreach ($app in $apps) {
         $entry = [ordered]@{
             id         = $app.Id
-            executable = $app.Executable.Replace('\', '/')
+            executable = $app.GetAttribute('Executable').Replace('\', '/')
         }
         if ($WorkingDirectory) { $entry['workingDirectory'] = $WorkingDirectory }
 
@@ -303,7 +382,7 @@ function New-MsixPsfConfig {
 
     # One process block per application, all sharing the same fixup set
     $processEntries = foreach ($app in $apps) {
-        $exeName = $app.Executable.Split('\')[-1] -replace '\.exe$', ''
+        $exeName = $app.GetAttribute('Executable').Split('\')[-1] -replace '\.exe$', ''
         [ordered]@{
             executable = $exeName
             fixups     = [array]$Fixups
@@ -368,6 +447,7 @@ function Add-MsixPsfV2 {
         [string]$OutputPath,
         # If $true, the repacked output is NOT signed. Use this when chaining
         # multiple PSF / manifest mutations and signing only at the very end.
+        [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
         [string]$PfxPassword
@@ -384,18 +464,26 @@ function Add-MsixPsfV2 {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
-        Test-MsixManifest "$workspace\AppxManifest.xml"
+        $null = Test-MsixManifest "$workspace\AppxManifest.xml"
         [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
-        $apps = Get-MsixManifestApplications $manifest
+        $apps = @(Get-MsixManifestApplications $manifest)
 
         # Determine bitness from first app's executable path
-        $is64       = $apps[0].Executable -match 'x64|ProgramFilesX64'
-        $bitSuffix  = if ($is64) { '64' } else { '32' }
+        $firstExe  = $apps[0].GetAttribute('Executable')
+        if (-not $firstExe) {
+            # Fallback: scan workspace for the first .exe that isn't a PSF launcher
+            $firstExe = Get-ChildItem $workspace -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Name -notmatch '^Psf' } |
+                        Select-Object -First 1 |
+                        ForEach-Object { $_.FullName.Substring($workspace.Length + 1) }
+            Write-MsixLog Warning "Application Executable attribute was empty; resolved via scan: $firstExe"
+        }
+        $is64      = $firstExe -match 'x64|ProgramFilesX64'
+        $bitSuffix = if ($is64) { '64' } else { '32' }
 
         # Resolve the subfolder that contains the first app's executable
-        $firstExe   = $apps[0].Executable
-        $relDir     = if ($firstExe.Contains('\')) { $firstExe.Substring(0, $firstExe.LastIndexOf('\')) } else { '' }
-        $appFolder  = if ($relDir) { Join-Path $workspace $relDir } else { $workspace }
+        $relDir    = if ($firstExe -and $firstExe.Contains('\')) { $firstExe.Substring(0, $firstExe.LastIndexOf('\')) } else { '' }
+        $appFolder = if ($relDir) { Join-Path $workspace $relDir } else { $workspace }
 
         # --- config.json (placed alongside the app executable) ---
         $configPath = Join-Path $appFolder 'config.json'
@@ -461,16 +549,17 @@ function Add-MsixPsfV2 {
                     Write-MsixLog Warning "Additional file not found: $extra"
                 }
             }
-            # If any startScript is in use, ship StartingScriptWrapper.ps1 too
-            $needsWrapper = @($AppOptions) | Where-Object { $_.kind -in 'startScript','endScript' }
-            if ($needsWrapper) {
-                $wrapper = Join-Path $PsfSourcePath 'StartingScriptWrapper.ps1'
-                if (Test-Path $wrapper) {
-                    Copy-Item $wrapper $appFolder -Force
-                    Write-MsixLog Debug "StartingScriptWrapper.ps1 copied"
-                } else {
-                    Write-MsixLog Warning "StartingScriptWrapper.ps1 not found in $PsfSourcePath"
-                }
+        }
+
+        # Always ship StartingScriptWrapper.ps1 if any app uses startScript/endScript
+        $needsWrapper = @($AppOptions) | Where-Object { $_.kind -in 'startScript','endScript' }
+        if ($needsWrapper) {
+            $wrapper = Join-Path $PsfSourcePath 'StartingScriptWrapper.ps1'
+            if (Test-Path $wrapper) {
+                Copy-Item $wrapper $appFolder -Force
+                Write-MsixLog Debug "StartingScriptWrapper.ps1 copied"
+            } else {
+                Write-MsixLog Warning "StartingScriptWrapper.ps1 not found in $PsfSourcePath"
             }
         }
 
@@ -487,14 +576,16 @@ function Add-MsixPsfV2 {
                           (Join-Path $appFolder $launcherName) -Force
             }
 
-            $oldLeaf        = $app.Executable.Split('\')[-1]
-            $app.Executable = $app.Executable -replace [regex]::Escape($oldLeaf), $launcherName
+            $oldExe  = $app.GetAttribute('Executable')
+            $oldLeaf = $oldExe.Split('\')[-1]
+            $newExe  = $oldExe -replace [regex]::Escape($oldLeaf), $launcherName
+            $app.SetAttribute('Executable', $newExe)
 
             # Keep AppExecutionAlias in sync if present
             $aliasExt = $app.Extensions.Extension |
                         Where-Object { $_.Category -eq 'windows.appExecutionAlias' }
             if ($aliasExt) {
-                $aliasExt.Executable = $app.Executable
+                $aliasExt.SetAttribute('Executable', $newExe)
                 Write-MsixLog Debug "AppExecutionAlias updated for $($app.Id)"
             }
         }
@@ -521,3 +612,4 @@ function Add-MsixPsfV2 {
 }
 
 #endregion
+

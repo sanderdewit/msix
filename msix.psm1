@@ -1,4 +1,4 @@
-#region --- Load sub-modules ------------------------------------------------
+﻿#region --- Load sub-modules ------------------------------------------------
 . "$PSScriptRoot\MSIX.Logging.ps1"
 . "$PSScriptRoot\MSIX.Core.ps1"
 . "$PSScriptRoot\MSIX.Validation.ps1"
@@ -19,6 +19,8 @@
 . "$PSScriptRoot\MSIX.Scripts.ps1"
 . "$PSScriptRoot\MSIX.MFR.ps1"
 . "$PSScriptRoot\MSIX.VcRuntime.ps1"
+. "$PSScriptRoot\MSIX.Detection.ps1"
+. "$PSScriptRoot\MSIX.ManifestExtensions.ps1"
 . "$PSScriptRoot\MSIX.Heuristics.ps1"
 . "$PSScriptRoot\MSIX.Compare.ps1"
 #endregion
@@ -102,7 +104,7 @@ function Get-MsixInfo {
 
 #region --- Public: Package debugging ---------------------------------------
 
-function Invoke-MsixCmd {
+function Invoke-MsixCommand {
     <#
     .SYNOPSIS
         Launches a command inside the MSIX container of an installed package.
@@ -113,46 +115,48 @@ function Invoke-MsixCmd {
     .PARAMETER Command
         Command to run inside the container. Defaults to cmd.exe.
 
+    .PARAMETER AppId
+        Application Id to use. If omitted, the first app in the manifest is used.
+
     .EXAMPLE
-        Invoke-MsixCmd -PackageName 'Notepad++' -Command 'powershell.exe'
+        Invoke-MsixCommand -PackageName 'Notepad++' -Command 'powershell.exe'
+
+    .EXAMPLE
+        Invoke-MsixCommand -PackageName 'Contoso' -AppId 'App2' -Command 'regedit.exe'
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory, ValueFromPipeline)]
         [string]$PackageName,
-        [string]$Command = 'cmd.exe'
+        [string]$Command = 'cmd.exe',
+        [string]$AppId
     )
-
     PROCESS {
         try {
             $appx = Get-AppxPackage -Name $PackageName -ErrorAction Stop
         } catch {
             $appx = Get-AppxPackage | Where-Object { $_.Name -like "*$PackageName*" }
         }
+        if (@($appx).Count -gt 1) { throw "Multiple packages match '$PackageName'. Use the full package name." }
+        if (-not $appx)           { throw "No installed package matches '$PackageName'." }
 
-        if (@($appx).Count -gt 1) {
-            throw "Multiple packages match '$PackageName'. Use the full package name."
+        if (-not $AppId) {
+            $manifest = Get-AppPackageManifest -Package $appx.PackageFullName
+            $apps     = @($manifest.Package.Applications.Application)
+            if ($apps.Count -gt 1) { Write-Warning "Multiple apps in package; using first: $($apps[0].Id)" }
+            $AppId = $apps[0].Id
         }
-        if (-not $appx) {
-            throw "No installed package matches '$PackageName'."
-        }
-
-        $manifest = Get-AppPackageManifest -Package $appx.PackageFullName
-        $apps     = @($manifest.Package.Applications.Application)
-
-        if ($apps.Count -gt 1) {
-            Write-Warning "Multiple apps in package; using first: $($apps[0].Id)"
-        }
-        $appId = $apps[0].Id
 
         if ($PSCmdlet.ShouldProcess($appx.PackageFamilyName, "Invoke-CommandInDesktopPackage")) {
             Invoke-CommandInDesktopPackage -PackageFamilyName $appx.PackageFamilyName `
-                                           -AppId $appId `
+                                           -AppId $AppId `
                                            -Command $Command `
                                            -PreventBreakaway
         }
     }
 }
+Set-Alias -Name Invoke-MsixCmd  -Value Invoke-MsixCommand
+Set-Alias -Name start-MsixCmd   -Value Invoke-MsixCommand
 
 #endregion
 
@@ -196,8 +200,8 @@ function Update-MsixSigner {
             $outputPath = $fileinfo.FullName
 
             if ($Publisher -and $appinfo.Package.Identity.Publisher -cne $Publisher) {
-                $oldPublisherId = Get-PublisherIdFromPublisher $appinfo.Package.Identity.Publisher
-                $newPublisherId = Get-PublisherIdFromPublisher $Publisher
+                $oldPublisherId = Get-MsixPublisherId $appinfo.Package.Identity.Publisher
+                $newPublisherId = Get-MsixPublisherId $Publisher
 
                 $appinfo.Package.Identity.Publisher = $Publisher
                 Save-MsixManifest $appinfo "$workspace\AppxManifest.xml"
@@ -251,6 +255,7 @@ function New-MsixPsfJson {
         [string]$Base
     )
 
+    Write-Warning 'New-MsixPsfJson is obsolete and produces incorrect output for multi-app packages. Use New-MsixPsfConfig with typed builders (New-MsixPsfFileRedirectionConfig, etc.) and Add-MsixPsfV2 instead.'
     [xml]$appinfo  = Get-Content (Get-Item $AppxManifest).FullName -Raw
     $apps          = @($appinfo.Package.Applications.Application)
 
@@ -291,19 +296,32 @@ function Add-MsixAlias {
     .SYNOPSIS
         Adds AppExecutionAlias extensions to applications in an MSIX package.
 
+    .DESCRIPTION
+        Adds a windows.appExecutionAlias extension for each targeted application.
+        The alias name matches the application's executable leaf name. Idempotent:
+        skips apps that already have an alias declared.
+
     .PARAMETER PackagePath
         Path to the .msix file to modify.
 
     .PARAMETER AppIds
-        Application IDs to add aliases for. Omit or use -All to target every app.
+        Application IDs to add aliases for. If omitted and -All is not set,
+        aliases are added to all applications.
 
     .PARAMETER All
         Add aliases to all applications in the package.
 
+    .PARAMETER OutputPath
+        If set, write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Do not sign the resulting package.
+
     .EXAMPLE
-        Add-MsixAlias -PackagePath app.msix -All
+        Add-MsixAlias -PackagePath app.msix -All -Pfx cert.pfx -PfxPassword 'P@ss'
+
     .EXAMPLE
-        Add-MsixAlias -PackagePath app.msix -AppIds 'App', 'App2' -Pfx cert.pfx -PfxPassword 'P@ss'
+        Add-MsixAlias -PackagePath app.msix -AppIds 'App','App2' -NoSign -OutputPath app-alias.msix
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -311,82 +329,74 @@ function Add-MsixAlias {
         [string]$PackagePath,
         [string[]]$AppIds,
         [switch]$All,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
         [string]$Pfx,
         [string]$PfxPassword
     )
 
     PROCESS {
-        $toolsRoot = Get-MsixToolsRoot
-        $fileinfo  = Get-Item $PackagePath
-        $workspace = New-MsixWorkspace $fileinfo.BaseName
+        _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+            -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+            -Activity 'Add AppExecutionAlias' -Mutate {
+            param([xml]$manifest)
 
-        try {
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
-            Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+            Add-MsixManifestNamespace $manifest 'uap3'
+            Add-MsixManifestNamespace $manifest 'desktop'
 
-            [xml]$appinfo = Get-MsixManifest "$workspace\AppxManifest.xml"
-            Add-MsixManifestNamespace $appinfo 'desktop'
-            Add-MsixManifestNamespace $appinfo 'uap3'
-
-            $desktopUri = Get-MsixManifestNamespaceUri 'desktop'
             $uap3Uri    = Get-MsixManifestNamespaceUri 'uap3'
+            $desktopUri = Get-MsixManifestNamespaceUri 'desktop'
 
-            $targets = @($appinfo.Package.Applications.Application)
+            $targets = @($manifest.Package.Applications.Application)
             if (-not $All -and $AppIds) {
                 $targets = $targets | Where-Object { $AppIds -contains $_.Id }
             }
 
             foreach ($app in $targets) {
-                if ($app.Extensions.Extension.AppExecutionAlias.ExecutionAlias) {
-                    Write-MsixLog Warning "Alias already exists for $($app.Id); skipping"
+                # Reliable duplicate check: walk child nodes of Extensions
+                $existingAliasExt = @($app.Extensions.Extension) |
+                    Where-Object { $_.Category -eq 'windows.appExecutionAlias' }
+                if ($existingAliasExt) {
+                    Write-MsixLog Warning "AppExecutionAlias already present for $($app.Id); skipping"
                     continue
                 }
 
-                # If the app is PSF-wrapped, read the real executable from config.json
+                # Determine the alias name from the real executable
                 $executable = $app.Executable.Replace('\', '/')
                 if ($executable -match 'PsfLauncher') {
-                    $relDir    = $executable.Substring(0, $executable.LastIndexOf('/'))
-                    $cfgPath   = "$workspace\$($relDir.Replace('/', '\'))\config.json"
-                    if (Test-Path $cfgPath) {
-                        $cfg        = Get-Content $cfgPath -Raw | ConvertFrom-Json
-                        $appEntry   = $cfg.applications | Where-Object { $_.id -eq $app.Id }
-                        if ($appEntry) { $executable = $appEntry.executable.Replace('\', '/') }
-                    }
+                    # Note: workspace is not available inside _MsixMutateManifest callback;
+                    # fall back to guessing the alias from the app Id
+                    $aliasName = "$($app.Id.ToLower()).exe"
+                } else {
+                    $aliasName = $executable.Split('/')[-1]
                 }
 
-                # Ensure Application/Extensions node exists
-                if (-not $app.Extensions) {
-                    $extNode = $appinfo.CreateElement('Extensions', $appinfo.Package.NamespaceURI)
-                    $null    = $app.AppendChild($extNode)
-                }
+                # Build: <uap3:Extension Category="windows.appExecutionAlias">
+                #          <uap3:AppExecutionAlias>
+                #            <desktop:ExecutionAlias Alias="myapp.exe" />
+                #          </uap3:AppExecutionAlias>
+                #        </uap3:Extension>
+                $uap3Ext = $manifest.CreateElement('uap3:Extension', $uap3Uri)
+                $uap3Ext.SetAttribute('Category', 'windows.appExecutionAlias')
 
-                $uap3Ext = $appinfo.CreateElement('uap3:Extension', $uap3Uri)
-                $uap3Ext.SetAttribute('Category',          'windows.appExecutionAlias')
-                $uap3Ext.SetAttribute('EntryPoint',        'Windows.FullTrustApplication')
-                $uap3Ext.SetAttribute('desktop:Executable', $executable)
-
-                $aliasEl    = $appinfo.CreateElement('uap3:AppExecutionAlias', $uap3Uri)
-                $deskAlias  = $appinfo.CreateElement('desktop:ExecutionAlias', $desktopUri)
-                $deskAlias.SetAttribute('Alias', $executable.Split('/')[-1])
+                $aliasEl   = $manifest.CreateElement('uap3:AppExecutionAlias', $uap3Uri)
+                $deskAlias = $manifest.CreateElement('desktop:ExecutionAlias', $desktopUri)
+                $deskAlias.SetAttribute('Alias', $aliasName)
 
                 $null = $aliasEl.AppendChild($deskAlias)
                 $null = $uap3Ext.AppendChild($aliasEl)
-                $null = $app.Extensions.AppendChild($uap3Ext)
 
-                Write-MsixLog Info "Alias added for $($app.Id): $($executable.Split('/')[-1])"
+                # Get or create Application/Extensions node (use captured ref, not property re-access)
+                $extNode = $app.SelectSingleNode('*[local-name()="Extensions"]')
+                if (-not $extNode) {
+                    $extNode = $manifest.CreateElement('Extensions', $manifest.Package.NamespaceURI)
+                    $null    = $app.AppendChild($extNode)
+                }
+                $null = $extNode.AppendChild($uap3Ext)
+
+                Write-MsixLog Info "AppExecutionAlias added for $($app.Id): $aliasName"
             }
-
-            if ($PSCmdlet.ShouldProcess("$workspace\AppxManifest.xml", 'Save manifest')) {
-                Save-MsixManifest $appinfo "$workspace\AppxManifest.xml"
-            }
-
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
-            Assert-MsixProcessSuccess $r 'MakeAppx pack'
-
-            Invoke-MsixSigning -PackagePath $fileinfo.FullName -Pfx $Pfx -PfxPassword $PfxPassword
-
-        } finally {
-            Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 }
@@ -408,8 +418,20 @@ function Remove-MsixStartMenuEntry {
     .PARAMETER AppIds
         Application IDs to hide. Omit or use -All for every app.
 
+    .PARAMETER All
+        Hide all applications.
+
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Do not sign the resulting package.
+
     .EXAMPLE
-        Remove-MsixStartMenuEntry -PackagePath app.msix -All
+        Remove-MsixStartMenuEntry -PackagePath app.msix -All -Pfx cert.pfx -PfxPassword 'P@ss'
+
+    .EXAMPLE
+        Remove-MsixStartMenuEntry -PackagePath app.msix -AppIds 'Helper' -NoSign
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -417,49 +439,34 @@ function Remove-MsixStartMenuEntry {
         [string]$PackagePath,
         [string[]]$AppIds,
         [switch]$All,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
         [string]$Pfx,
         [string]$PfxPassword
     )
 
     PROCESS {
-        $toolsRoot = Get-MsixToolsRoot
-        $fileinfo  = Get-Item $PackagePath
-        $workspace = New-MsixWorkspace $fileinfo.BaseName
+        _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+            -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+            -Activity 'Remove Start menu entry' -Mutate {
+            param([xml]$manifest)
 
-        try {
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
-            Assert-MsixProcessSuccess $r 'MakeAppx unpack'
-
-            [xml]$appinfo = Get-MsixManifest "$workspace\AppxManifest.xml"
-
-            $targets = @($appinfo.Package.Applications.Application)
+            $targets = @($manifest.Package.Applications.Application)
             if (-not $All -and $AppIds) {
                 $targets = $targets | Where-Object { $AppIds -contains $_.Id }
             }
 
-            $attr       = $appinfo.CreateAttribute('AppListEntry')
-            $attr.Value = 'none'
-
             foreach ($app in $targets) {
-                if ($app.VisualElements.AppListEntry -eq 'none') {
+                $ve = $app.SelectSingleNode('*[local-name()="VisualElements"]')
+                if (-not $ve) { continue }
+                if ($ve.GetAttribute('AppListEntry') -eq 'none') {
                     Write-MsixLog Info "$($app.Id) already hidden from Start menu; skipping"
                     continue
                 }
-                $app.VisualElements.Attributes.Append($attr.Clone()) | Out-Null
+                $ve.SetAttribute('AppListEntry', 'none')
                 Write-MsixLog Info "Start menu entry removed: $($app.Id)"
             }
-
-            if ($PSCmdlet.ShouldProcess("$workspace\AppxManifest.xml", 'Save manifest')) {
-                Save-MsixManifest $appinfo "$workspace\AppxManifest.xml"
-            }
-
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
-            Assert-MsixProcessSuccess $r 'MakeAppx pack'
-
-            Invoke-MsixSigning -PackagePath $fileinfo.FullName -Pfx $Pfx -PfxPassword $PfxPassword
-
-        } finally {
-            Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 }
@@ -476,8 +483,17 @@ function Add-MsixStartMenuFolder {
     .PARAMETER FolderName
         Name of the Start menu folder / group.
 
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Do not sign the resulting package.
+
     .EXAMPLE
-        Add-MsixStartMenuFolder -PackagePath app.msix -FolderName 'Contoso Apps'
+        Add-MsixStartMenuFolder -PackagePath app.msix -FolderName 'Contoso Apps' -Pfx cert.pfx -PfxPassword 'P@ss'
+
+    .EXAMPLE
+        Add-MsixStartMenuFolder -PackagePath app.msix -FolderName 'Tools' -NoSign
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -485,40 +501,25 @@ function Add-MsixStartMenuFolder {
         [string]$PackagePath,
         [Parameter(Mandatory)]
         [string]$FolderName,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
         [string]$Pfx,
         [string]$PfxPassword
     )
 
     PROCESS {
-        $toolsRoot = Get-MsixToolsRoot
-        $fileinfo  = Get-Item $PackagePath
-        $workspace = New-MsixWorkspace $fileinfo.BaseName
+        _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+            -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+            -Activity "Set VisualGroup '$FolderName'" -Mutate {
+            param([xml]$manifest)
 
-        try {
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
-            Assert-MsixProcessSuccess $r 'MakeAppx unpack'
-
-            [xml]$appinfo = Get-MsixManifest "$workspace\AppxManifest.xml"
-
-            $attr       = $appinfo.CreateAttribute('VisualGroup')
-            $attr.Value = $FolderName
-
-            foreach ($app in @($appinfo.Package.Applications.Application)) {
-                $app.VisualElements.Attributes.Append($attr.Clone()) | Out-Null
+            foreach ($app in @($manifest.Package.Applications.Application)) {
+                $ve = $app.SelectSingleNode('*[local-name()="VisualElements"]')
+                if (-not $ve) { continue }
+                $ve.SetAttribute('VisualGroup', $FolderName)
                 Write-MsixLog Info "VisualGroup '$FolderName' set on $($app.Id)"
             }
-
-            if ($PSCmdlet.ShouldProcess("$workspace\AppxManifest.xml", 'Save manifest')) {
-                Save-MsixManifest $appinfo "$workspace\AppxManifest.xml"
-            }
-
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
-            Assert-MsixProcessSuccess $r 'MakeAppx pack'
-
-            Invoke-MsixSigning -PackagePath $fileinfo.FullName -Pfx $Pfx -PfxPassword $PfxPassword
-
-        } finally {
-            Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 }
@@ -527,13 +528,13 @@ function Add-MsixStartMenuFolder {
 
 
 #region --- Backward-compatible aliases (v1 verb casing) --------------------
-Set-Alias -Name start-MsixCmd             -Value Invoke-MsixCmd
-Set-Alias -Name update-MsixSigner         -Value Update-MsixSigner
-Set-Alias -Name add-MsixPsf               -Value Add-MsixPsfV2
-Set-Alias -Name new-MsixPsfJson           -Value New-MsixPsfJson
-Set-Alias -Name add-MsixAlias             -Value Add-MsixAlias
-Set-Alias -Name remove-MsixStartMenuEntry -Value Remove-MsixStartMenuEntry
-Set-Alias -Name add-MsixStartMenuFolder   -Value Add-MsixStartMenuFolder
+Set-Alias -Name update-MsixSigner             -Value Update-MsixSigner
+Set-Alias -Name add-MsixPsf                   -Value Add-MsixPsfV2
+Set-Alias -Name new-MsixPsfJson               -Value New-MsixPsfJson
+Set-Alias -Name add-MsixAlias                 -Value Add-MsixAlias
+Set-Alias -Name remove-MsixStartMenuEntry     -Value Remove-MsixStartMenuEntry
+Set-Alias -Name add-MsixStartMenuFolder       -Value Add-MsixStartMenuFolder
+Set-Alias -Name Get-PublisherIdFromPublisher   -Value Get-MsixPublisherId
 #endregion
 
 
@@ -548,7 +549,7 @@ Export-ModuleMember -Function @(
     'Set-MsixToolsRoot'
     'New-MsixWorkspace'
     'Invoke-MsixProcess'
-    'Get-PublisherIdFromPublisher'
+    'Get-MsixPublisherId'
     # Validation
     'Test-MsixManifest'
     'Test-MsixPsfConfig'
@@ -558,6 +559,7 @@ Export-ModuleMember -Function @(
     'Save-MsixManifest'
     'Add-MsixManifestNamespace'
     'Get-MsixManifestApplications'
+    'Get-MsixManifestNamespaceUri'
     'Set-MsixManifestMaxVersionTested'
     # PSF builders
     'New-MsixPsfFileRedirectionConfig'
@@ -566,6 +568,8 @@ Export-ModuleMember -Function @(
     'New-MsixPsfTraceConfig'
     'New-MsixPsfArguments'
     'New-MsixPsfStartScriptConfig'
+    'New-MsixPsfDynamicLibraryConfig'
+    'New-MsixPsfWaitForDebuggerConfig'
     'New-MsixPsfConfig'
     'Add-MsixPsfV2'
     # Investigation
@@ -586,12 +590,15 @@ Export-ModuleMember -Function @(
     'Import-MsixAccelerator'
     'Invoke-MsixAccelerator'
     'ConvertFrom-MsixYamlAccelerator'
-    # PSF binaries / Procmon
+    # PSF binaries / Procmon / SDK
     'Install-MsixPsfBinaries'
     'Update-MsixPsfBinaries'
     'Get-MsixPsfBinariesVersion'
     'Install-MsixProcMon'
     'Update-MsixProcMon'
+    'Install-MsixSdkTools'
+    'Update-MsixSdkTools'
+    'Get-MsixSdkToolsVersion'
     'Initialize-MsixToolchain'
     # Debug session
     'Start-MsixDebugSession'
@@ -638,6 +645,7 @@ Export-ModuleMember -Function @(
     'Get-MsixKnownCapabilities'
     'Add-MsixCapability'
     'Get-MsixUninstallerCandidates'
+    'Get-MsixUninstallRegistryEntries'
     'Remove-MsixUninstallerArtifacts'
     'Get-MsixRunKeyEntries'
     'Get-MsixAliasCandidates'
@@ -645,8 +653,25 @@ Export-ModuleMember -Function @(
     'Update-MsixPackageVersion'
     'Get-MsixHeuristicFindings'
     'Invoke-MsixAutoFix'
+    'Invoke-MsixAutoFixFromAnalysis'
+    # Auto-detection scanners (v0.11)
+    'Get-MsixFontCandidates'
+    'Get-MsixDesktopShortcutCandidates'
+    'Get-MsixCapabilityHints'
     # Package compare
     'Compare-MsixPackage'
+    # Manifest-only fixers (alternatives to PSF)
+    'Set-MsixFileSystemWriteVirtualization'
+    'Set-MsixRegistryWriteVirtualization'
+    'Set-MsixInstalledLocationVirtualization'
+    'Add-MsixLoaderSearchPathOverride'
+    'Add-MsixFirewallRule'
+    'Add-MsixProtocolHandler'
+    'Add-MsixFileTypeAssociation'
+    'Add-MsixStartupTask'
+    'Add-MsixFontExtension'
+    'Set-MsixBrandMetadata'
+    'Remove-MsixDesktopShortcuts'
     # Signing
     'Invoke-MsixSigning'
     # Context menus
@@ -656,13 +681,14 @@ Export-ModuleMember -Function @(
     'Invoke-MsixPipeline'
     # Public (package ops)
     'Get-MsixInfo'
-    'Invoke-MsixCmd'
+    'Invoke-MsixCommand'
     'Update-MsixSigner'
     'New-MsixPsfJson'
     'Add-MsixAlias'
     'Remove-MsixStartMenuEntry'
     'Add-MsixStartMenuFolder'
 ) -Alias @(
+    'Invoke-MsixCmd'
     'start-MsixCmd'
     'update-MsixSigner'
     'add-MsixPsf'
@@ -670,5 +696,6 @@ Export-ModuleMember -Function @(
     'add-MsixAlias'
     'remove-MsixStartMenuEntry'
     'add-MsixStartMenuFolder'
+    'Get-PublisherIdFromPublisher'
 )
 #endregion

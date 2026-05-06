@@ -1,4 +1,4 @@
-function Invoke-MsixSigning {
+﻿function Invoke-MsixSigning {
     <#
     .SYNOPSIS
         Signs an MSIX package using signtool.exe.
@@ -56,8 +56,7 @@ function Invoke-MsixSigning {
         $r = Invoke-MsixProcess $signtool $args
         if ($r.ExitCode -ne 0) {
             $detail = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
-            Write-Error "signtool failed (exit $($r.ExitCode)): $detail" `
-                        -RecommendedAction 'Check event log: Microsoft\Windows\AppxPackagingOM'
+            throw "signtool failed (exit $($r.ExitCode)): $detail`nCheck: Microsoft-Windows-AppxPackagingOM event log."
         } else {
             Write-MsixLog Info "Signed successfully: $($fileinfo.Name)"
         }

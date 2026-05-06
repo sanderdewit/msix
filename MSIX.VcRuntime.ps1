@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # Visual C++ Runtime detection + bundling
 # -----------------------------------------------------------------------------
 # Many legacy Win32 apps depend on the VC++ redistributable (msvcp140.dll,
@@ -194,6 +194,7 @@ function Add-MsixVcRuntimeBundle {
         [string]$Architecture = 'auto',
         [string[]]$Names,
         [string]$OutputPath,
+        [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
         [string]$PfxPassword
@@ -211,13 +212,13 @@ function Add-MsixVcRuntimeBundle {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
-        Test-MsixManifest "$workspace\AppxManifest.xml"
+        $null = Test-MsixManifest "$workspace\AppxManifest.xml"
         [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
-        $apps          = @($manifest.Package.Applications.Application)
+        $apps          = @(Get-MsixManifestApplications $manifest)
 
         # Determine architecture if auto
         if ($Architecture -eq 'auto') {
-            $sample = Join-Path $workspace $apps[0].Executable
+            $sample = Join-Path $workspace $apps[0].GetAttribute('Executable')
             $Architecture = if (Test-Path $sample) { (_GetPeArchitecture $sample) } else { 'x86' }
             if ($Architecture -notin 'x86','x64') { $Architecture = 'x86' }
             Write-MsixLog Info "Architecture auto-detected: $Architecture"
@@ -276,3 +277,4 @@ function Add-MsixVcRuntimeBundle {
         Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
+

@@ -1,4 +1,4 @@
-# Run all Pester tests in this folder. Usage:
+﻿# Run all Pester tests in this folder. Usage:
 #   .\MSIX.Tests\Invoke-MsixTests.ps1
 #   .\MSIX.Tests\Invoke-MsixTests.ps1 -Tag Builders
 #

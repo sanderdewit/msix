@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # MSIX App Attach
 # -----------------------------------------------------------------------------
 # Generates VHDX or CIM images from an .msix using msixmgr.exe so the package
@@ -151,24 +151,12 @@ function Resolve-MsixMgrPath {
 
 function _MsixGetPackageInfo {
     param([string]$PackagePath)
-
-    Add-Type -Assembly System.IO.Compression.FileSystem
-    $tmp = New-MsixWorkspace ((Get-Item $PackagePath).BaseName + '-info')
-    try {
-        $zip = [IO.Compression.ZipFile]::OpenRead($PackagePath)
-        try {
-            $entry = $zip.Entries | Where-Object { $_.Name -eq 'AppxManifest.xml' }
-            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, "$tmp\AppxManifest.xml", $true)
-        } finally { $zip.Dispose() }
-        [xml]$xml = Get-Content "$tmp\AppxManifest.xml" -Raw
-        return [pscustomobject]@{
-            Name        = $xml.Package.Identity.Name
-            Publisher   = $xml.Package.Identity.Publisher
-            Version     = $xml.Package.Identity.Version
-            DisplayName = $xml.Package.Properties.DisplayName
-        }
-    } finally {
-        Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    $m = Get-MsixManifest -Path $PackagePath
+    return [pscustomobject]@{
+        Name        = $m.Package.Identity.Name
+        Publisher   = $m.Package.Identity.Publisher
+        Version     = $m.Package.Identity.Version
+        DisplayName = $m.Package.Properties.DisplayName
     }
 }
 
@@ -209,6 +197,9 @@ function New-MsixAppAttachImage {
     .PARAMETER ApplyAcls
         Apply the necessary ACLs for App Attach. Default: $true.
 
+    .NOTES
+        Requires administrator rights (New-VHD, Mount-DiskImage, Initialize-Disk, Format-Volume).
+
     .EXAMPLE
         New-MsixAppAttachImage -PackagePath app.msix -OutputPath C:\images\app.vhdx
     .EXAMPLE
@@ -230,6 +221,10 @@ function New-MsixAppAttachImage {
     $msixmgr = Resolve-MsixMgrPath
     if (-not $msixmgr) {
         throw "msixmgr.exe not found. Set `$env:MSIX_MSIXMGR_PATH or place it under the tools root\msixmgr\."
+    }
+
+    if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw 'New-MsixAppAttachImage requires elevation. Run PowerShell as Administrator.'
     }
 
     foreach ($p in $PackagePath) {

@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # Standard scripts (PSADT-flavoured)
 # -----------------------------------------------------------------------------
 # Renders parameterised .ps1 scripts from the templates\ folder, optionally
@@ -294,6 +294,7 @@ function Add-MsixStandardScript {
         [string]$Pfx,
         [string]$PfxPassword,
         [string]$OutputPath,
+        [Alias('NoSign')]
         [switch]$SkipSigning
     )
 
@@ -342,3 +343,4 @@ function Add-MsixStandardScript {
         Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
+

@@ -1,11 +1,136 @@
 # MSIX Module — TODO / Roadmap
 
-> Status: **v0.9.0 shipped**. Tracks gaps and ideas for v1.0+. Entries are
-> grouped by area; check items off as they land.
+> Status: **v0.12.0 shipped**. Tracks gaps and ideas for v1.0+.
+> Entries are grouped by area; check items off as they land.
 
 ---
 
-## v0.9.0 — what was delivered
+## v0.12.0 — enterprise readiness, manifest-first priority, bug fixes
+
+### Bug fixes
+- [x] `Add-MsixAlias` completely rewritten — correct `uap3:AppExecutionAlias`
+      schema, no stray `desktop:Executable` attribute, reliable `SelectSingleNode`
+      for multi-extension packages.
+- [x] `Add-MsixPsfV2` — `StartingScriptWrapper.ps1` now always copied when
+      a startScript/endScript is configured, even without `-AdditionalFiles`.
+- [x] `Get-MsixCompatibilityReport` — registry uninstall entries (`Registry.dat`
+      string-scan fallback) now reported alongside file-system artifacts.
+- [x] Signing failures now throw a terminating error (`throw`) instead of
+      `Write-Error`, so `try/catch` and `-ErrorAction Stop` work correctly.
+
+### Renamed cmdlets (backward-compatible aliases retained)
+- [x] `Invoke-MsixCmd` → `Invoke-MsixCommand` (`-AppId` override added).
+- [x] `Get-PublisherIdFromPublisher` → `Get-MsixPublisherId` (module-prefix
+      convention, shorter name).
+
+### New autofix coverage
+- [x] `Invoke-MsixAutoFixFromAnalysis` — 4 new finding→fixer mappings:
+      `UninstallRegistry` (merged with `UninstallerArtifact`),
+      `DesktopShortcuts` → `Remove-MsixDesktopShortcuts`,
+      `ManifestFix:SharedFonts` → `Add-MsixFontExtension`,
+      `CapabilityHints` → `Add-MsixCapability`.
+- [x] `Invoke-MsixAutoFix` — two new stages: `-RemoveDesktopShortcuts`,
+      `-AddFontExtension`.  `SupportsShouldProcess` (`-WhatIf`) added.
+- [x] `$report.SuggestedManifestFixes` property — manifest alternatives for
+      PSF findings surfaced by `Get-MsixCompatibilityReport` /
+      `Invoke-MsixInvestigation`.
+
+### Architecture
+- [x] 14 v0.7-era editing cmdlets refactored to the shared `_MsixMutateManifest`
+      private helper — eliminates ~15 lines of duplicated unpack/repack/sign
+      boilerplate per function. Affected: `Add-MsixAppIsolation`,
+      `Remove-MsixAppIsolation`, `Add-MsixLegacyContextMenu`,
+      `Add-MsixFileExplorerContextMenu`, `Add-MsixAlias`,
+      `Remove-MsixStartMenuEntry`, `Add-MsixStartMenuFolder`, and others.
+- [x] All `Write-Host` calls replaced with `Write-Information` (stream 6) —
+      module output is now fully capturable by CI pipelines and transcripts.
+- [x] `_MsixExpandZip` internal helper used in `Install-MsixPsfBinaries`
+      (replaces bare `Expand-Archive` call).
+
+### PSF typed builders
+- [x] `New-MsixPsfDynamicLibraryConfig` — DLL name → package-relative path
+      mappings for `DynamicLibraryFixup.dll`.
+- [x] `New-MsixPsfWaitForDebuggerConfig` — halts launch until a debugger
+      attaches; optional per-process filter.
+
+### Misc
+- [x] `Add-MsixDiagnosticTrace` now accepts `-OutputPath` and
+      `-SkipSigning [Alias('NoSign')]`, forwarded to `Add-MsixPsfV2`.
+- [x] `New-MsixAppAttachImage` — elevation check added (throws if not admin).
+- [x] Pester `-NoSign alias` Describe block rewritten with `-ForEach` pattern
+      to fix Pester v5 discovery-phase scoping bug (was 17 failing tests, now 0).
+- [x] 127/128 tests pass; 1 skipped (App Attach — requires admin + Hyper-V).
+
+---
+
+## v0.11.0 — connect-the-dots autofix, more detection, -NoSign
+
+### Bug fixes
+- [x] `Get-MsixManifest` accepts a .msix / .appx / .msixbundle / .appxbundle
+      file and extracts AppxManifest.xml automatically (used to call
+      `Get-Content -Raw` on the binary archive).
+- [x] `Remove-MsixUninstallerArtifacts` now also strips `Uninstall\<key>`
+      entries from `Registry.dat` (the package's virtualized HKLM hive).
+      Requires admin (reg.exe load); warns and continues otherwise.
+
+### -NoSign everywhere
+- [x] Every editing cmdlet has a `[Alias('NoSign')]` on its `-SkipSigning`
+      switch — `Add-MsixPsfV2`, `Add-MsixCapability`, `Add-MsixFontExtension`,
+      `Set-MsixFileSystemWriteVirtualization`, `Add-MsixVcRuntimeBundle`,
+      ... 19 cmdlets in total.
+
+### Connect-the-dots autofix
+- [x] `Invoke-MsixAutoFixFromAnalysis` consumes a report from
+      `Invoke-MsixInvestigation` and runs the right fixer for every finding,
+      signing once at the end. `-DryRun` shows the plan.
+      `-PreferManifestOverPsf` (default $true) avoids double-fixing when both
+      a PSF and a manifest fix are suggested for the same symptom.
+
+### PSF typed builders (full coverage now)
+- [x] `New-MsixPsfDynamicLibraryConfig` — DLL name -> package-relative path
+- [x] `New-MsixPsfWaitForDebuggerConfig` — diagnostic, strip before shipping
+
+### Auto-detection
+- [x] `Get-MsixFontCandidates` (.ttf / .otf / .ttc inside the package)
+- [x] `Get-MsixDesktopShortcutCandidates` (.lnk under `VFS\Common Desktop`)
+- [x] `Get-MsixCapabilityHints` (heuristic capabilities from PE imports)
+- [x] `Get-MsixUninstallRegistryEntries` (loads Registry.dat, walks Uninstall\*)
+- [x] All four feed `Get-MsixHeuristicFindings` so they show up in
+      `Invoke-MsixInvestigation` automatically.
+
+### New manifest fixers
+- [x] `Add-MsixFontExtension` — register fonts via `uap4:SharedFonts`
+- [x] `Set-MsixBrandMetadata` — bulk DisplayName / PublisherDisplayName /
+      Description / Logo (with optional `-ApplyToApplications` fan-out)
+- [x] `Remove-MsixDesktopShortcuts` — strip `.lnk` from `VFS\Common Desktop`
+
+---
+
+## v0.10.0 — manifest-only fixers (alternatives to PSF)
+
+- [x] **MSIX.ManifestExtensions.ps1** with 8 manifest-level fixers, idempotent
+      namespace registration, automatic `MaxVersionTested` bumps:
+  - [x] `Set-MsixFileSystemWriteVirtualization` (desktop6, 19041+)
+  - [x] `Set-MsixRegistryWriteVirtualization`   (desktop6, 19041+)
+  - [x] `Set-MsixInstalledLocationVirtualization` (uap10, 19041+) with
+        ModifiedItems / DeletedItems / AddedItems policy.
+  - [x] `Add-MsixLoaderSearchPathOverride` (uap6, 17134+); replaces
+        `DynamicLibraryFixup` for the simple case. Caps at 5 entries
+        per the schema.
+  - [x] `Add-MsixFirewallRule` (desktop2, 15063+); rule lifecycle now
+        follows the package.
+  - [x] `Add-MsixProtocolHandler` (uap); custom URL schemes.
+  - [x] `Add-MsixFileTypeAssociation` (uap); ProgID-style FTA inside the
+        manifest. The host-side `RegisterFileAssociation` script template
+        is now mostly redundant.
+  - [x] `Add-MsixStartupTask` (uap5, 15063+); modern autostart that
+        actually fires for packaged apps (HKLM\Run keys do not).
+- [x] Namespace registry extended with **uap5, uap6, uap10, desktop2, desktop6**.
+- [x] `Get-MsixHeuristicFindings` now proposes manifest fixes when symptoms
+      match (writes to install dir, HKLM writes, Run keys, DLL load failures).
+- [x] Shared `_MsixMutateManifest` private helper for unpack/edit/repack/sign.
+
+## v0.9.0 — TMEditX-style auto-fixers (curated)
 
 Modelled on the feature surface of TMEditX (Tim Mangan's commercial editor),
 turned into PowerShell-native, opt-in cmdlets.
@@ -104,20 +229,17 @@ turned into PowerShell-native, opt-in cmdlets.
       so Run-key / service / CPA detection is reliable.
 
 ### PSF coverage
-- [ ] `DynamicLibraryFixup` typed builder.
-- [ ] `WaitForDebuggerFixup` typed builder.
+- [x] `DynamicLibraryFixup` typed builder — `New-MsixPsfDynamicLibraryConfig` (v0.12).
+- [x] `WaitForDebuggerFixup` typed builder — `New-MsixPsfWaitForDebuggerConfig` (v0.12).
 - [ ] `monitor` block (PsfMonitor) for live logging from a packaged app.
 - [ ] PSF launcher's `inProcess` mode option.
 
 ### Heuristic fixers (build on v0.9)
-- [ ] **Font registration** (`Add-MsixFontFixup`) — register
-      packaged fonts so they're visible to the host's font system.
-- [ ] **Firewall rules** (`Add-MsixFirewallRule` /
-      `Remove-MsixFirewallRule`) — manage `windows.firewallRules` extension.
+- [x] **Font registration** — `Add-MsixFontExtension` via `uap4:SharedFonts` (v0.11/v0.12).
+- [x] **Firewall rules** — `Add-MsixFirewallRule` via `desktop2` (v0.10).
+- [x] **Desktop shortcut remediation** — `Remove-MsixDesktopShortcuts` (v0.11/v0.12).
+- [x] **Brand package** metadata — `Set-MsixBrandMetadata` (v0.11).
 - [ ] **Control Panel Applets** (`Add-MsixControlPanelApplet`).
-- [ ] **Desktop shortcut remediation** (`Remove-MsixDesktopShortcut`).
-- [ ] **Brand package** metadata (DisplayName/PublisherDisplayName/Description
-      uniformly) — TMEditX `BrandPackageOnSave`.
 - [ ] **Rule HKLM2HKCU auto-detection** — scan the package's hive for HKLM
       writes and propose patterns.
 
@@ -194,6 +316,9 @@ turned into PowerShell-native, opt-in cmdlets.
 - `Get-MsixRunKeyEntries` uses a regex string scan over Registry.dat /
   User.dat as a best-effort. A proper hive parser is on the v1.0 list — for
   now treat the output as triage, not gospel.
+- `Get-MsixUninstallRegistryEntries` uses the same string-scan fallback when
+  not running as admin (reg.exe load is skipped). Results are best-effort;
+  prefer running as admin for authoritative output.
 - `Get-MsixVcRuntimeReferences` matches strings inside PE files for the
   documented VC runtime DLL names. False negatives are possible for unusual
   toolsets; pass `-Names` to `Add-MsixVcRuntimeBundle` if the auto-detect
@@ -208,14 +333,24 @@ turned into PowerShell-native, opt-in cmdlets.
   captures aren't supported yet (v1.0).
 - Pester tests require Pester v5+ (Pester v3 ships with WinPS 5.1 by default
   and is not compatible).
-- The module name `MSIX` clashes with the installed community module owned
-  by this project's maintainer. Until the next gallery release, **import by
-  full path**.
+- `New-MsixAppAttachImage` requires an elevated (Administrator) session and
+  Hyper-V. The 1 skipped Pester test covers this cmdlet for that reason.
 
 ---
 
 ## Triage — resolved
 
+- v0.12: Enterprise readiness pass — `Add-MsixAlias` rewrite, PSF wrapper bug,
+         registry uninstall detection, terminating signing errors, renamed
+         cmdlets with aliases, new autofix mappings, `_MsixMutateManifest`
+         refactor, `Write-Information` logging, DynamicLibrary/WaitForDebugger
+         PSF builders, 17-test Pester fix (127/128 passing).
+- v0.11: Connect-the-dots autofix, `-NoSign` everywhere, font/shortcut/capability
+         detection, `New-MsixPsfDynamicLibraryConfig`, `New-MsixPsfWaitForDebuggerConfig`,
+         `Get-MsixManifest` polymorphic, `Set-MsixBrandMetadata`,
+         `Remove-MsixDesktopShortcuts`.
+- v0.10: Manifest-only fixers (8 cmdlets), `_MsixMutateManifest` foundation,
+         namespace registry, `Get-MsixHeuristicFindings` manifest proposals.
 - v0.9: TMEditX feature parity (curated subset).
 - v0.8: Pester tests, Trace Fixup parser, msixmgr auto-update, PSADT scripts.
 - v0.7: TMurgent PSF binaries, sign-once pipeline, dry-run output path,

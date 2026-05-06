@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # PSF binary management
 # -----------------------------------------------------------------------------
 # Downloads, caches, and updates the binaries the module needs at runtime:
@@ -14,6 +14,7 @@
 
 $script:TMurgentRepo  = 'TimMangan/MSIX-PackageSupportFramework'
 $script:ProcmonZipUrl = 'https://download.sysinternals.com/files/ProcessMonitor.zip'
+$script:SdkToolsNuGet = 'Microsoft.Windows.SDK.BuildTools'   # publishes MakeAppx + signtool
 
 function _MsixDownloadFile {
     param(
@@ -28,6 +29,22 @@ function _MsixDownloadFile {
     } finally {
         $ProgressPreference = $oldPref
     }
+}
+
+function _MsixExpandZip {
+    <#
+    Extracts any zip-format archive into a folder. Unlike Expand-Archive,
+    this works regardless of the file's extension (.nupkg, .vsix, etc.).
+    #>
+    param(
+        [string]$ArchivePath,
+        [string]$DestinationPath
+    )
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    if (-not (Test-Path $DestinationPath)) {
+        New-Item $DestinationPath -ItemType Directory -Force | Out-Null
+    }
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $DestinationPath)
 }
 
 function _MsixGitHubLatest {
@@ -105,7 +122,7 @@ function Install-MsixPsfBinaries {
     if ($PSCmdlet.ShouldProcess($Destination, "Install PSF $tag")) {
         try {
             _MsixDownloadFile -Url $asset.browser_download_url -Destination $zip
-            Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
+            _MsixExpandZip -ArchivePath $zip -DestinationPath $tmp
 
             New-Item $Destination -ItemType Directory -Force | Out-Null
             # Copy every file from extracted layout into Destination flatly
@@ -267,6 +284,205 @@ function Update-MsixProcMon {
 }
 
 
+function Install-MsixSdkTools {
+    <#
+    .SYNOPSIS
+        Downloads MakeAppx.exe + signtool.exe from the official Microsoft
+        Windows SDK BuildTools NuGet package and lays them out under the
+        module's tools root so Get-MsixToolsRoot finds them.
+
+    .DESCRIPTION
+        The package id is `Microsoft.Windows.SDK.BuildTools` — Microsoft
+        publishes signed CLI tools there for use in CI / build pipelines
+        without requiring the full SDK installer. The NuGet package
+        contains:
+
+          bin\<sdk-version>\<arch>\MakeAppx.exe
+          bin\<sdk-version>\<arch>\signtool.exe
+          bin\<sdk-version>\<arch>\makepri.exe
+          ... + the AppxPackaging COM stack DLLs
+
+        This function pulls the latest stable version (or the version you
+        pin via -Version), extracts the matching architecture into
+        "$ToolsRoot\Tools\", and writes a `sdk.version` marker so
+        Update-MsixSdkTools knows what's installed.
+
+    .PARAMETER Destination
+        Where to land the binaries. Default: the module folder. After install,
+        Get-MsixToolsRoot returns this path automatically.
+
+    .PARAMETER Architecture
+        x64 (default) or x86. Use whatever matches the architecture you'll be
+        signing/packaging from (the host architecture, not the package's).
+
+    .PARAMETER Version
+        Pin to a specific NuGet version. Default: latest stable.
+
+    .PARAMETER Force
+        Reinstall even if the version is already present.
+
+    .EXAMPLE
+        Install-MsixSdkTools
+
+    .EXAMPLE
+        Install-MsixSdkTools -Architecture x86 -Force
+
+    .EXAMPLE
+        Install-MsixSdkTools -Version '10.0.26100.1742'
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [string]$Destination,
+        [ValidateSet('x86','x64')]
+        [string]$Architecture = 'x64',
+        [string]$Version,
+        [switch]$Force
+    )
+
+    if (-not $Destination) { $Destination = $PSScriptRoot }
+
+    # ── Find latest version if not pinned ─────────────────────────────────
+    if (-not $Version) {
+        $idxUrl = "https://api.nuget.org/v3-flatcontainer/$($script:SdkToolsNuGet.ToLower())/index.json"
+        try {
+            $idx = Invoke-RestMethod -Uri $idxUrl -UseBasicParsing -ErrorAction Stop
+        } catch {
+            throw "Could not query NuGet for $($script:SdkToolsNuGet) versions: $_"
+        }
+        # The index lists every version. Take the highest non-prerelease one.
+        $stable = $idx.versions |
+                  Where-Object { $_ -notmatch '-' } |
+                  ForEach-Object { [pscustomobject]@{ Raw = $_; Ver = [version]($_ -replace '[^0-9.]','') } } |
+                  Sort-Object -Property Ver -Descending |
+                  Select-Object -First 1
+        if (-not $stable) {
+            throw "No stable versions found for $($script:SdkToolsNuGet)."
+        }
+        $Version = $stable.Raw
+    }
+    Write-MsixLog Info "Microsoft.Windows.SDK.BuildTools version: $Version"
+
+    # ── Idempotency check ─────────────────────────────────────────────────
+    $marker = Join-Path $Destination 'Tools\sdk.version'
+    if ((Test-Path $marker) -and -not $Force) {
+        $current = (Get-Content $marker -Raw -ErrorAction SilentlyContinue).Trim()
+        if ($current -eq "$Version|$Architecture") {
+            Write-MsixLog Info "SDK tools $Version ($Architecture) already installed at $Destination\Tools."
+            return [pscustomobject]@{ Path = "$Destination\Tools"; Version = $Version; Architecture = $Architecture; Updated = $false }
+        }
+    }
+
+    # ── Download + extract ────────────────────────────────────────────────
+    $tmp = Join-Path $env:TEMP "sdk-buildtools-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    New-Item $tmp -ItemType Directory -Force | Out-Null
+    $nupkg = Join-Path $tmp "$($script:SdkToolsNuGet).$Version.nupkg"
+    $url   = "https://api.nuget.org/v3-flatcontainer/$($script:SdkToolsNuGet.ToLower())/$Version/$($script:SdkToolsNuGet.ToLower()).$Version.nupkg"
+
+    if ($PSCmdlet.ShouldProcess("$Destination\Tools", "Install Microsoft.Windows.SDK.BuildTools $Version ($Architecture)")) {
+        try {
+            _MsixDownloadFile -Url $url -Destination $nupkg
+
+            $extracted = Join-Path $tmp 'extracted'
+            _MsixExpandZip -ArchivePath $nupkg -DestinationPath $extracted
+
+            # Locate the bin\<sdk-ver>\<arch> folder. NuGet packages may have a
+            # versioned subdirectory we need to discover.
+            $archDir = Get-ChildItem (Join-Path $extracted 'bin') -Directory -ErrorAction SilentlyContinue |
+                       ForEach-Object { Join-Path $_.FullName $Architecture } |
+                       Where-Object { Test-Path (Join-Path $_ 'MakeAppx.exe') } |
+                       Sort-Object -Descending |
+                       Select-Object -First 1
+            if (-not $archDir) {
+                throw "MakeAppx.exe not found inside the NuGet package for architecture '$Architecture'."
+            }
+
+            $toolsDir = Join-Path $Destination 'Tools'
+            New-Item $toolsDir -ItemType Directory -Force | Out-Null
+
+            # Copy the whole arch folder (MakeAppx, signtool, makepri, plus
+            # the AppxPackaging dependency DLLs that signtool needs at runtime).
+            Copy-Item "$archDir\*" $toolsDir -Recurse -Force
+
+            "$Version|$Architecture" | Set-Content $marker -Encoding ascii
+            Write-MsixLog Info "MakeAppx.exe + signtool.exe installed at $toolsDir"
+
+            # Reset the cached tools root so the next Get-MsixToolsRoot picks this up
+            Set-MsixToolsRoot -Path $Destination
+
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    return [pscustomobject]@{
+        Path         = "$Destination\Tools"
+        Version      = $Version
+        Architecture = $Architecture
+        Updated      = $true
+        Source       = $url
+    }
+}
+
+
+function Update-MsixSdkTools {
+    <#
+    .SYNOPSIS
+        Refreshes the bundled SDK tools to the latest NuGet version, but only
+        when a new one exists.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$Destination,
+        [ValidateSet('x86','x64')]
+        [string]$Architecture = 'x64'
+    )
+    if (-not $Destination) { $Destination = $PSScriptRoot }
+    $marker = Join-Path $Destination 'Tools\sdk.version'
+    if (-not (Test-Path $marker)) {
+        return Install-MsixSdkTools -Destination $Destination -Architecture $Architecture
+    }
+
+    # Find latest published version
+    $idxUrl = "https://api.nuget.org/v3-flatcontainer/$($script:SdkToolsNuGet.ToLower())/index.json"
+    $idx    = Invoke-RestMethod -Uri $idxUrl -UseBasicParsing -ErrorAction Stop
+    $latest = ($idx.versions | Where-Object { $_ -notmatch '-' } |
+               ForEach-Object { [pscustomobject]@{ Raw=$_; Ver=[version]($_ -replace '[^0-9.]','') } } |
+               Sort-Object Ver -Descending | Select-Object -First 1).Raw
+
+    $current = (Get-Content $marker -Raw).Trim()
+    if ($current -eq "$latest|$Architecture") {
+        Write-MsixLog Info "SDK tools up to date ($latest, $Architecture)."
+        return [pscustomobject]@{ Path = "$Destination\Tools"; Version = $latest; Architecture = $Architecture; Updated = $false }
+    }
+    Write-MsixLog Info "SDK tools update available: $current -> $latest|$Architecture"
+    return Install-MsixSdkTools -Destination $Destination -Architecture $Architecture -Version $latest -Force
+}
+
+
+function Get-MsixSdkToolsVersion {
+    <#
+    .SYNOPSIS
+        Reports the version + architecture of MakeAppx.exe / signtool.exe
+        currently installed under the module's tools root.
+    #>
+    [CmdletBinding()]
+    param([string]$Destination)
+    if (-not $Destination) { $Destination = $PSScriptRoot }
+    $marker = Join-Path $Destination 'Tools\sdk.version'
+    if (-not (Test-Path $marker)) {
+        return [pscustomobject]@{ Path = "$Destination\Tools"; Installed = $false; Version = $null; Architecture = $null }
+    }
+    $current = (Get-Content $marker -Raw).Trim()
+    $parts   = $current -split '\|'
+    return [pscustomobject]@{
+        Path         = "$Destination\Tools"
+        Installed    = $true
+        Version      = $parts[0]
+        Architecture = if ($parts.Count -gt 1) { $parts[1] } else { 'x64' }
+    }
+}
+
+
 function Initialize-MsixToolchain {
     <#
     .SYNOPSIS
@@ -281,11 +497,13 @@ function Initialize-MsixToolchain {
     #>
     [CmdletBinding()]
     param(
-        [ValidateSet('Psf','Procmon','MsixMgr')]
+        [ValidateSet('Sdk','Psf','Procmon','MsixMgr')]
         [string[]]$Skip
     )
 
-    $result = [ordered]@{ Psf = $null; Procmon = $null; MsixMgr = $null }
+    $result = [ordered]@{ Sdk = $null; Psf = $null; Procmon = $null; MsixMgr = $null }
+    # SDK tools first — everything else needs MakeAppx.exe to do anything useful.
+    if ($Skip -notcontains 'Sdk')     { $result.Sdk     = Update-MsixSdkTools }
     if ($Skip -notcontains 'Psf')     { $result.Psf     = Update-MsixPsfBinaries }
     if ($Skip -notcontains 'Procmon') { $result.Procmon = Update-MsixProcMon }
     if ($Skip -notcontains 'MsixMgr') { $result.MsixMgr = Update-MsixMgr }

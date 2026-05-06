@@ -1,7 +1,33 @@
-# Resolved once per module load; overridable via $env:MSIX_TOOLS_PATH
+﻿# Resolved once per module load; overridable via $env:MSIX_TOOLS_PATH
 $script:ToolsRoot = $null
 
 function Get-MsixToolsRoot {
+    <#
+    .SYNOPSIS
+        Returns a folder that contains Tools\MakeAppx.exe.
+
+    .DESCRIPTION
+        Search order (first hit wins, result cached for the session):
+
+          1. $env:MSIX_TOOLS_PATH          explicit override
+          2. <module folder>\Tools\        installed by Install-MsixSdkTools
+          3. Sibling / parent-walk         e.g. ..\0.56\Tools\
+          4. Windows 10/11 SDK             %ProgramFiles(x86)%\Windows Kits\10\bin
+          5. Auto-install (if -AutoInstall) one-call download from NuGet
+
+    .PARAMETER AutoInstall
+        If set and nothing was found, run Install-MsixSdkTools to fetch
+        Microsoft.Windows.SDK.BuildTools and use that.
+
+    .PARAMETER Refresh
+        Drop the cached result and re-resolve from scratch.
+    #>
+    [CmdletBinding()]
+    param(
+        [switch]$AutoInstall,
+        [switch]$Refresh
+    )
+    if ($Refresh) { $script:ToolsRoot = $null }
     if ($script:ToolsRoot) { return $script:ToolsRoot }
 
     # 1) Explicit env override
@@ -10,36 +36,82 @@ function Get-MsixToolsRoot {
         return $script:ToolsRoot
     }
 
-    # 2) Tools folder next to this module file
+    # 2) Tools folder next to this module file (Install-MsixSdkTools default)
     if (Test-Path "$PSScriptRoot\Tools\MakeAppx.exe") {
         $script:ToolsRoot = $PSScriptRoot
         return $script:ToolsRoot
     }
 
-    # 3) Versioned sibling directory (e.g. ..\0.56\)
-    $parent  = Split-Path $PSScriptRoot -Parent
-    $sibling = Get-ChildItem $parent -Directory -ErrorAction SilentlyContinue |
-               Where-Object { Test-Path "$($_.FullName)\Tools\MakeAppx.exe" } |
-               Sort-Object Name -Descending |
-               Select-Object -First 1
-    if ($sibling) {
-        $script:ToolsRoot = $sibling.FullName
-        return $script:ToolsRoot
-    }
-
-    # 4) Windows SDK default paths
-    $sdkRoots = @(
-        "${env:ProgramFiles(x86)}\Windows Kits\10\bin\x64",
-        "${env:ProgramFiles(x86)}\Windows Kits\10\bin\x86"
-    )
-    foreach ($r in $sdkRoots) {
-        if (Test-Path "$r\makeappx.exe") {
-            $script:ToolsRoot = $r
+    # 3) Walk up to four parent levels looking for any sibling that hosts
+    #    Tools\MakeAppx.exe (e.g. C:\temp\msix\0.56\ next to C:\temp\msix\MSIX\,
+    #    or any other vendored toolchain elsewhere on the same path).
+    $cursor = $PSScriptRoot
+    for ($i = 0; $i -lt 4; $i++) {
+        $cursor = Split-Path $cursor -Parent
+        if (-not $cursor) { break }
+        # Same-level siblings under this ancestor
+        $sibling = Get-ChildItem $cursor -Directory -ErrorAction SilentlyContinue |
+                   Where-Object { Test-Path "$($_.FullName)\Tools\MakeAppx.exe" } |
+                   Sort-Object Name -Descending |
+                   Select-Object -First 1
+        if ($sibling) {
+            $script:ToolsRoot = $sibling.FullName
+            return $script:ToolsRoot
+        }
+        # Or the ancestor itself
+        if (Test-Path "$cursor\Tools\MakeAppx.exe") {
+            $script:ToolsRoot = $cursor
             return $script:ToolsRoot
         }
     }
 
-    throw 'MakeAppx.exe not found. Set $env:MSIX_TOOLS_PATH to the folder that contains a Tools\ subfolder, or install the Windows SDK.'
+    # 4) Windows SDK default paths — pick the highest-versioned bin dir
+    foreach ($arch in @('x64','x86')) {
+        $kitBin = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+        if (Test-Path $kitBin) {
+            # Versioned subfolders + a flat <arch> root (older SDKs)
+            $candidate = Get-ChildItem $kitBin -Directory -ErrorAction SilentlyContinue |
+                         Where-Object { Test-Path "$($_.FullName)\$arch\makeappx.exe" } |
+                         Sort-Object Name -Descending |
+                         Select-Object -First 1
+            if ($candidate) {
+                $script:ToolsRoot = "$($candidate.FullName)\$arch"
+                return $script:ToolsRoot
+            }
+            if (Test-Path "$kitBin\$arch\makeappx.exe") {
+                $script:ToolsRoot = "$kitBin\$arch"
+                return $script:ToolsRoot
+            }
+        }
+    }
+
+    # 5) One-shot auto-install
+    if ($AutoInstall) {
+        if (-not (Get-Command Install-MsixSdkTools -ErrorAction SilentlyContinue)) {
+            throw 'Install-MsixSdkTools is not available; cannot auto-install. Make sure the module loaded fully.'
+        }
+        Write-MsixLog Info 'No SDK tools found; auto-installing via Install-MsixSdkTools.'
+        Install-MsixSdkTools | Out-Null
+        if (Test-Path "$PSScriptRoot\Tools\MakeAppx.exe") {
+            $script:ToolsRoot = $PSScriptRoot
+            return $script:ToolsRoot
+        }
+    }
+
+    throw @"
+MakeAppx.exe not found. Pick ONE of these:
+
+  # Easiest -- auto-download MakeAppx + signtool from the official Microsoft
+  # NuGet package (Microsoft.Windows.SDK.BuildTools), once per machine:
+  Install-MsixSdkTools
+
+  # Or do everything (PSF + Procmon + msixmgr + SDK tools) in a single call:
+  Initialize-MsixToolchain
+
+  # Or point at an existing layout (must contain Tools\MakeAppx.exe):
+  `$env:MSIX_TOOLS_PATH = 'C:\path\to\toolsroot'
+  Set-MsixToolsRoot     -Path 'C:\path\to\toolsroot'
+"@
 }
 
 function Set-MsixToolsRoot {
@@ -104,7 +176,7 @@ function Invoke-MsixProcess {
     }
 }
 
-function Get-PublisherIdFromPublisher {
+function Get-MsixPublisherId {
     param(
         [Parameter(Mandatory)]
         [string]$Publisher
@@ -128,3 +200,5 @@ function Get-PublisherIdFromPublisher {
     }
     return $coded.ToLower()
 }
+
+Set-Alias -Name Get-PublisherIdFromPublisher -Value Get-MsixPublisherId

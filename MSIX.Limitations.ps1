@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # MSIX Limitations knowledge base
 # -----------------------------------------------------------------------------
 # Curated list of what MSIX cannot do (or where it requires PSF / app workarounds).
@@ -27,7 +27,7 @@ $script:MsixLimitations = @(
         Source      = 'msft-docs'
         Severity    = 'medium'
         Description = 'The package install location under C:\Program Files\WindowsApps is mounted read-only. Apps that write log/config files alongside their executable will fail.'
-        Workaround  = 'Use FileRedirectionFixup (PSF), or change the app to write to %LocalAppData%.'
+        Workaround  = 'Preferred (Win11 25H2+): Set-MsixFileSystemWriteVirtualization. Alternative: Use PSF FileRedirectionFixup or MFRFixup, or change the app to write to %LocalAppData%.'
     },
     @{
         Id          = 'cwd-system32'

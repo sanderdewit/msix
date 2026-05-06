@@ -1,4 +1,4 @@
-function Invoke-MsixPipeline {
+﻿function Invoke-MsixPipeline {
     <#
     .SYNOPSIS
         Runs a full unpack → validate → modify → repack → sign pipeline on an MSIX,
@@ -76,7 +76,7 @@ function Invoke-MsixPipeline {
 
         # ── Validate ─────────────────────────────────────────────────────
         Write-MsixLog Info 'Stage: Validate'
-        Test-MsixManifest "$workspace\AppxManifest.xml"
+        $null = Test-MsixManifest "$workspace\AppxManifest.xml"
         [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
         $manifestDirty = $false
 

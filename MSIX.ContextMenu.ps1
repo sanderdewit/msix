@@ -1,4 +1,4 @@
-function Add-MsixLegacyContextMenu {
+﻿function Add-MsixLegacyContextMenu {
     <#
     .SYNOPSIS
         Adds a legacy IContextMenu shell extension to an MSIX package.
@@ -7,18 +7,23 @@ function Add-MsixLegacyContextMenu {
         Supports the COM-based IContextMenu / drag-drop handler pattern used by
         classic Win32 applications, available on Windows 11 21H2 (build 22000+).
 
-        Adds to AppxManifest.xml:
+        Adds to AppxManifest.xml inside the Application's Extensions node:
           - com:Extension (windows.comServer) for COM server registration
           - desktop9:Extension (windows.fileExplorerClassicContextMenuHandler
             or windows.fileExplorerClassicDragDropContextMenuHandler)
 
-        Both extensions are added at the Package level (not Application level).
-
     .PARAMETER PackagePath
         Path to the .msix file to modify.
 
+    .PARAMETER AppId
+        Id of the Application element to attach the extensions to.
+        Defaults to the first Application in the manifest.
+
     .PARAMETER ShellExtDll
-        Package-relative path to the COM server DLL (e.g. VFS\ProgramFilesX64\App\ShellExt.dll).
+        Package-relative VFS path to the COM server DLL
+        (e.g. VFS\ProgramFilesX64\App\ShellExt.dll).
+        MSIX folder-variable prefixes ([{ProgramFilesX64}] etc.) are resolved
+        automatically.
 
     .PARAMETER Clsid
         GUID of the COM class, with or without curly braces (e.g. '{XXXXXXXX-...}').
@@ -33,6 +38,12 @@ function Add-MsixLegacyContextMenu {
 
     .PARAMETER MenuType
         'ContextMenu' (right-click) or 'DragDrop' (drag-and-drop handler).
+
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Do not sign the resulting package.
 
     .PARAMETER Pfx / PfxPassword
         Signing certificate. Omit to use automatic store selection.
@@ -49,6 +60,7 @@ function Add-MsixLegacyContextMenu {
     param(
         [Parameter(Mandatory)]
         [string]$PackagePath,
+        [string]$AppId,
         [Parameter(Mandatory)]
         [string]$ShellExtDll,
         [Parameter(Mandatory)]
@@ -58,25 +70,43 @@ function Add-MsixLegacyContextMenu {
         [string[]]$FileTypes = @('*'),
         [ValidateSet('ContextMenu', 'DragDrop')]
         [string]$MenuType    = 'ContextMenu',
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
         [string]$Pfx,
         [string]$PfxPassword
     )
 
-    # Normalise GUID to {XXXXXXXX-...} form
-    $Clsid = $Clsid.Trim()
-    if ($Clsid -notmatch '^\{') { $Clsid = "{$Clsid}" }
+    # Two GUID formats required by the manifest schema:
+    #   com:Class Id                    → ST_GUID  → bare,   no braces
+    #   desktop9:ExtensionHandler Clsid → ST_CLSID → braced: {XXXXXXXX-...}
+    $ClsidBare   = $Clsid.Trim().Trim('{', '}')
+    $ClsidBraced = "{$ClsidBare}"
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
-    $workspace = New-MsixWorkspace $fileinfo.BaseName
+    # Resolve MSIX folder-variable prefixes ([{ProgramFilesX64}]\...) to VFS paths.
+    # Callers may pass the raw registry path; normalise it defensively.
+    $varMap = @{
+        'ProgramFilesX64'  = 'VFS\ProgramFilesX64'
+        'ProgramFilesX86'  = 'VFS\ProgramFiles(x86)'
+        'ProgramFiles6432' = 'VFS\ProgramFilesX64'
+        'System'           = 'VFS\SystemX64'
+        'SystemX86'        = 'VFS\System'
+        'Windows'          = 'VFS\Windows'
+        'CommonAppData'    = 'VFS\ProgramData'
+        'AppData'          = 'VFS\AppData\Roaming'
+        'LocalAppData'     = 'VFS\AppData\Local'
+    }
+    foreach ($var in $varMap.Keys) {
+        if ($ShellExtDll -match ('^\[\{' + [regex]::Escape($var) + '\}\](.+)$')) {
+            $ShellExtDll = $varMap[$var] + '\' + $Matches[1].TrimStart('\')
+            break
+        }
+    }
 
-    try {
-        Write-MsixLog Info "Unpacking: $($fileinfo.FullName)"
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
-
-        Test-MsixManifest "$workspace\AppxManifest.xml"
-        [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
+    _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+        -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+        -Activity 'Add Legacy Context Menu' -Mutate {
+        param([xml]$manifest)
 
         # Required namespaces
         Add-MsixManifestNamespace $manifest 'com'
@@ -85,32 +115,41 @@ function Add-MsixLegacyContextMenu {
         # desktop9 requires MaxVersionTested >= 10.0.21301.0
         Set-MsixManifestMaxVersionTested $manifest -MinBuild 21301
 
-        # ── Package-level Extensions node ────────────────────────────────
-        $pkgExt = $manifest.Package.Extensions
-        if (-not $pkgExt) {
-            $pkgExt = $manifest.CreateElement('Extensions', $manifest.Package.NamespaceURI)
-            $null   = $manifest.Package.AppendChild($pkgExt)
+        # ── Locate the target Application ─────────────────────────────────
+        $apps = @($manifest.Package.Applications.Application)
+        $app  = if ($AppId) {
+            $apps | Where-Object { $_.GetAttribute('Id') -eq $AppId } | Select-Object -First 1
+        } else {
+            $apps | Select-Object -First 1
+        }
+        if (-not $app) { throw "Application '$AppId' not found in the manifest." }
+
+        # ── Application-level Extensions node ────────────────────────────
+        $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
+        if (-not $appExt) {
+            $appExt = $manifest.CreateElement('Extensions', $manifest.Package.NamespaceURI)
+            $null   = $app.AppendChild($appExt)
         }
 
         # ── COM server registration ───────────────────────────────────────
-        $comUri      = Get-MsixManifestNamespaceUri 'com'
+        $comUri    = Get-MsixManifestNamespaceUri 'com'
 
-        $comExt      = $manifest.CreateElement('com:Extension',       $comUri)
+        $comExt    = $manifest.CreateElement('com:Extension',       $comUri)
         $comExt.SetAttribute('Category', 'windows.comServer')
 
-        $comServer   = $manifest.CreateElement('com:ComServer',       $comUri)
-        $surrogate   = $manifest.CreateElement('com:SurrogateServer', $comUri)
+        $comServer = $manifest.CreateElement('com:ComServer',       $comUri)
+        $surrogate = $manifest.CreateElement('com:SurrogateServer', $comUri)
         $surrogate.SetAttribute('DisplayName', $DisplayName)
 
         $class = $manifest.CreateElement('com:Class', $comUri)
-        $class.SetAttribute('Id',             $Clsid)
+        $class.SetAttribute('Id',             $ClsidBare)   # ST_GUID — no braces
         $class.SetAttribute('Path',           $ShellExtDll)
         $class.SetAttribute('ThreadingModel', 'STA')
 
         $null = $surrogate.AppendChild($class)
         $null = $comServer.AppendChild($surrogate)
         $null = $comExt.AppendChild($comServer)
-        $null = $pkgExt.AppendChild($comExt)
+        $null = $appExt.AppendChild($comExt)
 
         # ── Shell extension handler ───────────────────────────────────────
         $d9Uri = Get-MsixManifestNamespaceUri 'desktop9'
@@ -133,24 +172,11 @@ function Add-MsixLegacyContextMenu {
         foreach ($type in $FileTypes) {
             $extHandler = $manifest.CreateElement('desktop9:ExtensionHandler', $d9Uri)
             $extHandler.SetAttribute('Type',  $type)
-            $extHandler.SetAttribute('Clsid', $Clsid)
+            $extHandler.SetAttribute('Clsid', $ClsidBare) 
             $null = $handler.AppendChild($extHandler)
         }
         $null = $d9Ext.AppendChild($handler)
-        $null = $pkgExt.AppendChild($d9Ext)
-
-        if ($PSCmdlet.ShouldProcess("$workspace\AppxManifest.xml", 'Save manifest')) {
-            Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
-        }
-
-        Write-MsixLog Info "Repacking: $($fileinfo.FullName)"
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
-        Assert-MsixProcessSuccess $r 'MakeAppx pack'
-
-        Invoke-MsixSigning -PackagePath $fileinfo.FullName -Pfx $Pfx -PfxPassword $PfxPassword
-
-    } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        $null = $appExt.AppendChild($d9Ext)
     }
 }
 
@@ -181,6 +207,12 @@ function Add-MsixFileExplorerContextMenu {
         File-type targets. Use '*' for all files, '.ext' for specific extensions,
         'Directory' for folders.
 
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Do not sign the resulting package.
+
     .EXAMPLE
         Add-MsixFileExplorerContextMenu -PackagePath app.msix -AppId 'App' `
             -VerbId 'open' -VerbClsid '{XXXXXXXX-...}' `
@@ -198,24 +230,20 @@ function Add-MsixFileExplorerContextMenu {
         [string]$VerbClsid,
         [Parameter(Mandatory)]
         [string[]]$FileTypes,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
         [string]$Pfx,
         [string]$PfxPassword
     )
 
-    $VerbClsid = $VerbClsid.Trim()
-    if ($VerbClsid -notmatch '^\{') { $VerbClsid = "{$VerbClsid}" }
+    # desktop4:Verb Clsid is ST_CLSID — requires braces {XXXXXXXX-...}
+    $VerbClsid = '{' + $VerbClsid.Trim().Trim('{', '}') + '}'
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
-    $workspace = New-MsixWorkspace $fileinfo.BaseName
-
-    try {
-        Write-MsixLog Info "Unpacking: $($fileinfo.FullName)"
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
-
-        Test-MsixManifest "$workspace\AppxManifest.xml"
-        [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
+    _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+        -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+        -Activity 'Add File Explorer Context Menu' -Mutate {
+        param([xml]$manifest)
 
         Add-MsixManifestNamespace $manifest 'desktop4'
 
@@ -225,7 +253,8 @@ function Add-MsixFileExplorerContextMenu {
         $d4Uri = Get-MsixManifestNamespaceUri 'desktop4'
 
         # Ensure Application/Extensions exists
-        if (-not $app.Extensions) {
+        $extNode = $app.SelectSingleNode('*[local-name()="Extensions"]')
+        if (-not $extNode) {
             $extNode = $manifest.CreateElement('Extensions', $manifest.Package.NamespaceURI)
             $null    = $app.AppendChild($extNode)
         }
@@ -241,26 +270,13 @@ function Add-MsixFileExplorerContextMenu {
 
             $verbNode = $manifest.CreateElement('desktop4:Verb', $d4Uri)
             $verbNode.SetAttribute('Id',    $VerbId)
-            $verbNode.SetAttribute('Clsid', $VerbClsid)
+            $verbNode.SetAttribute('Clsid', $VerbClsid)  # ST_CLSID — with braces
 
             $null = $itemType.AppendChild($verbNode)
             $null = $ctxMenus.AppendChild($itemType)
         }
 
         $null = $d4Ext.AppendChild($ctxMenus)
-        $null = $app.Extensions.AppendChild($d4Ext)
-
-        if ($PSCmdlet.ShouldProcess("$workspace\AppxManifest.xml", 'Save manifest')) {
-            Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
-        }
-
-        Write-MsixLog Info "Repacking: $($fileinfo.FullName)"
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
-        Assert-MsixProcessSuccess $r 'MakeAppx pack'
-
-        Invoke-MsixSigning -PackagePath $fileinfo.FullName -Pfx $Pfx -PfxPassword $PfxPassword
-
-    } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        $null = $extNode.AppendChild($d4Ext)
     }
 }

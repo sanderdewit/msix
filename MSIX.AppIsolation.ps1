@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # Win32 App Isolation
 # -----------------------------------------------------------------------------
 # Adds the rescap capabilities + iso namespace that turn a regular MSIX-packaged
@@ -72,6 +72,12 @@ function Add-MsixAppIsolation {
         Capabilities to add. Defaults to a conservative starter set:
         promptForAccess + accessFromLowIntegrityLevel.
 
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Do not sign the resulting package.
+
     .PARAMETER Pfx / PfxPassword
         Signing certificate.
 
@@ -88,6 +94,9 @@ function Add-MsixAppIsolation {
             'isolatedWin32-promptForAccess',
             'isolatedWin32-accessFromLowIntegrityLevel'
         ),
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
         [string]$Pfx,
         [string]$PfxPassword
     )
@@ -101,16 +110,10 @@ function Add-MsixAppIsolation {
         }
     }
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
-    $workspace = New-MsixWorkspace $fileinfo.BaseName
-
-    try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
-
-        Test-MsixManifest "$workspace\AppxManifest.xml"
-        [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
+    _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+        -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+        -Activity 'Add App Isolation capabilities' -Mutate {
+        param([xml]$manifest)
 
         Add-MsixManifestNamespace $manifest 'rescap'
         # Win32 App Isolation requires Win11 24H2 (build 26100)
@@ -137,18 +140,6 @@ function Add-MsixAppIsolation {
             $null = $capsNode.AppendChild($node)
             Write-MsixLog Info "Capability added: $cap"
         }
-
-        if ($PSCmdlet.ShouldProcess("$workspace\AppxManifest.xml", 'Save manifest')) {
-            Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
-        }
-
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
-        Assert-MsixProcessSuccess $r 'MakeAppx pack'
-
-        Invoke-MsixSigning -PackagePath $fileinfo.FullName -Pfx $Pfx -PfxPassword $PfxPassword
-
-    } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -162,6 +153,12 @@ function Remove-MsixAppIsolation {
     .PARAMETER PackagePath
         .msix file to modify.
 
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Do not sign the resulting package.
+
     .PARAMETER Pfx / PfxPassword
         Signing certificate.
     #>
@@ -169,49 +166,36 @@ function Remove-MsixAppIsolation {
     param(
         [Parameter(Mandatory)]
         [string]$PackagePath,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
         [string]$Pfx,
         [string]$PfxPassword
     )
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
-    $workspace = New-MsixWorkspace $fileinfo.BaseName
-
-    try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
-
-        [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
-        $capsNode = $manifest.Package.Capabilities
-        if (-not $capsNode) {
-            Write-MsixLog Info 'No <Capabilities> block; nothing to remove.'
-            return
-        }
-
-        $removed = 0
-        foreach ($n in @($capsNode.ChildNodes)) {
-            if ($n.LocalName -eq 'Capability' -and $n.Name -like 'isolatedWin32-*') {
-                $null = $capsNode.RemoveChild($n)
-                $removed++
-                Write-MsixLog Info "Removed: $($n.Name)"
-            }
-        }
-
-        if ($removed -eq 0) {
+    PROCESS {
+        # Quick pre-check: does the package even have isolation caps?
+        $preCheck = Get-MsixManifest -Path $PackagePath
+        $hasCaps = @($preCheck.Package.Capabilities.ChildNodes) |
+            Where-Object { $_.LocalName -eq 'Capability' -and $_.Name -like 'isolatedWin32-*' }
+        if (-not $hasCaps) {
             Write-MsixLog Info 'No isolation capabilities found; nothing to do.'
             return
         }
 
-        if ($PSCmdlet.ShouldProcess("$workspace\AppxManifest.xml", 'Save manifest')) {
-            Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
+        _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+            -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+            -Activity 'Remove App Isolation capabilities' -Mutate {
+            param([xml]$manifest)
+            $capsNode = $manifest.Package.Capabilities
+            if ($capsNode) {
+                foreach ($n in @($capsNode.ChildNodes)) {
+                    if ($n.LocalName -eq 'Capability' -and $n.Name -like 'isolatedWin32-*') {
+                        $null = $capsNode.RemoveChild($n)
+                        Write-MsixLog Info "Removed: $($n.Name)"
+                    }
+                }
+            }
         }
-
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
-        Assert-MsixProcessSuccess $r 'MakeAppx pack'
-
-        Invoke-MsixSigning -PackagePath $fileinfo.FullName -Pfx $Pfx -PfxPassword $PfxPassword
-
-    } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }

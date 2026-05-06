@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # Debug & Sandbox helpers
 # -----------------------------------------------------------------------------
 # Goal: an admin downloads / receives a possibly-broken .msix, drops it in a
@@ -83,11 +83,13 @@ function Get-MsixDebugRecommendations {
             }
             'FileRedirectionFixup' {
                 $base = if ($f.Recommendation -match "-Base '([^']+)'") { $matches[1] } else { 'VFS/ProgramFilesX64/<App>/' }
+                $lines.Add("# Manifest alternative (Win11+, no PSF overhead): Set-MsixFileSystemWriteVirtualization -PackagePath '$PackagePath' -Pfx '$Pfx' -PfxPassword '$PfxPassword'")
                 $lines.Add("Add-MsixPsfV2 -PackagePath '$PackagePath' ``")
                 $lines.Add("    -Fixups @( New-MsixPsfFileRedirectionConfig -Base '$base' -Patterns '.*\.log','.*\.tmp','.*\.cache' ) ``")
                 $lines.Add("    -Pfx '$Pfx' -PfxPassword '$PfxPassword'")
             }
             'RegLegacyFixups' {
+                $lines.Add("# Manifest alternative (Win11+, no PSF overhead): Set-MsixRegistryWriteVirtualization -PackagePath '$PackagePath' -Pfx '$Pfx' -PfxPassword '$PfxPassword'")
                 $lines.Add("Add-MsixPsfV2 -PackagePath '$PackagePath' ``")
                 $lines.Add("    -Fixups @( New-MsixPsfRegLegacyConfig -Hive HKLM -Access Full2MaxAllowed -Patterns 'SOFTWARE\\<Vendor>\\*' ) ``")
                 $lines.Add("    -Pfx '$Pfx' -PfxPassword '$PfxPassword'")

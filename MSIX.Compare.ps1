@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # Compare-MsixPackage
 # -----------------------------------------------------------------------------
 # Diffs two MSIX packages by:
@@ -168,8 +168,8 @@ function Compare-MsixPackage {
     $rightWs = _MsixUnpackForCompare $RightPath 'right'
 
     try {
-        Test-MsixManifest "$leftWs\AppxManifest.xml"
-        Test-MsixManifest "$rightWs\AppxManifest.xml"
+        $null = Test-MsixManifest "$leftWs\AppxManifest.xml"
+        $null = Test-MsixManifest "$rightWs\AppxManifest.xml"
         [xml]$leftManifest  = Get-MsixManifest "$leftWs\AppxManifest.xml"
         [xml]$rightManifest = Get-MsixManifest "$rightWs\AppxManifest.xml"
 

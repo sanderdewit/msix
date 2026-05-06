@@ -1,4 +1,4 @@
-enum LogLevel { Debug; Info; Warning; Error }
+﻿enum LogLevel { Debug; Info; Warning; Error }
 
 $script:LogLevel = [LogLevel]::Info
 $script:LogFile  = $null
@@ -23,14 +23,8 @@ function Write-MsixLog {
 
     $ts     = Get-Date -Format 'yyyy-MM-ddTHH:mm:ss'
     $line   = "[$ts][$Level] $Message"
-    $color  = switch ($Level) {
-        'Debug'   { 'Gray'   }
-        'Info'    { 'Cyan'   }
-        'Warning' { 'Yellow' }
-        'Error'   { 'Red'    }
-    }
 
-    Write-Host $line -ForegroundColor $color
+    Write-Information -MessageData $line -InformationAction Continue
 
     if ($script:LogFile) {
         Add-Content -Path $script:LogFile -Value $line

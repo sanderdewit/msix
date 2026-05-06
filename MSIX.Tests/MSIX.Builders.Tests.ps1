@@ -1,4 +1,4 @@
-BeforeAll {
+﻿BeforeAll {
     $modulePath = Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psm1')
     Import-Module $modulePath -Force
 }

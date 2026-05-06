@@ -1,5 +1,5 @@
-@{
-    ModuleVersion     = '0.9.0'
+﻿@{
+    ModuleVersion     = '0.12.0'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, PSADT-style standard scripts, TMEditX-style heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -11,16 +11,18 @@
         'Write-MsixLog', 'Set-MsixLogLevel', 'Set-MsixLogFile',
         # Core / tools
         'Get-MsixToolsRoot', 'Set-MsixToolsRoot',
-        'New-MsixWorkspace', 'Invoke-MsixProcess', 'Get-PublisherIdFromPublisher',
+        'New-MsixWorkspace', 'Invoke-MsixProcess', 'Get-MsixPublisherId',
         # Validation
         'Test-MsixManifest', 'Test-MsixPsfConfig', 'Assert-MsixProcessSuccess',
         # Manifest helpers
         'Get-MsixManifest', 'Save-MsixManifest', 'Add-MsixManifestNamespace',
-        'Get-MsixManifestApplications', 'Set-MsixManifestMaxVersionTested',
+        'Get-MsixManifestApplications', 'Get-MsixManifestNamespaceUri',
+        'Set-MsixManifestMaxVersionTested',
         # PSF builders
         'New-MsixPsfFileRedirectionConfig', 'New-MsixPsfRegLegacyConfig',
         'New-MsixPsfEnvVarConfig', 'New-MsixPsfTraceConfig',
         'New-MsixPsfArguments', 'New-MsixPsfStartScriptConfig',
+        'New-MsixPsfDynamicLibraryConfig', 'New-MsixPsfWaitForDebuggerConfig',
         'New-MsixPsfConfig', 'Add-MsixPsfV2',
         # Signing
         'Invoke-MsixSigning',
@@ -40,10 +42,12 @@
         # Accelerators
         'Import-MsixAccelerator', 'Invoke-MsixAccelerator',
         'ConvertFrom-MsixYamlAccelerator',
-        # PSF binaries / procmon (TMurgent + auto-update)
+        # PSF binaries / procmon / SDK tools (auto-install + auto-update)
         'Install-MsixPsfBinaries', 'Update-MsixPsfBinaries',
         'Get-MsixPsfBinariesVersion', 'Install-MsixProcMon',
-        'Update-MsixProcMon', 'Initialize-MsixToolchain',
+        'Update-MsixProcMon',
+        'Install-MsixSdkTools', 'Update-MsixSdkTools', 'Get-MsixSdkToolsVersion',
+        'Initialize-MsixToolchain',
         # Debug + sandbox
         'Start-MsixDebugSession', 'Get-MsixDebugRecommendations',
         'New-MsixSandboxConfig', 'Start-MsixSandbox',
@@ -72,22 +76,39 @@
         'Get-MsixVcRuntimeReferences', 'Add-MsixVcRuntimeBundle',
         # TMEditX-style heuristic auto-fixers
         'Get-MsixKnownCapabilities', 'Add-MsixCapability',
-        'Get-MsixUninstallerCandidates', 'Remove-MsixUninstallerArtifacts',
+        'Get-MsixUninstallerCandidates', 'Get-MsixUninstallRegistryEntries',
+        'Remove-MsixUninstallerArtifacts',
         'Get-MsixRunKeyEntries', 'Get-MsixAliasCandidates',
         'Add-MsixSplashScreen', 'Update-MsixPackageVersion',
         'Get-MsixHeuristicFindings', 'Invoke-MsixAutoFix',
+        'Invoke-MsixAutoFixFromAnalysis',
+        # Auto-detection scanners
+        'Get-MsixFontCandidates', 'Get-MsixDesktopShortcutCandidates',
+        'Get-MsixCapabilityHints',
         # Package compare
         'Compare-MsixPackage',
+        # Manifest-only fixers (alternatives to PSF DLL injection)
+        'Set-MsixFileSystemWriteVirtualization',
+        'Set-MsixRegistryWriteVirtualization',
+        'Set-MsixInstalledLocationVirtualization',
+        'Add-MsixLoaderSearchPathOverride',
+        'Add-MsixFirewallRule',
+        'Add-MsixProtocolHandler',
+        'Add-MsixFileTypeAssociation',
+        'Add-MsixStartupTask',
+        'Add-MsixFontExtension', 'Set-MsixBrandMetadata',
+        'Remove-MsixDesktopShortcuts',
         # Public (legacy package ops)
-        'Get-MsixInfo', 'Invoke-MsixCmd', 'Update-MsixSigner',
+        'Get-MsixInfo', 'Invoke-MsixCommand', 'Update-MsixSigner',
         'New-MsixPsfJson', 'Add-MsixAlias',
         'Remove-MsixStartMenuEntry', 'Add-MsixStartMenuFolder'
     )
 
     AliasesToExport   = @(
-        'start-MsixCmd', 'update-MsixSigner', 'add-MsixPsf',
+        'Invoke-MsixCmd', 'start-MsixCmd', 'update-MsixSigner', 'add-MsixPsf',
         'new-MsixPsfJson', 'add-MsixAlias',
-        'remove-MsixStartMenuEntry', 'add-MsixStartMenuFolder'
+        'remove-MsixStartMenuEntry', 'add-MsixStartMenuFolder',
+        'Get-PublisherIdFromPublisher'
     )
 
     PrivateData = @{
@@ -99,6 +120,135 @@
                             'TMEditX','Enterprise','CICD','Pester','PSADT')
             ProjectUri  = 'https://github.com/microsoft/MSIX-PackageSupportFramework'
             ReleaseNotes = @'
+## v0.11.0 - Connect-the-dots autofix, more detection, -NoSign, polymorphic Get-MsixManifest
+
+Bug fixes:
+- Get-MsixManifest now accepts a .msix / .appx / .msixbundle path and
+  extracts the AppxManifest.xml on the fly (it used to do
+  Get-Content -Raw on the binary archive). It also accepts a folder
+  containing AppxManifest.xml. Existing direct-XML-path callers still work.
+- Remove-MsixUninstallerArtifacts now ALSO strips Uninstall\<key> entries
+  from Registry.dat (the package's virtualized HKLM). Requires admin
+  (reg.exe load); a clear warning is emitted if not elevated. -KeepRegistry
+  brings back the old "files only" behaviour.
+
+New features:
+- -NoSign alias on every editing cmdlet, paralleling -SkipSigning
+  (Add-MsixPsfV2, Add-MsixCapability, Set-MsixFileSystemWriteVirtualization,
+  Add-MsixVcRuntimeBundle, Add-MsixStartupTask, ... 19 cmdlets).
+- Invoke-MsixAutoFixFromAnalysis: takes the report from
+  Invoke-MsixInvestigation and runs the right fixer for every finding,
+  signing once at the end. -DryRun shows the plan. Maps:
+    UninstallerArtifact                -> Remove-MsixUninstallerArtifacts
+    VcRuntime                          -> Add-MsixVcRuntimeBundle
+    ManifestFix:FileSystemWriteVirt..  -> Set-MsixFileSystemWriteVirtualization
+    ManifestFix:RegistryWriteVirt..    -> Set-MsixRegistryWriteVirtualization
+    ManifestFix:StartupTask            -> Add-MsixStartupTask
+    ManifestFix:LoaderSearchPathOver.. -> Add-MsixLoaderSearchPathOverride
+    FileRedirectionFixup               -> Add-MsixPsfV2 (PSF)
+  -PreferManifestOverPsf (default $true) avoids double-fixing the same symptom.
+
+- New PSF typed builders (round out the catalogue):
+    New-MsixPsfDynamicLibraryConfig    DLL name -> package-relative path
+    New-MsixPsfWaitForDebuggerConfig   diagnostic; remove before shipping
+
+- Three new auto-detectors (read-only):
+    Get-MsixFontCandidates             find .ttf/.otf/.ttc shipped in package
+    Get-MsixDesktopShortcutCandidates  find .lnk under VFS\Common Desktop
+    Get-MsixCapabilityHints            guess capabilities from PE imports
+    Get-MsixUninstallRegistryEntries   list Uninstall\* keys in Registry.dat
+
+- Three new manifest fixers:
+    Add-MsixFontExtension              register fonts via uap4:SharedFonts
+    Set-MsixBrandMetadata              bulk DisplayName / PublisherDisplayName
+                                       / Description / Logo (with optional
+                                       -ApplyToApplications fan-out)
+    Remove-MsixDesktopShortcuts        strip .lnk from VFS\Common Desktop
+
+Get-MsixHeuristicFindings (and therefore the unified report) now surfaces:
+  - SharedFonts not registered for shipped fonts
+  - Desktop shortcuts in package
+  - Capability hints from PE imports
+  - Uninstall registry leftovers
+which all flow through Invoke-MsixAutoFixFromAnalysis automatically.
+
+## v0.10.0 - Manifest-only fixers (alternatives to PSF)
+
+The AppX manifest schema has matured a lot since PSF was first written.
+Several runtime issues that PSF traditionally addressed via DLL injection
+can now be fixed by adding the right manifest extension - faster at runtime,
+no foreign DLLs in the package, and survives Windows updates more cleanly.
+
+This release exposes all of them as PowerShell cmdlets, with idempotent
+namespace registration and automatic MaxVersionTested bumps.
+
+  Set-MsixFileSystemWriteVirtualization      desktop6   Win10 19041+
+      Per-user redirection of writes to the install dir.
+      Manifest alternative to PSF FileRedirectionFixup / MFRFixup.
+
+  Set-MsixRegistryWriteVirtualization        desktop6   Win10 19041+
+      Per-user redirection of HKLM writes.
+      Manifest alternative to RegLegacyFixups Hklm2Hkcu.
+
+  Set-MsixInstalledLocationVirtualization    uap10      Win10 19041+
+      Like FileSystemWriteVirtualization but with explicit update-time
+      policy (ModifiedItems / DeletedItems / AddedItems = keep|reset).
+
+  Add-MsixLoaderSearchPathOverride           uap6       Win10 17134+
+      Up to 5 additional package-relative DLL search paths.
+      Manifest alternative to DynamicLibraryFixup for the simple case.
+
+  Add-MsixFirewallRule                       desktop2   Win10 15063+
+      Firewall rule that's installed/removed alongside the package.
+
+  Add-MsixProtocolHandler                    uap        always
+      Register a custom URL scheme (e.g. contoso://).
+
+  Add-MsixFileTypeAssociation                uap        always
+      Register a ProgID-style FTA inside the manifest. The host-side
+      RegisterFileAssociation script template is now mostly redundant.
+
+  Add-MsixStartupTask                        uap5       Win10 15063+
+      Modern, manifest-native autostart entry. Properly fires for packaged
+      apps, where HKLM\Run keys do not.
+
+Get-MsixHeuristicFindings now surfaces these as alternatives:
+  - "package writes to install dir AND no FileSystemWriteVirtualization"
+  - "package writes to HKLM AND no RegistryWriteVirtualization"
+  - "Run keys present AND no windows.startupTask"
+  - "DLL load failures AND no LoaderSearchPathOverride"
+
+Namespace registry extended: uap5, uap6, uap10, desktop2, desktop6.
+
+## v0.9.2 - Bug fixes for the SDK tools installer
+
+- Install-MsixSdkTools no longer fails on the .nupkg extension. Switched to
+  System.IO.Compression.ZipFile.ExtractToDirectory which extracts any
+  zip-format archive regardless of its filename. Expand-Archive only honours
+  ".zip" — that was an oversight.
+- Get-MsixToolsRoot error message uses ASCII dashes so it renders correctly
+  on the default Windows console codepage (was emitting U+2014 em-dash that
+  showed up as garbage on cp1252 / OEM consoles).
+- New private helper _MsixExpandZip used by other zip-extraction call sites
+  for consistency.
+
+## v0.9.1 - SDK tools auto-installer (no more manual MakeAppx hunt)
+
+Fixes the UX regression when the module is loaded without a sibling toolchain
+folder ("MakeAppx.exe not found …" with no actionable path forward).
+
+- Install-MsixSdkTools / Update-MsixSdkTools / Get-MsixSdkToolsVersion —
+  fetches Microsoft.Windows.SDK.BuildTools from NuGet and lays the binaries
+  out at $ModuleFolder\Tools so Get-MsixToolsRoot finds them automatically.
+- Initialize-MsixToolchain now installs the SDK tools first (so MakeAppx +
+  signtool are present before PSF / Procmon / msixmgr touch a package).
+- Get-MsixToolsRoot now walks up to four parent levels looking for a
+  Tools\MakeAppx.exe sibling, scans every versioned subfolder under the
+  Windows 10/11 SDK install (not just the unversioned ones), and emits a
+  copy-pasteable resolution menu in the error message instead of a one-liner.
+- Get-MsixToolsRoot -AutoInstall triggers Install-MsixSdkTools on miss.
+- Get-MsixToolsRoot -Refresh drops the session cache.
+
 ## v0.9.0 — TMEditX-style auto-fixers, MFR, VC runtime bundling, compare
 
 Modelled on the feature surface of TMEditX (Tim Mangan's commercial MSIX edit

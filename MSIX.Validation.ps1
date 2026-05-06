@@ -1,4 +1,4 @@
-function Test-MsixManifest {
+﻿function Test-MsixManifest {
     param(
         [Parameter(Mandatory)]
         [string]$Path

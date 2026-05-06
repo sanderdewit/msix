@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # MSIX Investigation Engine
 # -----------------------------------------------------------------------------
 # Automates the manual procedure documented at:
@@ -51,6 +51,12 @@ function Add-MsixDiagnosticTrace {
     .PARAMETER PackagePath
         Path to the .msix to instrument.
 
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Do not sign the resulting package.
+
     .PARAMETER Pfx / PfxPassword
         Signing certificate. Omit for /a (auto store).
     #>
@@ -58,12 +64,17 @@ function Add-MsixDiagnosticTrace {
     param(
         [Parameter(Mandatory)]
         [string]$PackagePath,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
         [string]$Pfx,
         [string]$PfxPassword
     )
 
     $trace = New-MsixPsfTraceConfig -FilesystemLevel 'allFailures' -RegistryLevel 'allFailures'
-    Add-MsixPsfV2 -PackagePath $PackagePath -Fixups @($trace) -Pfx $Pfx -PfxPassword $PfxPassword
+    Add-MsixPsfV2 -PackagePath $PackagePath -Fixups @($trace) `
+                  -OutputPath $OutputPath -SkipSigning:$SkipSigning `
+                  -Pfx $Pfx -PfxPassword $PfxPassword
 }
 
 
@@ -237,7 +248,7 @@ function Get-MsixStaticAnalysis {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
-        Test-MsixManifest "$workspace\AppxManifest.xml"
+        $null = Test-MsixManifest "$workspace\AppxManifest.xml"
         [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
         $apps = @($manifest.Package.Applications.Application)
 
@@ -287,9 +298,9 @@ function Get-MsixStaticAnalysis {
                     $base = ($exe.Substring(0, $exe.LastIndexOf('\'))).Replace('\','/') + '/'
                     $findings += [pscustomobject]@{
                         Severity        = 'Warning'
-                        Category        = 'FileRedirectionFixup'
+                        Category        = 'ManifestFix:FileSystemWriteVirtualization'
                         Symptom         = 'Writable-looking files shipped inside the VFS payload.'
-                        Recommendation  = "Apply FileRedirectionFixup -Base '$base' -Patterns '.*\.log','.*\.tmp'"
+                        Recommendation  = "Preferred (Win11+): Set-MsixFileSystemWriteVirtualization -PackagePath '$PackagePath'  | Alternative: Apply FileRedirectionFixup -Base '$base' -Patterns '.*\.log','.*\.tmp'"
                         AppId           = $app.Id
                         Evidence        = ($writableHints | Select-Object -First 5 -ExpandProperty Name) -join ', '
                     }
@@ -410,12 +421,32 @@ function Get-MsixCompatibilityReport {
         }
     }
 
+    # Synthesise manifest-only alternatives
+    $manifestAlternatives = @()
+    foreach ($f in $allFindings) {
+        switch ($f.Category) {
+            'FileRedirectionFixup' {
+                $manifestAlternatives += [pscustomobject]@{
+                    Cmdlet = 'Set-MsixFileSystemWriteVirtualization'
+                    Reason = 'Redirects writes to install dir without PSF (Win11+)'
+                }
+            }
+            'RegLegacyFixups' {
+                $manifestAlternatives += [pscustomobject]@{
+                    Cmdlet = 'Set-MsixRegistryWriteVirtualization'
+                    Reason = 'Redirects HKLM writes without PSF (Win11+)'
+                }
+            }
+        }
+    }
+
     $report = [pscustomobject]@{
-        PackagePath         = $PackagePath
-        Findings            = $allFindings
-        SuggestedFixups     = ($suggested | Select-Object -Unique)
-        ProcMonLog          = $PmlPath
-        RecommendedCommands = $null
+        PackagePath            = $PackagePath
+        Findings               = $allFindings
+        SuggestedFixups        = ($suggested | Select-Object -Unique)
+        SuggestedManifestFixes = ($manifestAlternatives | Select-Object -Unique)
+        ProcMonLog             = $PmlPath
+        RecommendedCommands    = $null
     }
 
     # Generate copy-paste-ready PowerShell for the operator. Defined in

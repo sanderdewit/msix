@@ -4,6 +4,18 @@
 #
 # Requires Pester v5+:
 #   Install-Module Pester -MinimumVersion 5.5 -Scope CurrentUser
+#
+# Write-Host usage policy:
+#   This is an interactive test runner. The pass/fail summary banner must be
+#   visible by default and benefits from colour, which Write-Information
+#   cannot deliver. Write-Output would pollute the success pipeline so the
+#   caller can't reliably capture the Pester result object. Pester's own
+#   runner uses Write-Host for the same reason. Suppression below is the
+#   documented PSScriptAnalyzer pattern for legitimate operator output.
+
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+    'PSAvoidUsingWriteHost', '',
+    Justification = 'Interactive test runner banner: must be visible by default and uses colour for at-a-glance readability. See policy comment above.')]
 [CmdletBinding()]
 param(
     [string[]]$Tag,

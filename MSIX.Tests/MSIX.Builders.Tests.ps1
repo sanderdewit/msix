@@ -1,4 +1,4 @@
-﻿BeforeAll {
+BeforeAll {
     $modulePath = Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psm1')
     Import-Module $modulePath -Force
 }
@@ -60,15 +60,15 @@ Describe 'PSF builders' -Tag 'Builders' {
         }
     }
 
-    Context 'New-MsixPsfArguments' {
+    Context 'New-MsixPsfArgument' {
         It 'Returns app id and arguments' {
-            $r = New-MsixPsfArguments -AppId 'App' -Arguments '/silent' -WorkingDirectory 'app/'
+            $r = New-MsixPsfArgument -AppId 'App' -Arguments '/silent' -WorkingDirectory 'app/'
             $r.id | Should -Be 'App'
             $r.arguments | Should -Be '/silent'
             $r.workingDirectory | Should -Be 'app/'
         }
         It 'Omits empty fields' {
-            $r = New-MsixPsfArguments -AppId 'App'
+            $r = New-MsixPsfArgument -AppId 'App'
             $r.ContainsKey('arguments')        | Should -BeFalse
             $r.ContainsKey('workingDirectory') | Should -BeFalse
         }

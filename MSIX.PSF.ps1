@@ -22,6 +22,7 @@ function New-MsixPsfFileRedirectionConfig {
         New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log','.*\.tmp'
     #>
     [OutputType([hashtable])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
         [string]$Base,
@@ -66,6 +67,7 @@ function New-MsixPsfRegLegacyConfig {
         New-MsixPsfRegLegacyConfig -Type Hklm2Hkcu -Hive HKLM -Patterns 'SOFTWARE\App\*'
     #>
     [OutputType([hashtable])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
         [ValidateSet('HKCU', 'HKLM')]
@@ -108,6 +110,7 @@ function New-MsixPsfEnvVarConfig {
         New-MsixPsfEnvVarConfig -Variables @{ MY_VAR = 'value'; ANOTHER = 'val2' }
     #>
     [OutputType([hashtable])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
         [hashtable]$Variables
@@ -143,6 +146,7 @@ function New-MsixPsfDynamicLibraryConfig {
         Add-MsixPsfV2 -PackagePath app.msix -Fixups @($dyn) -Pfx cert.pfx -PfxPassword 'P@ss'
     #>
     [OutputType([hashtable])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
         [hashtable[]]$Mappings
@@ -183,6 +187,7 @@ function New-MsixPsfWaitForDebuggerConfig {
         Add-MsixPsfV2 -PackagePath app.msix -Fixups @($wait) -Pfx cert.pfx -PfxPassword 'P@ss'
     #>
     [OutputType([hashtable])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [string[]]$Processes
     )
@@ -197,7 +202,7 @@ function New-MsixPsfWaitForDebuggerConfig {
 }
 
 
-function New-MsixPsfArguments {
+function New-MsixPsfArgument {
     <#
     .SYNOPSIS
         Returns a hashtable describing per-application command-line arguments
@@ -206,9 +211,10 @@ function New-MsixPsfArguments {
         Maps to the top-level `applications[].arguments` field documented at
         https://learn.microsoft.com/en-us/windows/msix/psf/psf-launch-apps-with-parameters
     .EXAMPLE
-        New-MsixPsfArguments -AppId 'App' -Arguments '/bootfromsettingshortcut'
+        New-MsixPsfArgument -AppId 'App' -Arguments '/bootfromsettingshortcut'
     #>
     [OutputType([hashtable])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
         [string]$AppId,
@@ -267,6 +273,7 @@ function New-MsixPsfStartScriptConfig {
         New-MsixPsfStartScriptConfig -AppId 'App' -ScriptPath 'createshortcut.ps1' -RunOnce -WaitForScriptToFinish
     #>
     [OutputType([hashtable])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
         [string]$AppId,
@@ -307,6 +314,7 @@ function New-MsixPsfTraceConfig {
         New-MsixPsfTraceConfig -FilesystemLevel allFailures
     #>
     [OutputType([hashtable])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [ValidateSet('allFailures', 'unexpectedFailures', 'ignore')]
         [string]$FilesystemLevel = 'unexpectedFailures',
@@ -335,11 +343,12 @@ function New-MsixPsfConfig {
         optional per-application options (arguments, workingDirectory, startScript,
         endScript).
     .PARAMETER AppOptions
-        Hashtables produced by New-MsixPsfArguments and New-MsixPsfStartScriptConfig.
+        Hashtables produced by New-MsixPsfArgument and New-MsixPsfStartScriptConfig.
         Each is merged into the matching application entry by AppId.
     .OUTPUTS
         [string] JSON
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
         [xml]$Manifest,
@@ -359,7 +368,7 @@ function New-MsixPsfConfig {
         if (-not $opt) { continue }
         if ($opt.kind -eq 'startScript') { $startById[$opt.appId] = $opt.block; continue }
         if ($opt.kind -eq 'endScript')   { $endById[$opt.appId]   = $opt.block; continue }
-        # Otherwise treat as arguments hashtable from New-MsixPsfArguments
+        # Otherwise treat as arguments hashtable from New-MsixPsfArgument
         if ($opt.id) { $argsById[$opt.id] = $opt }
     }
 
@@ -450,7 +459,7 @@ function Add-MsixPsfV2 {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     $toolsRoot = Get-MsixToolsRoot
@@ -466,7 +475,7 @@ function Add-MsixPsfV2 {
 
         $null = Test-MsixManifest "$workspace\AppxManifest.xml"
         [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
-        $apps = @(Get-MsixManifestApplications $manifest)
+        $apps = @(Get-MsixManifestApplication $manifest)
 
         # Determine bitness from first app's executable path
         $firstExe  = $apps[0].GetAttribute('Executable')
@@ -613,3 +622,7 @@ function Add-MsixPsfV2 {
 
 #endregion
 
+
+
+# Backward-compatible plural aliases
+Set-Alias New-MsixPsfArguments New-MsixPsfArgument

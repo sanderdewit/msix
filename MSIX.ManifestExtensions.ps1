@@ -50,7 +50,7 @@ function _MsixMutateManifest {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword,
+        [SecureString]$PfxPassword,
         [string]$Activity = 'Mutate manifest',
         [string]$SaveManifestTo
     )
@@ -108,7 +108,7 @@ function _MsixGetOrCreateApplicationExtensions {
     param([xml]$Manifest, [string]$AppId)
     $app = Get-MsixManifestApplication -Manifest $Manifest -AppId $AppId
     if (-not $app) {
-        $apps = @(Get-MsixManifestApplications -Manifest $Manifest)
+        $apps = @(Get-MsixManifestApplication -Manifest $Manifest)
         if ($AppId) { throw "Application '$AppId' not found. Available: $(($apps | ForEach-Object { $_.GetAttribute('Id') }) -join ', ')" }
         else        { throw 'No Application elements found in the manifest.' }
     }
@@ -186,11 +186,12 @@ function Set-MsixFileSystemWriteVirtualization {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Set FileSystemWriteVirtualization')) { return }
 
+    $null = $Enable, $ExcludedDirectories  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -Activity 'desktop6:FileSystemWriteVirtualization' -Mutate {
@@ -297,11 +298,12 @@ function Set-MsixRegistryWriteVirtualization {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Set RegistryWriteVirtualization')) { return }
 
+    $null = $Enable, $ExcludedKeys  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -Activity 'desktop6:RegistryWriteVirtualization' -Mutate {
@@ -398,11 +400,12 @@ function Set-MsixInstalledLocationVirtualization {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Set InstalledLocationVirtualization')) { return }
 
+    $null = $ModifiedItems, $DeletedItems, $AddedItems, $Disable  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -Activity 'uap10:InstalledLocationVirtualization' -Mutate {
@@ -471,11 +474,12 @@ function Add-MsixLoaderSearchPathOverride {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Add LoaderSearchPathOverride')) { return }
 
+    $null = $AppId, $Paths  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -Activity 'uap6:LoaderSearchPathOverride' -Mutate {
@@ -581,16 +585,17 @@ function Add-MsixFirewallRule {
         [string]$Protocol,
         [string]$LocalPort = '*',
         [ValidateSet('domain','private','public','all')]
-        [string]$Profile = 'all',
+        [string]$FwProfile = 'all',
         [string]$OutputPath,
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     if (-not $PSCmdlet.ShouldProcess($PackagePath, "Add firewall rule for $AppId")) { return }
 
+    $null = $Executable, $Direction, $Protocol, $LocalPort, $FwProfile  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -Activity 'desktop2:FirewallRules' -Mutate {
@@ -621,7 +626,7 @@ function Add-MsixFirewallRule {
         $rule = $M.CreateElement('desktop2:Rule', $d2)
         $rule.SetAttribute('Direction',   $Direction)
         $rule.SetAttribute('IPProtocol',  $Protocol)
-        $rule.SetAttribute('Profile',     $Profile)
+        $rule.SetAttribute('Profile',     $FwProfile)
         if ($LocalPort -ne '*') {
             if ($LocalPort -match '^(\d+)-(\d+)$') {
                 $rule.SetAttribute('LocalPortMin', $matches[1])
@@ -667,11 +672,12 @@ function Add-MsixProtocolHandler {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     if (-not $PSCmdlet.ShouldProcess($PackagePath, "Add protocol $Name")) { return }
 
+    $null = $AppId, $DisplayName  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -Activity 'uap:Protocol' -Mutate {
@@ -738,11 +744,12 @@ function Add-MsixFileTypeAssociation {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     if (-not $PSCmdlet.ShouldProcess($PackagePath, "Add FTA $Name")) { return }
 
+    $null = $AppId, $DisplayName, $FileTypes  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -Activity 'uap:FileTypeAssociation' -Mutate {
@@ -815,11 +822,12 @@ function Add-MsixStartupTask {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     if (-not $PSCmdlet.ShouldProcess($PackagePath, "Add StartupTask $TaskId")) { return }
 
+    $null = $AppId, $DisplayName, $Enabled, $Executable  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -Activity 'uap5:StartupTask' -Mutate {
@@ -869,10 +877,10 @@ function Add-MsixFontExtension {
 
     .PARAMETER FontPaths
         Package-relative paths to .ttf / .otf / .ttc files (forward slashes).
-        Use Get-MsixFontCandidates to discover them.
+        Use Get-MsixFontCandidate to discover them.
 
     .EXAMPLE
-        $fonts = Get-MsixFontCandidates -PackagePath app.msix | Select-Object -ExpandProperty Path
+        $fonts = Get-MsixFontCandidate -PackagePath app.msix | Select-Object -ExpandProperty Path
         Add-MsixFontExtension -PackagePath app.msix -FontPaths $fonts -Pfx cert.pfx -PfxPassword 'P@ss'
     #>
     [CmdletBinding(SupportsShouldProcess)]
@@ -883,11 +891,12 @@ function Add-MsixFontExtension {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Add SharedFonts')) { return }
 
+    $null = $FontPaths  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -Activity 'uap4:SharedFonts' -Mutate {
@@ -955,6 +964,7 @@ function Set-MsixBrandMetadata {
             -Pfx cert.pfx -PfxPassword 'P@ss'
     #>
     [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '')]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
         [string]$DisplayName,
@@ -966,7 +976,7 @@ function Set-MsixBrandMetadata {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     if (-not ($DisplayName -or $PublisherDisplayName -or $Description -or $LogoPath)) {
@@ -974,6 +984,7 @@ function Set-MsixBrandMetadata {
     }
     if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Set brand metadata')) { return }
 
+    $null = $ApplyToApplications  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -Activity 'Brand metadata' -Mutate {
@@ -993,10 +1004,10 @@ function Set-MsixBrandMetadata {
             }
             $node.InnerText = $Value
         }
-        _SetChild $props 'DisplayName'           $DisplayName           $M.Package.NamespaceURI
-        _SetChild $props 'PublisherDisplayName'  $PublisherDisplayName  $M.Package.NamespaceURI
-        _SetChild $props 'Description'           $Description           $M.Package.NamespaceURI
-        _SetChild $props 'Logo'                  $LogoPath              $M.Package.NamespaceURI
+        _SetChild -Parent $props -LocalName 'DisplayName'           -Value $DisplayName           -Ns $M.Package.NamespaceURI
+        _SetChild -Parent $props -LocalName 'PublisherDisplayName'  -Value $PublisherDisplayName  -Ns $M.Package.NamespaceURI
+        _SetChild -Parent $props -LocalName 'Description'           -Value $Description           -Ns $M.Package.NamespaceURI
+        _SetChild -Parent $props -LocalName 'Logo'                  -Value $LogoPath              -Ns $M.Package.NamespaceURI
 
         if ($ApplyToApplications) {
             foreach ($app in @($M.Package.Applications.Application)) {
@@ -1074,7 +1085,7 @@ function Add-MsixShellVerbExtension {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword,
+        [SecureString]$PfxPassword,
         # Debug: copy the mutated AppxManifest.xml here BEFORE packing,
         # so you can inspect the exact XML that MakeAppx validates.
         [string]$SaveManifestTo
@@ -1086,6 +1097,7 @@ function Add-MsixShellVerbExtension {
     }
     if (-not $AssocName) { $AssocName = $VerbId }
 
+    $null = $AppId, $Parameters, $FileTypes  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
         -SaveManifestTo $SaveManifestTo `
@@ -1199,9 +1211,10 @@ function Add-MsixComServerExtension {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
+    $null = $AppId, $Servers  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
         -Activity 'Add COM server extension(s)' -Mutate {

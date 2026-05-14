@@ -1,4 +1,4 @@
-﻿BeforeAll {
+BeforeAll {
     Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psm1')) -Force
 }
 
@@ -6,15 +6,15 @@ AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
 Describe 'MFR builders' -Tag 'MFR' {
 
-    Context 'Get-MsixMfrKnownFolders' {
+    Context 'Get-MsixMfrKnownFolder' {
         It 'Mode Traditional contains ProgramFilesX64' {
-            (Get-MsixMfrKnownFolders -Mode Traditional) | Should -Contain 'ProgramFilesX64'
+            (Get-MsixMfrKnownFolder -Mode Traditional) | Should -Contain 'ProgramFilesX64'
         }
         It 'Mode Local contains ThisPCDesktopFolder' {
-            (Get-MsixMfrKnownFolders -Mode Local) | Should -Contain 'ThisPCDesktopFolder'
+            (Get-MsixMfrKnownFolder -Mode Local) | Should -Contain 'ThisPCDesktopFolder'
         }
         It 'Mode Both returns combined object with COW options' {
-            $r = Get-MsixMfrKnownFolders
+            $r = Get-MsixMfrKnownFolder
             $r.COW | Should -Contain 'enablePe'
             $r.COW | Should -Contain 'disableAll'
         }

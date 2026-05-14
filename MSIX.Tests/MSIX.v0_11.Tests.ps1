@@ -1,4 +1,4 @@
-﻿BeforeAll {
+BeforeAll {
     Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psm1')) -Force
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
@@ -47,7 +47,7 @@ Describe 'PSF builders added in v0.11' -Tag 'Builders' {
 Describe '-NoSign alias: <Name>' -Tag 'NoSign' -ForEach @(
     @{ Name = 'Add-MsixPsfV2' }
     @{ Name = 'Add-MsixCapability' }
-    @{ Name = 'Remove-MsixUninstallerArtifacts' }
+    @{ Name = 'Remove-MsixUninstallerArtifact' }
     @{ Name = 'Add-MsixSplashScreen' }
     @{ Name = 'Update-MsixPackageVersion' }
     @{ Name = 'Add-MsixVcRuntimeBundle' }
@@ -61,7 +61,7 @@ Describe '-NoSign alias: <Name>' -Tag 'NoSign' -ForEach @(
     @{ Name = 'Add-MsixStartupTask' }
     @{ Name = 'Add-MsixFontExtension' }
     @{ Name = 'Set-MsixBrandMetadata' }
-    @{ Name = 'Remove-MsixDesktopShortcuts' }
+    @{ Name = 'Remove-MsixDesktopShortcut' }
 ) {
     It 'has -NoSign alias' {
         $cmd = Get-Command $Name -Module MSIX -ErrorAction SilentlyContinue

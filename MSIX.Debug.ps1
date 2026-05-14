@@ -28,7 +28,7 @@ function Resolve-MsixDebugViewPath {
 }
 
 
-function Get-MsixDebugRecommendations {
+function Get-MsixDebugRecommendation {
     <#
     .SYNOPSIS
         Converts a compatibility report's findings into a numbered list of
@@ -54,6 +54,8 @@ function Get-MsixDebugRecommendations {
                     or piping into a .ps1 file.
     #>
     [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', '')]
+    [OutputType([object[]])]
     param(
         [Parameter(Mandatory)]
         $Report,
@@ -154,7 +156,7 @@ function Start-MsixDebugSession {
     .EXAMPLE
         Start-MsixDebugSession -PackagePath C:\Drop\app.msix -Install -LaunchProcMon -LaunchDebugView
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)]
         [string]$PackagePath,
@@ -165,6 +167,9 @@ function Start-MsixDebugSession {
         [string]$OutputDirectory
     )
 
+    if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Start MSIX Debug Session')) { return }
+
+    $null = $ProcessName  # forwarded to Process Monitor filter when -LaunchProcMon is used
     $fileinfo = Get-Item $PackagePath
     if (-not $OutputDirectory) {
         $OutputDirectory = Join-Path ([Environment]::GetFolderPath('Desktop')) "msix-debug-$($fileinfo.BaseName)"
@@ -176,18 +181,18 @@ function Start-MsixDebugSession {
 
     # 1) Analysis
     $report  = Invoke-MsixInvestigation -PackagePath $PackagePath
-    $commands = Get-MsixDebugRecommendations -Report $report -PackagePath $PackagePath
+    $commands = Get-MsixDebugRecommendation -Report $report -PackagePath $PackagePath
 
     $report   | Format-List | Out-File (Join-Path $OutputDirectory 'report.txt')
     $commands | Out-File    (Join-Path $OutputDirectory 'recommended-commands.ps1') -Encoding utf8
 
-    Write-Host ''
-    Write-Host '────────────────────────────────────────────────────────────────────' -ForegroundColor DarkGray
-    Write-Host ' RECOMMENDED COMMANDS (also saved to recommended-commands.ps1)'        -ForegroundColor Cyan
-    Write-Host '────────────────────────────────────────────────────────────────────' -ForegroundColor DarkGray
-    $commands | ForEach-Object { Write-Host $_ }
-    Write-Host '────────────────────────────────────────────────────────────────────' -ForegroundColor DarkGray
-    Write-Host ''
+    Write-Information ''
+    Write-Information '────────────────────────────────────────────────────────────────────'
+    Write-Information ' RECOMMENDED COMMANDS (also saved to recommended-commands.ps1)'
+    Write-Information '────────────────────────────────────────────────────────────────────'
+    $commands | ForEach-Object { Write-Information $_ }
+    Write-Information '────────────────────────────────────────────────────────────────────'
+    Write-Information ''
 
     # 2) Install
     if ($Install) {
@@ -208,7 +213,7 @@ function Start-MsixDebugSession {
             $pmArgs  = @('/AcceptEula', '/Quiet', '/Minimized', '/BackingFile', "`"$pmlPath`"")
             Start-Process $procmon -ArgumentList $pmArgs
             Write-MsixLog Info "Process Monitor capturing to $pmlPath"
-            Write-Host "  Stop later with: Start-Process '$procmon' -ArgumentList '/Terminate'" -ForegroundColor Yellow
+            Write-Information "  Stop later with: Start-Process '$procmon' -ArgumentList '/Terminate'"
         }
     }
 
@@ -272,6 +277,7 @@ function New-MsixSandboxConfig {
         Start-Process $wsb     # boots Windows Sandbox
     #>
     [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
         [string]$DropFolder,
@@ -359,7 +365,7 @@ function Start-MsixSandbox {
     .PARAMETER ConfigPath
         Use an existing .wsb file instead of generating one.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$DropFolder,
         [string]$PackageName,
@@ -377,6 +383,11 @@ function Start-MsixSandbox {
         $ConfigPath = New-MsixSandboxConfig -DropFolder $DropFolder -PackageName $PackageName
     }
 
+    if (-not $PSCmdlet.ShouldProcess($ConfigPath, 'Launch Windows Sandbox')) { return }
     Write-MsixLog Info "Launching Windows Sandbox with $ConfigPath"
     Start-Process -FilePath 'WindowsSandbox.exe' -ArgumentList "`"$ConfigPath`""
 }
+
+
+# Backward-compatible plural aliases
+Set-Alias Get-MsixDebugRecommendations Get-MsixDebugRecommendation

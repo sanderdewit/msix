@@ -55,7 +55,7 @@ $script:StandardScriptCatalogue = [ordered]@{
 }
 
 
-function Get-MsixStandardScripts {
+function Get-MsixStandardScript {
     <#
     .SYNOPSIS
         Lists the standard-script templates this module ships with.
@@ -113,7 +113,7 @@ function New-MsixStandardScript {
         provided code-signing certificate so the package can run it under
         AllSigned/RemoteSigned execution policies.
 
-        See Get-MsixStandardScripts for the list of templates.
+        See Get-MsixStandardScript for the list of templates.
 
     .PARAMETER Name
         Template name (e.g. 'CreateShortcut').
@@ -146,7 +146,7 @@ function New-MsixStandardScript {
         [Parameter(Mandatory)]
         [string]$OutputPath,
         [string]$Pfx,
-        [string]$PfxPassword,
+        [SecureString]$PfxPassword,
         [string]$TimestampUrl = 'http://timestamp.digicert.com'
     )
 
@@ -202,21 +202,21 @@ function Set-MsixScriptSignature {
         Set-MsixScriptSignature -ScriptPath createshortcut.ps1 -Pfx cert.pfx -PfxPassword 'P@ss'
     #>
     [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
         [string]$ScriptPath,
         [Parameter(Mandatory)]
         [string]$Pfx,
         [Parameter(Mandatory)]
-        [string]$PfxPassword,
+        [SecureString]$PfxPassword,
         [string]$TimestampUrl = 'http://timestamp.digicert.com'
     )
 
     if (-not (Test-Path $ScriptPath)) { throw "Script not found: $ScriptPath" }
     if (-not (Test-Path $Pfx))        { throw "PFX not found: $Pfx" }
 
-    $sec  = ConvertTo-SecureString $PfxPassword -AsPlainText -Force
-    $cert = Get-PfxCertificate -FilePath $Pfx -Password $sec -ErrorAction Stop
+    $cert = Get-PfxCertificate -FilePath $Pfx -Password $PfxPassword -ErrorAction Stop
 
     $sig = Set-AuthenticodeSignature -FilePath $ScriptPath -Certificate $cert `
                                      -TimestampServer $TimestampUrl `
@@ -248,7 +248,7 @@ function Add-MsixStandardScript {
         Application Id to attach the startScript to.
 
     .PARAMETER Name
-        Standard-script template name (see Get-MsixStandardScripts).
+        Standard-script template name (see Get-MsixStandardScript).
 
     .PARAMETER Parameters
         Hashtable of values to substitute into the template.
@@ -292,7 +292,7 @@ function Add-MsixStandardScript {
         [int]$Timeout = 0,
         [switch]$EndScript,
         [string]$Pfx,
-        [string]$PfxPassword,
+        [SecureString]$PfxPassword,
         [string]$OutputPath,
         [Alias('NoSign')]
         [switch]$SkipSigning
@@ -344,3 +344,7 @@ function Add-MsixStandardScript {
     }
 }
 
+
+
+# Backward-compatible plural aliases
+Set-Alias Get-MsixStandardScripts Get-MsixStandardScript

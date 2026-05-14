@@ -1,4 +1,4 @@
-﻿BeforeAll {
+BeforeAll {
     Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psm1')) -Force
     $script:Tmp = Join-Path $env:TEMP "msix-scripts-$([guid]::NewGuid().ToString('N').Substring(0,8))"
     New-Item $script:Tmp -ItemType Directory -Force | Out-Null
@@ -10,8 +10,8 @@ AfterAll {
 
 Describe 'Standard scripts' -Tag 'Scripts' {
 
-    It 'Get-MsixStandardScripts lists all five templates' {
-        $list = Get-MsixStandardScripts
+    It 'Get-MsixStandardScript lists all five templates' {
+        $list = Get-MsixStandardScript
         $list.Name | Should -Contain 'CreateShortcut'
         $list.Name | Should -Contain 'CopyIconToAppData'
         $list.Name | Should -Contain 'CleanupOldUserData'
@@ -20,7 +20,7 @@ Describe 'Standard scripts' -Tag 'Scripts' {
     }
 
     It 'Each catalogue entry points to a real template file' {
-        foreach ($e in Get-MsixStandardScripts) {
+        foreach ($e in Get-MsixStandardScript) {
             Test-Path $e.Template | Should -BeTrue
         }
     }

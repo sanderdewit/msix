@@ -83,7 +83,7 @@ $script:MsixLimitations = @(
         Source      = 'mixed'
         Severity    = 'medium'
         Description = 'The MSIX-installed shortcut points at the Application entry, with no native way to inject command-line arguments.'
-        Workaround  = "PSF arguments field (New-MsixPsfArguments + Add-MsixPsfV2)."
+        Workaround  = "PSF arguments field (New-MsixPsfArgument + Add-MsixPsfV2)."
     },
     @{
         Id          = 'multi-pkg-fileassoc'
@@ -136,7 +136,7 @@ $script:MsixLimitations = @(
 )
 
 
-function Get-MsixLimitations {
+function Get-MsixLimitation {
     <#
     .SYNOPSIS
         Lists known MSIX limitations and their workarounds.
@@ -152,9 +152,9 @@ function Get-MsixLimitations {
         items that are not directly documented by Microsoft).
 
     .EXAMPLE
-        Get-MsixLimitations -Severity blocker
+        Get-MsixLimitation -Severity blocker
     .EXAMPLE
-        Get-MsixLimitations -ExcludeVendor | Format-Table Id, Severity, Title
+        Get-MsixLimitation -ExcludeVendor | Format-Table Id, Severity, Title
     #>
     [CmdletBinding()]
     param(
@@ -174,7 +174,7 @@ function Get-MsixLimitations {
 }
 
 
-function Test-MsixAgainstLimitations {
+function Test-MsixAgainstLimitation {
     <#
     .SYNOPSIS
         Inspects an MSIX file and reports which documented limitations are
@@ -204,8 +204,8 @@ function Test-MsixAgainstLimitations {
         # cwd-system32 / install-dir-readonly: any executable in a subfolder + writable companions
         foreach ($app in @($manifest.Package.Applications.Application)) {
             if ($app.Executable -and $app.Executable.Contains('\')) {
-                $hits += (Get-MsixLimitations -Id 'cwd-system32')
-                $hits += (Get-MsixLimitations -Id 'install-dir-readonly')
+                $hits += (Get-MsixLimitation -Id 'cwd-system32')
+                $hits += (Get-MsixLimitation -Id 'install-dir-readonly')
                 break
             }
         }
@@ -214,31 +214,31 @@ function Test-MsixAgainstLimitations {
         if ($manifest.Package.Extensions.Extension -or
             ($manifest.Package.Applications.Application.Extensions.Extension |
                 Where-Object { $_.Category -eq 'windows.comServer' })) {
-            $hits += (Get-MsixLimitations -Id 'com-discovery')
+            $hits += (Get-MsixLimitation -Id 'com-discovery')
         }
 
         # no-windows-services-deps: any windows.service extension
         if ($manifest.Package.Applications.Application.Extensions.Extension |
             Where-Object { $_.Category -eq 'windows.service' }) {
-            $hits += (Get-MsixLimitations -Id 'no-windows-services-deps')
-            $hits += (Get-MsixLimitations -Id 'service-elevation')
+            $hits += (Get-MsixLimitation -Id 'no-windows-services-deps')
+            $hits += (Get-MsixLimitation -Id 'service-elevation')
         }
 
         # protocol handlers
         if ($manifest.Package.Applications.Application.Extensions.Extension |
             Where-Object { $_.Category -eq 'windows.protocol' }) {
-            $hits += (Get-MsixLimitations -Id 'protocol-handler-private')
+            $hits += (Get-MsixLimitation -Id 'protocol-handler-private')
         }
 
         # multi-package file association
         if ($manifest.Package.Applications.Application.Extensions.Extension |
             Where-Object { $_.Category -eq 'windows.fileTypeAssociation' }) {
-            $hits += (Get-MsixLimitations -Id 'multi-pkg-fileassoc')
+            $hits += (Get-MsixLimitation -Id 'multi-pkg-fileassoc')
         }
 
         # always applicable for any packaged Win32 app
-        $hits += (Get-MsixLimitations -Id 'hklm-redirected')
-        $hits += (Get-MsixLimitations -Id 'appdata-private')
+        $hits += (Get-MsixLimitation -Id 'hklm-redirected')
+        $hits += (Get-MsixLimitation -Id 'appdata-private')
 
         return $hits | Sort-Object Id -Unique
 
@@ -246,3 +246,8 @@ function Test-MsixAgainstLimitations {
         Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
+
+
+# Backward-compatible plural aliases
+Set-Alias Get-MsixLimitations Get-MsixLimitation
+Set-Alias Test-MsixAgainstLimitations Test-MsixAgainstLimitation

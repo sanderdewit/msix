@@ -1,4 +1,4 @@
-﻿BeforeAll {
+BeforeAll {
     Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psm1')) -Force
 }
 
@@ -6,16 +6,16 @@ AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
 Describe 'Heuristic catalogues (v0.9)' -Tag 'Heuristics' {
 
-    Context 'Get-MsixKnownCapabilities' {
+    Context 'Get-MsixKnownCapability' {
         It 'Returns at least 10 entries' {
-            (Get-MsixKnownCapabilities).Count | Should -BeGreaterOrEqual 10
+            (Get-MsixKnownCapability).Count | Should -BeGreaterOrEqual 10
         }
         It 'Tags rescap entries correctly' {
-            $rescap = Get-MsixKnownCapabilities | Where-Object Name -eq 'runFullTrust'
+            $rescap = Get-MsixKnownCapability | Where-Object Name -eq 'runFullTrust'
             $rescap.Namespace | Should -Be 'rescap'
         }
         It 'Tags standard entries correctly' {
-            $std = Get-MsixKnownCapabilities | Where-Object Name -eq 'internetClient'
+            $std = Get-MsixKnownCapability | Where-Object Name -eq 'internetClient'
             $std.Namespace | Should -Be 'standard'
         }
     }

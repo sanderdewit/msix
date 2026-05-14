@@ -1,4 +1,4 @@
-﻿BeforeAll {
+BeforeAll {
     Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psm1')) -Force
 
     $script:SampleManifest = @'
@@ -59,10 +59,10 @@ Describe 'Manifest helpers' -Tag 'Manifest' {
         }
     }
 
-    Context 'Get-MsixManifestApplications' {
+    Context 'Get-MsixManifestApplication' {
         It 'Returns Application elements as an array' {
             [xml]$x = $script:SampleManifest
-            $apps = Get-MsixManifestApplications -Manifest $x
+            $apps = Get-MsixManifestApplication -Manifest $x
             ,$apps -is [array]   | Should -BeTrue
             @($apps).Count       | Should -Be 1
             @($apps)[0].Id       | Should -Be 'App'

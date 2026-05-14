@@ -2,13 +2,13 @@
 # Auto-detection helpers
 # -----------------------------------------------------------------------------
 # Read-only scanners that look at an unpacked MSIX and surface things the
-# operator probably wants to act on. They feed into Get-MsixHeuristicFindings
+# operator probably wants to act on. They feed into Get-MsixHeuristicFinding
 # and (via Invoke-MsixAutoFixFromAnalysis) into the autofix planner.
 # =============================================================================
 
 #region Fonts ----------------------------------------------------------------
 
-function Get-MsixFontCandidates {
+function Get-MsixFontCandidate {
     <#
     .SYNOPSIS
         Lists font files inside the package (.ttf / .otf / .ttc) — candidates
@@ -48,7 +48,7 @@ function Get-MsixFontCandidates {
 
 #region Desktop shortcuts inside the package --------------------------------
 
-function Get-MsixDesktopShortcutCandidates {
+function Get-MsixDesktopShortcutCandidate {
     <#
     .SYNOPSIS
         Lists .lnk files dropped under the package's virtualized public Desktop
@@ -87,7 +87,7 @@ function Get-MsixDesktopShortcutCandidates {
 }
 
 
-function Remove-MsixDesktopShortcuts {
+function Remove-MsixDesktopShortcut {
     <#
     .SYNOPSIS
         Removes shortcut files (.lnk) the original installer dropped under
@@ -101,7 +101,7 @@ function Remove-MsixDesktopShortcuts {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     $toolsRoot = Get-MsixToolsRoot
@@ -159,7 +159,7 @@ $script:DllToCapability = @{
     'crypt32.dll'  = 'sharedUserCertificates'    # niche, may not always apply
 }
 
-function Get-MsixCapabilityHints {
+function Get-MsixCapabilityHint {
     <#
     .SYNOPSIS
         Suggests a minimum capability set based on the DLLs imported by
@@ -191,7 +191,7 @@ function Get-MsixCapabilityHints {
                     foreach ($d in $allDlls) {
                         if ($txt -match [regex]::Escape($d)) { $null = $hits.Add($script:DllToCapability[$d]) }
                     }
-                } catch {}
+                } catch { Write-MsixLog Debug "PE scan skipped for file: $_" }
             }
         return @($hits) | Sort-Object -Unique
     } finally {
@@ -202,7 +202,7 @@ function Get-MsixCapabilityHints {
 
 #region Nested package detection ---------------------------------------------
 
-function Get-MsixNestedPackageCandidates {
+function Get-MsixNestedPackageCandidate {
     <#
     .SYNOPSIS
         Lists .msix/.appx/.msixbundle/.appxbundle files found inside the package.
@@ -243,3 +243,11 @@ function Get-MsixNestedPackageCandidates {
     }
 }
 #endregion
+
+
+# Backward-compatible plural aliases
+Set-Alias Get-MsixFontCandidates Get-MsixFontCandidate
+Set-Alias Get-MsixDesktopShortcutCandidates Get-MsixDesktopShortcutCandidate
+Set-Alias Remove-MsixDesktopShortcuts Remove-MsixDesktopShortcut
+Set-Alias Get-MsixCapabilityHints Get-MsixCapabilityHint
+Set-Alias Get-MsixNestedPackageCandidates Get-MsixNestedPackageCandidate

@@ -36,14 +36,14 @@ function _ComparePackageManifest {
             })
         }
     }
-    _Add 'Identity.Name'                  $LeftManifest.Package.Identity.Name      $RightManifest.Package.Identity.Name
-    _Add 'Identity.Publisher'             $LeftManifest.Package.Identity.Publisher $RightManifest.Package.Identity.Publisher
-    _Add 'Identity.Version'               $LeftManifest.Package.Identity.Version   $RightManifest.Package.Identity.Version
-    _Add 'Identity.ProcessorArchitecture' $LeftManifest.Package.Identity.ProcessorArchitecture $RightManifest.Package.Identity.ProcessorArchitecture
-    _Add 'Properties.DisplayName'         $LeftManifest.Package.Properties.DisplayName        $RightManifest.Package.Properties.DisplayName
-    _Add 'Properties.PublisherDisplayName' $LeftManifest.Package.Properties.PublisherDisplayName $RightManifest.Package.Properties.PublisherDisplayName
-    _Add 'Dependencies.MinVersion'        $LeftManifest.Package.Dependencies.TargetDeviceFamily.MinVersion       $RightManifest.Package.Dependencies.TargetDeviceFamily.MinVersion
-    _Add 'Dependencies.MaxVersionTested'  $LeftManifest.Package.Dependencies.TargetDeviceFamily.MaxVersionTested $RightManifest.Package.Dependencies.TargetDeviceFamily.MaxVersionTested
+    _Add -Field 'Identity.Name'                  -Left $LeftManifest.Package.Identity.Name      -Right $RightManifest.Package.Identity.Name
+    _Add -Field 'Identity.Publisher'             -Left $LeftManifest.Package.Identity.Publisher -Right $RightManifest.Package.Identity.Publisher
+    _Add -Field 'Identity.Version'               -Left $LeftManifest.Package.Identity.Version   -Right $RightManifest.Package.Identity.Version
+    _Add -Field 'Identity.ProcessorArchitecture' -Left $LeftManifest.Package.Identity.ProcessorArchitecture -Right $RightManifest.Package.Identity.ProcessorArchitecture
+    _Add -Field 'Properties.DisplayName'         -Left $LeftManifest.Package.Properties.DisplayName        -Right $RightManifest.Package.Properties.DisplayName
+    _Add -Field 'Properties.PublisherDisplayName' -Left $LeftManifest.Package.Properties.PublisherDisplayName -Right $RightManifest.Package.Properties.PublisherDisplayName
+    _Add -Field 'Dependencies.MinVersion'        -Left $LeftManifest.Package.Dependencies.TargetDeviceFamily.MinVersion       -Right $RightManifest.Package.Dependencies.TargetDeviceFamily.MinVersion
+    _Add -Field 'Dependencies.MaxVersionTested'  -Left $LeftManifest.Package.Dependencies.TargetDeviceFamily.MaxVersionTested -Right $RightManifest.Package.Dependencies.TargetDeviceFamily.MaxVersionTested
 
     # Capability set diff
     $leftCaps  = @($LeftManifest.Package.Capabilities.Capability  | ForEach-Object { $_.Name }) | Sort-Object
@@ -91,7 +91,7 @@ function _CompareFileSets {
                     $stream = [IO.File]::OpenRead($_.FullName)
                     try { $hash = [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-','') }
                     finally { $stream.Dispose() }
-                } catch {}
+                } catch { Write-MsixLog Debug "Hash failed for $($_.FullName): $_" }
                 [pscustomobject]@{
                     Rel   = $rel
                     Size  = $_.Length

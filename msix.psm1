@@ -71,7 +71,7 @@ function Get-MsixInfo {
 
         if ($Detailed) {
             $result | Add-Member -NotePropertyName Applications `
-                                 -NotePropertyValue @(Get-MsixManifestApplications -Manifest $appinfo)
+                                 -NotePropertyValue @(Get-MsixManifestApplication -Manifest $appinfo)
         }
 
         return $result
@@ -161,7 +161,7 @@ function Update-MsixSigner {
         [string]$PackagePath,
         [string]$Publisher,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     PROCESS {
@@ -317,7 +317,7 @@ function Add-MsixAlias {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     PROCESS {
@@ -432,7 +432,7 @@ function Remove-MsixStartMenuEntry {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     PROCESS {
@@ -499,7 +499,7 @@ function Add-MsixStartMenuFolder {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     PROCESS {
@@ -557,7 +557,7 @@ Export-ModuleMember -Function @(
     'Select-MsixManifestNodes'
     'Save-MsixManifest'
     'Add-MsixManifestNamespace'
-    'Get-MsixManifestApplications'
+    'Get-MsixManifestApplication'
     'Get-MsixManifestApplication'
     'Get-MsixManifestNamespaceUri'
     'Set-MsixManifestMaxVersionTested'
@@ -566,7 +566,7 @@ Export-ModuleMember -Function @(
     'New-MsixPsfRegLegacyConfig'
     'New-MsixPsfEnvVarConfig'
     'New-MsixPsfTraceConfig'
-    'New-MsixPsfArguments'
+    'New-MsixPsfArgument'
     'New-MsixPsfStartScriptConfig'
     'New-MsixPsfDynamicLibraryConfig'
     'New-MsixPsfWaitForDebuggerConfig'
@@ -577,7 +577,7 @@ Export-ModuleMember -Function @(
     'Get-MsixCompatibilityReport'
     'Get-MsixStaticAnalysis'
     'Invoke-MsixProcMonCapture'
-    'Get-MsixProcMonFailures'
+    'Get-MsixProcMonFailure'
     'Add-MsixDiagnosticTrace'
     'Resolve-MsixProcMonPath'
     # AppData / out-of-package
@@ -591,18 +591,18 @@ Export-ModuleMember -Function @(
     'Invoke-MsixAccelerator'
     'ConvertFrom-MsixYamlAccelerator'
     # PSF binaries / Procmon / SDK
-    'Install-MsixPsfBinaries'
-    'Update-MsixPsfBinaries'
+    'Install-MsixPsfBinary'
+    'Update-MsixPsfBinary'
     'Get-MsixPsfBinariesVersion'
     'Install-MsixProcMon'
     'Update-MsixProcMon'
-    'Install-MsixSdkTools'
-    'Update-MsixSdkTools'
+    'Install-MsixSdkTool'
+    'Update-MsixSdkTool'
     'Get-MsixSdkToolsVersion'
     'Initialize-MsixToolchain'
     # Debug session
     'Start-MsixDebugSession'
-    'Get-MsixDebugRecommendations'
+    'Get-MsixDebugRecommendation'
     'New-MsixSandboxConfig'
     'Start-MsixSandbox'
     'Resolve-MsixDebugViewPath'
@@ -615,21 +615,21 @@ Export-ModuleMember -Function @(
     # App Isolation (Win32)
     'Add-MsixAppIsolation'
     'Remove-MsixAppIsolation'
-    'Get-MsixIsolationCapabilities'
+    'Get-MsixIsolationCapability'
     # Limitations / know-your-installer
-    'Get-MsixLimitations'
-    'Test-MsixAgainstLimitations'
+    'Get-MsixLimitation'
+    'Test-MsixAgainstLimitation'
     # Trace Fixup parser
     'ConvertFrom-MsixTraceLine'
     'Get-MsixTraceOutput'
-    'Get-MsixTraceFailures'
-    'ConvertFrom-MsixTraceToFindings'
+    'Get-MsixTraceFailure'
+    'ConvertFrom-MsixTraceToFinding'
     # msixmgr binary management
     'Install-MsixMgr'
     'Update-MsixMgr'
     'Get-MsixMgrVersion'
     # Standard scripts (PSADT-flavoured)
-    'Get-MsixStandardScripts'
+    'Get-MsixStandardScript'
     'New-MsixStandardScript'
     'Set-MsixScriptSignature'
     'Add-MsixStandardScript'
@@ -637,30 +637,30 @@ Export-ModuleMember -Function @(
     'New-MsixMfrTraditionalRule'
     'New-MsixMfrLocalRule'
     'New-MsixPsfMfrConfig'
-    'Get-MsixMfrKnownFolders'
+    'Get-MsixMfrKnownFolder'
     # VC++ runtime detection / bundling
-    'Get-MsixVcRuntimeReferences'
+    'Get-MsixVcRuntimeReference'
     'Add-MsixVcRuntimeBundle'
     # TMEditX-style heuristics
-    'Get-MsixKnownCapabilities'
+    'Get-MsixKnownCapability'
     'Add-MsixCapability'
-    'Get-MsixUninstallerCandidates'
-    'Get-MsixUninstallRegistryEntries'
-    'Remove-MsixUninstallerArtifacts'
-    'Get-MsixRunKeyEntries'
-    'Get-MsixShellContextMenuEntries'
-    'Get-MsixComServerEntries'
-    'Get-MsixAliasCandidates'
+    'Get-MsixUninstallerCandidate'
+    'Get-MsixUninstallRegistryEntry'
+    'Remove-MsixUninstallerArtifact'
+    'Get-MsixRunKeyEntry'
+    'Get-MsixShellContextMenuEntry'
+    'Get-MsixComServerEntry'
+    'Get-MsixAliasCandidate'
     'Add-MsixSplashScreen'
     'Update-MsixPackageVersion'
-    'Get-MsixHeuristicFindings'
+    'Get-MsixHeuristicFinding'
     'Invoke-MsixAutoFix'
     'Invoke-MsixAutoFixFromAnalysis'
     # Auto-detection scanners (v0.11)
-    'Get-MsixFontCandidates'
-    'Get-MsixDesktopShortcutCandidates'
-    'Get-MsixCapabilityHints'
-    'Get-MsixNestedPackageCandidates'
+    'Get-MsixFontCandidate'
+    'Get-MsixDesktopShortcutCandidate'
+    'Get-MsixCapabilityHint'
+    'Get-MsixNestedPackageCandidate'
     # Package compare
     'Compare-MsixPackage'
     # Manifest-only fixers (alternatives to PSF)
@@ -676,7 +676,7 @@ Export-ModuleMember -Function @(
     'Set-MsixBrandMetadata'
     'Add-MsixShellVerbExtension'
     'Add-MsixComServerExtension'
-    'Remove-MsixDesktopShortcuts'
+    'Remove-MsixDesktopShortcut'
     # Signing
     'Invoke-MsixSigning'
     # Context menus

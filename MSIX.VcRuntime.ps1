@@ -36,7 +36,7 @@ $script:KnownVcRuntimeDlls = @(
 )
 
 
-function Get-MsixVcRuntimeReferences {
+function Get-MsixVcRuntimeReference {
     <#
     .SYNOPSIS
         Walks the unpacked package and returns:
@@ -163,7 +163,7 @@ function Add-MsixVcRuntimeBundle {
         relies on host-side WinSxS / VCRedist.
 
     .DESCRIPTION
-        Detects the missing VC runtime DLLs (per Get-MsixVcRuntimeReferences),
+        Detects the missing VC runtime DLLs (per Get-MsixVcRuntimeReference),
         finds them under -SourceFolder (architecture-aware), copies them next
         to the application executable(s), repacks, and signs.
 
@@ -197,7 +197,7 @@ function Add-MsixVcRuntimeBundle {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     if (-not (Test-Path $SourceFolder)) {
@@ -214,7 +214,7 @@ function Add-MsixVcRuntimeBundle {
 
         $null = Test-MsixManifest "$workspace\AppxManifest.xml"
         [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
-        $apps          = @(Get-MsixManifestApplications $manifest)
+        $apps          = @(Get-MsixManifestApplication $manifest)
 
         # Determine architecture if auto
         if ($Architecture -eq 'auto') {
@@ -226,7 +226,7 @@ function Add-MsixVcRuntimeBundle {
 
         # Resolve DLLs to copy
         if (-not $Names) {
-            $analysis = Get-MsixVcRuntimeReferences -PackagePath $PackagePath
+            $analysis = Get-MsixVcRuntimeReference -PackagePath $PackagePath
             $Names    = $analysis.Missing
             if (-not $Names) {
                 Write-MsixLog Info 'No missing VC runtime DLLs detected; nothing to bundle.'
@@ -278,3 +278,7 @@ function Add-MsixVcRuntimeBundle {
     }
 }
 
+
+
+# Backward-compatible plural aliases
+Set-Alias Get-MsixVcRuntimeReferences Get-MsixVcRuntimeReference

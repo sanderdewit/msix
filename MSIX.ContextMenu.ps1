@@ -74,14 +74,15 @@
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
+
+    if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Add Legacy Context Menu')) { return }
 
     # Two GUID formats required by the manifest schema:
     #   com:Class Id                    → ST_GUID  → bare,   no braces
-    #   desktop9:ExtensionHandler Clsid → ST_CLSID → braced: {XXXXXXXX-...}
-    $ClsidBare   = $Clsid.Trim().Trim('{', '}')
-    $ClsidBraced = "{$ClsidBare}"
+    #   desktop9:ExtensionHandler Clsid → ST_CLSID → bare: no braces
+    $ClsidBare = $Clsid.Trim().Trim('{', '}')
 
     # Resolve MSIX folder-variable prefixes ([{ProgramFilesX64}]\...) to VFS paths.
     # Callers may pass the raw registry path; normalise it defensively.
@@ -103,6 +104,7 @@
         }
     }
 
+    $null = $AppId, $DisplayName, $FileTypes, $MenuType  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
         -Activity 'Add Legacy Context Menu' -Mutate {
@@ -179,7 +181,7 @@
         foreach ($type in $FileTypes) {
             $extHandler = $manifest.CreateElement('desktop9:ExtensionHandler', $d9Uri)
             $extHandler.SetAttribute('Type',  $type)
-            $extHandler.SetAttribute('Clsid', $ClsidBare) 
+            $extHandler.SetAttribute('Clsid', $ClsidBare)
             $null = $handler.AppendChild($extHandler)
         }
         $null = $d9Ext.AppendChild($handler)
@@ -241,12 +243,16 @@ function Add-MsixFileExplorerContextMenu {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
-    # desktop4:Verb Clsid is ST_CLSID — requires braces {XXXXXXXX-...}
-    $VerbClsid = '{' + $VerbClsid.Trim().Trim('{', '}') + '}'
+    if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Add File Explorer Context Menu')) { return }
 
+    # desktop4:Verb Clsid is ST_CLSID
+    #remove by Sander, because unnecessary
+	$VerbClsid = $verbClsid.Trim().Trim('{', '}')
+
+    $null = $AppId, $FileTypes, $VerbId  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
         -Activity 'Add File Explorer Context Menu' -Mutate {
@@ -277,7 +283,7 @@ function Add-MsixFileExplorerContextMenu {
 
             $verbNode = $manifest.CreateElement('desktop4:Verb', $d4Uri)
             $verbNode.SetAttribute('Id',    $VerbId)
-            $verbNode.SetAttribute('Clsid', $VerbClsid)  # ST_CLSID — with braces
+            $verbNode.SetAttribute('Clsid', $VerbClsid)  # ST_CLSID — without braces
 
             $null = $itemType.AppendChild($verbNode)
             $null = $ctxMenus.AppendChild($itemType)

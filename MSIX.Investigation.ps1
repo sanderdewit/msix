@@ -68,8 +68,10 @@ function Add-MsixDiagnosticTrace {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
+
+    if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Add Diagnostic Trace')) { return }
 
     $trace = New-MsixPsfTraceConfig -FilesystemLevel 'allFailures' -RegistryLevel 'allFailures'
     Add-MsixPsfV2 -PackagePath $PackagePath -Fixups @($trace) `
@@ -131,6 +133,7 @@ function Invoke-MsixProcMonCapture {
         See https://learn.microsoft.com/sysinternals/downloads/procmon
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)]
         [string]$PackageFamilyName,
@@ -140,6 +143,7 @@ function Invoke-MsixProcMonCapture {
         [int]$DurationSeconds = 30,
         [string]$ProcessName
     )
+    $null = $ProcessName  # referenced in closure
 
     $procmon = Resolve-MsixProcMonPath
     if (-not $procmon) {
@@ -174,7 +178,7 @@ function Invoke-MsixProcMonCapture {
 }
 
 
-function Get-MsixProcMonFailures {
+function Get-MsixProcMonFailure {
     <#
     .SYNOPSIS
         Converts a Procmon PML log to CSV via procmon.exe and returns failure
@@ -201,7 +205,7 @@ function Get-MsixProcMonFailures {
     $csv = [System.IO.Path]::ChangeExtension($PmlPath, '.csv')
     Write-MsixLog Info "Converting PML -> CSV: $csv"
 
-    $r = Invoke-MsixProcess $procmon "/OpenLog `"$PmlPath`" /SaveAs `"$csv`" /SaveApplyFilter /Quiet /Terminate"
+    $null = Invoke-MsixProcess $procmon "/OpenLog `"$PmlPath`" /SaveAs `"$csv`" /SaveApplyFilter /Quiet /Terminate"
     if (-not (Test-Path $csv)) {
         throw "Procmon failed to export CSV from $PmlPath"
     }
@@ -331,9 +335,9 @@ function Get-MsixStaticAnalysis {
         # Merge in TMEditX-style heuristic findings (uninstaller artefacts,
         # Run keys, alias suggestions, missing VC runtimes). Defined in
         # MSIX.Heuristics.ps1 — same module scope, so just call it.
-        if (Get-Command Get-MsixHeuristicFindings -ErrorAction SilentlyContinue) {
+        if (Get-Command Get-MsixHeuristicFinding -ErrorAction SilentlyContinue) {
             try {
-                $heuristicFindings = Get-MsixHeuristicFindings -PackagePath $PackagePath
+                $heuristicFindings = Get-MsixHeuristicFinding -PackagePath $PackagePath
                 if ($heuristicFindings) { $findings += @($heuristicFindings) }
             } catch {
                 Write-MsixLog Debug "Heuristics raised: $_"
@@ -383,13 +387,13 @@ function Get-MsixCompatibilityReport {
     $traceFindings = @()
     if ($TraceLogPath) {
         Write-MsixLog Info "Trace analysis: $TraceLogPath"
-        $traceFindings = @(Get-MsixTraceFailures -Path $TraceLogPath | ConvertFrom-MsixTraceToFindings)
+        $traceFindings = @(Get-MsixTraceFailure -Path $TraceLogPath | ConvertFrom-MsixTraceToFinding)
     }
 
     $dynamic = @()
     if ($PmlPath) {
         Write-MsixLog Info "Dynamic analysis: $PmlPath"
-        $failures = Get-MsixProcMonFailures -PmlPath $PmlPath -ProcessName $ProcessName
+        $failures = Get-MsixProcMonFailure -PmlPath $PmlPath -ProcessName $ProcessName
         foreach ($f in $failures) {
             foreach ($map in $script:FailurePatternMap) {
                 $combined = "$($f.Result) $($f.Path) $($f.Detail)"
@@ -460,8 +464,8 @@ function Get-MsixCompatibilityReport {
 
     # Generate copy-paste-ready PowerShell for the operator. Defined in
     # MSIX.Debug.ps1 and is dot-sourced into the same module scope.
-    if (Get-Command Get-MsixDebugRecommendations -ErrorAction SilentlyContinue) {
-        $report.RecommendedCommands = Get-MsixDebugRecommendations -Report $report -PackagePath $PackagePath
+    if (Get-Command Get-MsixDebugRecommendation -ErrorAction SilentlyContinue) {
+        $report.RecommendedCommands = Get-MsixDebugRecommendation -Report $report -PackagePath $PackagePath
     }
 
     return $report
@@ -524,3 +528,7 @@ function Invoke-MsixInvestigation {
                                        -TraceLogPath $TraceLogPath `
                                        -ProcessName $ProcessName
 }
+
+
+# Backward-compatible plural aliases
+Set-Alias Get-MsixProcMonFailures Get-MsixProcMonFailure

@@ -1,14 +1,16 @@
-﻿enum LogLevel { Debug; Info; Warning; Error }
+enum LogLevel { Debug; Info; Warning; Error }
 
 $script:LogLevel = [LogLevel]::Info
 $script:LogFile  = $null
 
 function Set-MsixLogLevel {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param([LogLevel]$Level)
     $script:LogLevel = $Level
 }
 
 function Set-MsixLogFile {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param([string]$Path)
     $script:LogFile = $Path
 }

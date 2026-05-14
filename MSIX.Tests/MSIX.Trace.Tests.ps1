@@ -1,4 +1,4 @@
-﻿BeforeAll {
+BeforeAll {
     Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psm1')) -Force
 }
 
@@ -35,7 +35,7 @@ Describe 'Trace Fixup parser' -Tag 'Trace' {
         }
     }
 
-    Context 'Get-MsixTraceFailures' {
+    Context 'Get-MsixTraceFailure' {
         BeforeAll {
             $script:LogPath = Join-Path $env:TEMP "trace-$([guid]::NewGuid().ToString('N').Substring(0,8)).log"
             @(
@@ -49,7 +49,7 @@ Describe 'Trace Fixup parser' -Tag 'Trace' {
         AfterAll { Remove-Item $script:LogPath -Force -ErrorAction SilentlyContinue }
 
         It 'Returns only failing rows' {
-            $f = Get-MsixTraceFailures -Path $script:LogPath
+            $f = Get-MsixTraceFailure -Path $script:LogPath
             $f.Count | Should -Be 3
             $f.Result | Should -Not -Contain 'SUCCESS'
         }
@@ -60,7 +60,7 @@ Describe 'Trace Fixup parser' -Tag 'Trace' {
         }
     }
 
-    Context 'ConvertFrom-MsixTraceToFindings' {
+    Context 'ConvertFrom-MsixTraceToFinding' {
         It 'Maps WindowsApps writes to FileRedirectionFixup' {
             $f = [pscustomobject]@{
                 Function = 'CreateFileW'
@@ -69,7 +69,7 @@ Describe 'Trace Fixup parser' -Tag 'Trace' {
                 Category = 'filesystem'
                 ProcessId= 1; ThreadId='A'
             }
-            $finding = ConvertFrom-MsixTraceToFindings -Failures @($f)
+            $finding = ConvertFrom-MsixTraceToFinding -Failures @($f)
             $finding.Category | Should -Be 'FileRedirectionFixup'
             $finding.Severity | Should -Be 'Error'
         }
@@ -81,7 +81,7 @@ Describe 'Trace Fixup parser' -Tag 'Trace' {
                 Category = 'filesystem'
                 ProcessId= 1; ThreadId='A'
             }
-            $finding = ConvertFrom-MsixTraceToFindings -Failures @($f)
+            $finding = ConvertFrom-MsixTraceToFinding -Failures @($f)
             $finding.Category | Should -Be 'WorkingDirectory'
         }
         It 'Maps HKLM access denied to RegLegacyFixups' {
@@ -92,13 +92,13 @@ Describe 'Trace Fixup parser' -Tag 'Trace' {
                 Category = 'registry'
                 ProcessId= 1; ThreadId='A'
             }
-            $finding = ConvertFrom-MsixTraceToFindings -Failures @($f)
+            $finding = ConvertFrom-MsixTraceToFinding -Failures @($f)
             $finding.Category | Should -Be 'RegLegacyFixups'
         }
         It 'Deduplicates by category + leaf' {
             $f1 = [pscustomobject]@{ Function='CreateFileW'; Path='C:\Program Files\WindowsApps\a.log'; Result='ACCESS_DENIED'; ProcessId=1; ThreadId='A' }
             $f2 = [pscustomobject]@{ Function='CreateFileW'; Path='C:\Program Files\WindowsApps\a.log'; Result='ACCESS_DENIED'; ProcessId=2; ThreadId='B' }
-            (ConvertFrom-MsixTraceToFindings -Failures @($f1, $f2)).Count | Should -Be 1
+            (ConvertFrom-MsixTraceToFinding -Failures @($f1, $f2)).Count | Should -Be 1
         }
     }
 }

@@ -35,7 +35,7 @@ $script:KnownIsolationCapabilities = @(
     'isolatedWin32-removableStorage'
 )
 
-function Get-MsixIsolationCapabilities {
+function Get-MsixIsolationCapability {
     <#
     .SYNOPSIS
         Returns the set of well-known Win32-app-isolation capabilities the module
@@ -98,7 +98,7 @@ function Add-MsixAppIsolation {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     foreach ($c in $Capabilities) {
@@ -172,7 +172,7 @@ function Remove-MsixAppIsolation {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     PROCESS {
@@ -203,3 +203,7 @@ function Remove-MsixAppIsolation {
         }
     }
 }
+
+
+# Backward-compatible plural aliases
+Set-Alias Get-MsixIsolationCapabilities Get-MsixIsolationCapability

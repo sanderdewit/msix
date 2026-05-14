@@ -27,6 +27,7 @@ function ConvertFrom-MsixYamlAccelerator {
         otherwise a minimal hand-rolled parser sufficient for the documented schema.
     #>
     [CmdletBinding()]
+    [OutputType([hashtable])]
     param(
         [Parameter(Mandatory)]
         [string]$Path
@@ -115,7 +116,7 @@ function Import-MsixAccelerator {
                 if ($cfg) {
                     foreach ($app in @($cfg.applications)) {
                         if ($app.workingDirectory -or $app.arguments) {
-                            $report.AppOptions += New-MsixPsfArguments `
+                            $report.AppOptions += New-MsixPsfArgument `
                                 -AppId            $app.id `
                                 -Arguments        $app.arguments `
                                 -WorkingDirectory $app.workingDirectory
@@ -190,7 +191,7 @@ function Invoke-MsixAccelerator {
         [Parameter(Mandatory)]
         [string]$AcceleratorPath,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     $accel = Import-MsixAccelerator -Path $AcceleratorPath

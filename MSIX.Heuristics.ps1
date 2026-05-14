@@ -43,7 +43,7 @@ $script:KnownCapabilities = [ordered]@{
     'remoteSystem'                   = 'uap'
 }
 
-function Get-MsixKnownCapabilities {
+function Get-MsixKnownCapability {
     <#
     .SYNOPSIS
         Returns the capability table this module knows about, with the
@@ -81,7 +81,7 @@ function Add-MsixCapability {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     $toolsRoot = Get-MsixToolsRoot
@@ -124,7 +124,7 @@ function Add-MsixCapability {
                 # 'standard' or unknown — plain <Capability>; warn if not in the known-good list
                 $validStandard = @('internetClient','internetClientServer','privateNetworkClientServer','allJoyn','codeGeneration')
                 if ($name -notin $validStandard) {
-                    Write-Warning "Capability '$name' is not in the known-capabilities table. Adding as plain <Capability> — this may fail manifest validation. Run Get-MsixKnownCapabilities to see the supported list."
+                    Write-Warning "Capability '$name' is not in the known-capabilities table. Adding as plain <Capability> — this may fail manifest validation. Run Get-MsixKnownCapability to see the supported list."
                 }
                 $node = $manifest.CreateElement('Capability', $manifest.Package.NamespaceURI)
             }
@@ -156,7 +156,7 @@ function Add-MsixCapability {
 
 #region Uninstaller / desktop shortcut detection ---------------------------
 
-function Get-MsixUninstallerCandidates {
+function Get-MsixUninstallerCandidate {
     <#
     .SYNOPSIS
         Lists files inside the package that look like leftover installer or
@@ -206,7 +206,7 @@ function Get-MsixUninstallerCandidates {
 }
 
 
-function Get-MsixUninstallRegistryEntries {
+function Get-MsixUninstallRegistryEntry {
     <#
     .SYNOPSIS
         Reads the package's virtualized HKLM hive (Registry.dat) and returns
@@ -226,6 +226,7 @@ function Get-MsixUninstallRegistryEntries {
         .msix file (read-only).
     #>
     [CmdletBinding()]
+    [OutputType([object[]])]
     param([Parameter(Mandatory)][string]$PackagePath)
 
     $toolsRoot = Get-MsixToolsRoot
@@ -233,7 +234,7 @@ function Get-MsixUninstallRegistryEntries {
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-uninreg"
 
     if (-not (_MsixIsAdmin)) {
-        Write-MsixLog Warning 'Get-MsixUninstallRegistryEntries: not elevated — string scan only (no value details).'
+        Write-MsixLog Warning 'Get-MsixUninstallRegistryEntry: not elevated — string scan only (no value details).'
         try {
             $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
             Assert-MsixProcessSuccess $r 'MakeAppx unpack'
@@ -320,7 +321,7 @@ function _MsixIsAdmin {
 }
 
 
-function Remove-MsixUninstallerArtifacts {
+function Remove-MsixUninstallerArtifact {
     <#
     .SYNOPSIS
         Strips uninstaller-looking files from inside the package AND removes
@@ -351,7 +352,7 @@ function Remove-MsixUninstallerArtifacts {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
     if (-not $PathPatterns) {
         $PathPatterns = @(
@@ -449,7 +450,7 @@ function Remove-MsixUninstallerArtifacts {
 
 #region Run-keys (HKLM\Run autostart) ---------------------------------------
 
-function Get-MsixRunKeyEntries {
+function Get-MsixRunKeyEntry {
     <#
     .SYNOPSIS
         Lists the HKLM/HKCU \…\Run\* entries declared by the package — usually
@@ -485,7 +486,7 @@ function Get-MsixRunKeyEntries {
                         Match = $mm.Value
                     }
                 }
-            } catch {}
+            } catch { Write-MsixLog Debug "Run-key scan failed for $dat`: $_" }
         }
         return $hits | Sort-Object Hive,Match -Unique
     } finally {
@@ -561,7 +562,7 @@ function _MsixRegPathToVfsRelative {
 }
 
 
-function Get-MsixShellContextMenuEntries {
+function Get-MsixShellContextMenuEntry {
     <#
     .SYNOPSIS
         Scans the package's Registry.dat for shell verbs (Classes\*\shell\…) and
@@ -588,6 +589,7 @@ function Get-MsixShellContextMenuEntries {
         .msix file to inspect.
     #>
     [CmdletBinding()]
+    [OutputType([object[]])]
     param([Parameter(Mandatory)][string]$PackagePath)
 
     $toolsRoot = Get-MsixToolsRoot
@@ -712,7 +714,7 @@ function Get-MsixShellContextMenuEntries {
                 $null = & reg.exe unload "HKLM\$hiveName" 2>&1
             }
         } else {
-            Write-MsixLog Warning 'Get-MsixShellContextMenuEntries: not elevated — shellex handler names detected via string scan; shell verb detection skipped (run as administrator for full results including verb names and CLSIDs).'
+            Write-MsixLog Warning 'Get-MsixShellContextMenuEntry: not elevated — shellex handler names detected via string scan; shell verb detection skipped (run as administrator for full results including verb names and CLSIDs).'
             $bytes = [IO.File]::ReadAllBytes($datPath)
             $text  = [System.Text.Encoding]::Unicode.GetString($bytes)
 
@@ -756,7 +758,7 @@ function Get-MsixShellContextMenuEntries {
 
 #region COM server entries ---------------------------------------------------
 
-function Get-MsixComServerEntries {
+function Get-MsixComServerEntry {
     <#
     .SYNOPSIS
         Scans the package's Registry.dat for COM server registrations
@@ -776,6 +778,7 @@ function Get-MsixComServerEntries {
           ThreadingModel e.g. 'Apartment' (InProc, elevated only)
     #>
     [CmdletBinding()]
+    [OutputType([object[]])]
     param([Parameter(Mandatory)][string]$PackagePath)
 
     $toolsRoot = Get-MsixToolsRoot
@@ -838,7 +841,7 @@ function Get-MsixComServerEntries {
                 $null = & reg.exe unload "HKLM\$hiveName" 2>&1
             }
         } else {
-            Write-MsixLog Warning 'Get-MsixComServerEntries: not elevated — CLSID string scan only (no DLL paths or threading model).'
+            Write-MsixLog Warning 'Get-MsixComServerEntry: not elevated — CLSID string scan only (no DLL paths or threading model).'
             $bytes = [IO.File]::ReadAllBytes($datPath)
             $text  = [System.Text.Encoding]::Unicode.GetString($bytes)
             foreach ($m in [regex]::Matches($text, '\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}')) {
@@ -866,7 +869,7 @@ function Get-MsixComServerEntries {
 
 #region Application execution alias auto-suggest ---------------------------
 
-function Get-MsixAliasCandidates {
+function Get-MsixAliasCandidate {
     <#
     .SYNOPSIS
         Lists package executables that LOOK like good AppExecutionAlias
@@ -949,7 +952,7 @@ function Add-MsixSplashScreen {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
     if (-not (Test-Path $ImagePath)) { throw "Splash image not found: $ImagePath" }
 
@@ -1023,7 +1026,7 @@ function Update-MsixPackageVersion {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     $toolsRoot = Get-MsixToolsRoot
@@ -1104,7 +1107,7 @@ function Invoke-MsixAutoFix {
 
     .PARAMETER Capabilities
         Names to add via Add-MsixCapability (rescap or standard, looked up
-        against Get-MsixKnownCapabilities).
+        against Get-MsixKnownCapability).
 
     .PARAMETER PsfFixups / PsfAppOptions / PsfWorkingDirectory / PsfAdditionalFiles
         Forwarded to Add-MsixPsfV2.
@@ -1165,8 +1168,9 @@ function Invoke-MsixAutoFix {
         [string]$OutputPath,
         [switch]$DryRun,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
+    $null = $PsfWorkingDirectory, $PsfAdditionalFiles  # referenced in closure
 
     $stages = New-Object System.Collections.Generic.List[object]
     function _Stage([string]$Name, [scriptblock]$Action) {
@@ -1183,12 +1187,12 @@ function Invoke-MsixAutoFix {
 
     if ($RemoveUninstallers) {
         _Stage 'PrePsf:RemoveUninstallers' {
-            Remove-MsixUninstallerArtifacts -PackagePath $current -SkipSigning
+            Remove-MsixUninstallerArtifact -PackagePath $current -SkipSigning
         }
     }
     if ($RemoveDesktopShortcuts) {
         _Stage 'PrePsf:RemoveDesktopShortcuts' {
-            Remove-MsixDesktopShortcuts -PackagePath $current -SkipSigning
+            Remove-MsixDesktopShortcut -PackagePath $current -SkipSigning
         }
     }
     if ($VersionBumpComponent) {
@@ -1203,7 +1207,7 @@ function Invoke-MsixAutoFix {
     }
     if ($AddFontExtension) {
         _Stage 'Recommended:AddFontExtension' {
-            $fonts = Get-MsixFontCandidates -PackagePath $current
+            $fonts = Get-MsixFontCandidate -PackagePath $current
             if ($fonts) {
                 Add-MsixFontExtension -PackagePath $current -FontPaths @($fonts | Select-Object -ExpandProperty Path) -SkipSigning
             } else {
@@ -1279,7 +1283,7 @@ function Invoke-MsixAutoFixFromAnalysis {
     .DESCRIPTION
         Maps Findings.Category to a concrete cmdlet:
 
-          UninstallerArtifact                 -> Remove-MsixUninstallerArtifacts
+          UninstallerArtifact                 -> Remove-MsixUninstallerArtifact
           VcRuntime                            -> Add-MsixVcRuntimeBundle (needs -VcRuntimeSourceFolder)
           ManifestFix:FileSystemWriteVirt..    -> Set-MsixFileSystemWriteVirtualization
           ManifestFix:RegistryWriteVirt..      -> Set-MsixRegistryWriteVirtualization
@@ -1339,7 +1343,7 @@ function Invoke-MsixAutoFixFromAnalysis {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [string]$PfxPassword
+        [SecureString]$PfxPassword
     )
 
     if (-not $PackagePath) { $PackagePath = $Report.PackagePath }
@@ -1358,7 +1362,7 @@ function Invoke-MsixAutoFixFromAnalysis {
         $plan.Add([pscustomobject]@{
             Stage  = 'RemoveUninstallers'
             Reason = 'Findings include uninstaller-looking files and/or leftover Uninstall registry keys'
-            Action = { Remove-MsixUninstallerArtifacts -PackagePath $current -SkipSigning }
+            Action = { Remove-MsixUninstallerArtifact -PackagePath $current -SkipSigning }
         })
     }
 
@@ -1414,7 +1418,7 @@ function Invoke-MsixAutoFixFromAnalysis {
         $plan.Add([pscustomobject]@{
             Stage  = 'RemoveDesktopShortcuts'
             Reason = 'Package ships .lnk files under VFS desktop folders'
-            Action = { Remove-MsixDesktopShortcuts -PackagePath $current -SkipSigning }
+            Action = { Remove-MsixDesktopShortcut -PackagePath $current -SkipSigning }
         })
     }
 
@@ -1424,7 +1428,7 @@ function Invoke-MsixAutoFixFromAnalysis {
             Stage  = 'AddFontExtension'
             Reason = 'Package ships font files not registered via uap4:SharedFonts'
             Action = {
-                $fonts = Get-MsixFontCandidates -PackagePath $current
+                $fonts = Get-MsixFontCandidate -PackagePath $current
                 if ($fonts) {
                     $fontPaths = @($fonts | Select-Object -ExpandProperty Path)
                     Add-MsixFontExtension -PackagePath $current -FontPaths $fontPaths -SkipSigning
@@ -1529,7 +1533,6 @@ function Invoke-MsixAutoFixFromAnalysis {
     }
 
     # Stage 4 — PSF fixups (only those NOT already covered by a manifest fix)
-    $needsPsf = $false
     if ($Report.SuggestedFixups -and $Report.SuggestedFixups.Count -gt 0) {
         $skipPsfFs  = $hasFsManifestFix  -and $PreferManifestOverPsf
         $skipPsfReg = $hasRegManifestFix -and $PreferManifestOverPsf
@@ -1540,7 +1543,6 @@ function Invoke-MsixAutoFixFromAnalysis {
             )
         })
         if ($kept.Count -gt 0) {
-            $needsPsf = $true
             $plan.Add([pscustomobject]@{
                 Stage  = 'InjectPsf'
                 Reason = "Apply $($kept.Count) PSF fixup(s) from analysis"
@@ -1601,7 +1603,7 @@ function Invoke-MsixAutoFixFromAnalysis {
 
 #region Static analysis adapter --------------------------------------------
 
-function Get-MsixHeuristicFindings {
+function Get-MsixHeuristicFinding {
     <#
     .SYNOPSIS
         Runs every read-only TMEditX-style analyzer against a package and
@@ -1614,19 +1616,19 @@ function Get-MsixHeuristicFindings {
     $out = New-Object System.Collections.Generic.List[object]
 
     # Uninstaller artefacts
-    foreach ($u in Get-MsixUninstallerCandidates -PackagePath $PackagePath) {
+    foreach ($u in Get-MsixUninstallerCandidate -PackagePath $PackagePath) {
         $out.Add([pscustomobject]@{
             Severity = 'Warning'
             Category = 'UninstallerArtifact'
             Symptom  = "Looks like a leftover installer artefact: $($u.Name)"
-            Recommendation = "Remove-MsixUninstallerArtifacts -PackagePath '$PackagePath'"
+            Recommendation = "Remove-MsixUninstallerArtifact -PackagePath '$PackagePath'"
             Evidence = $u.Path
             AppId    = $null
         })
     }
 
     # Run keys
-    foreach ($r in Get-MsixRunKeyEntries -PackagePath $PackagePath) {
+    foreach ($r in Get-MsixRunKeyEntry -PackagePath $PackagePath) {
         $out.Add([pscustomobject]@{
             Severity = 'Info'
             Category = 'RunKey'
@@ -1638,7 +1640,7 @@ function Get-MsixHeuristicFindings {
     }
 
     # Alias suggestions
-    foreach ($a in Get-MsixAliasCandidates -PackagePath $PackagePath) {
+    foreach ($a in Get-MsixAliasCandidate -PackagePath $PackagePath) {
         if ($a.AlreadyHasAlias) { continue }
         $out.Add([pscustomobject]@{
             Severity = 'Info'
@@ -1652,7 +1654,7 @@ function Get-MsixHeuristicFindings {
 
     # VC runtime missing
     try {
-        $vc = Get-MsixVcRuntimeReferences -PackagePath $PackagePath
+        $vc = Get-MsixVcRuntimeReference -PackagePath $PackagePath
         if ($vc.Missing) {
             $out.Add([pscustomobject]@{
                 Severity = 'Warning'
@@ -1663,41 +1665,41 @@ function Get-MsixHeuristicFindings {
                 AppId    = $null
             })
         }
-    } catch {}
+    } catch { Write-MsixLog Debug "VC runtime heuristic skipped: $_" }
 
     # ── Fonts inside the package (suggest uap4:SharedFonts) ────────────────
     try {
-        $fonts = Get-MsixFontCandidates -PackagePath $PackagePath
+        $fonts = Get-MsixFontCandidate -PackagePath $PackagePath
         if ($fonts) {
             $out.Add([pscustomobject]@{
                 Severity = 'Info'
                 Category = 'ManifestFix:SharedFonts'
                 Symptom  = "Package ships $($fonts.Count) font file(s) but doesn't register them via uap4:SharedFonts."
-                Recommendation = "Add-MsixFontExtension -PackagePath '$PackagePath' -FontPaths (Get-MsixFontCandidates -PackagePath '$PackagePath' | Select-Object -ExpandProperty Path)"
+                Recommendation = "Add-MsixFontExtension -PackagePath '$PackagePath' -FontPaths (Get-MsixFontCandidate -PackagePath '$PackagePath' | Select-Object -ExpandProperty Path)"
                 Evidence = ($fonts | Select-Object -First 5 -ExpandProperty Name) -join ', '
                 AppId    = $null
             })
         }
-    } catch {}
+    } catch { Write-MsixLog Debug "Font heuristic skipped: $_" }
 
     # ── Desktop shortcuts inside the package (suggest removal) ──────────────
     try {
-        $sc = Get-MsixDesktopShortcutCandidates -PackagePath $PackagePath
+        $sc = Get-MsixDesktopShortcutCandidate -PackagePath $PackagePath
         if ($sc) {
             $out.Add([pscustomobject]@{
                 Severity = 'Warning'
                 Category = 'DesktopShortcuts'
                 Symptom  = "Package ships $($sc.Count) .lnk file(s) under VFS\Common Desktop / VFS\Desktop."
-                Recommendation = "Remove-MsixDesktopShortcuts -PackagePath '$PackagePath'"
+                Recommendation = "Remove-MsixDesktopShortcut -PackagePath '$PackagePath'"
                 Evidence = ($sc | Select-Object -First 3 -ExpandProperty Name) -join ', '
                 AppId    = $null
             })
         }
-    } catch {}
+    } catch { Write-MsixLog Debug "Desktop shortcut heuristic skipped: $_" }
 
     # ── Capability hints from PE imports (suggest Add-MsixCapability) ───────
     try {
-        $caps = Get-MsixCapabilityHints -PackagePath $PackagePath
+        $caps = Get-MsixCapabilityHint -PackagePath $PackagePath
         if ($caps) {
             $out.Add([pscustomobject]@{
                 Severity = 'Info'
@@ -1708,26 +1710,26 @@ function Get-MsixHeuristicFindings {
                 AppId    = $null
             })
         }
-    } catch {}
+    } catch { Write-MsixLog Debug "Capability hints heuristic skipped: $_" }
 
     # ── Uninstall registry leftovers ────────────────────────────────────────
     try {
-        $uninst = Get-MsixUninstallRegistryEntries -PackagePath $PackagePath
+        $uninst = Get-MsixUninstallRegistryEntry -PackagePath $PackagePath
         if ($uninst) {
             $out.Add([pscustomobject]@{
                 Severity = 'Warning'
                 Category = 'UninstallRegistry'
                 Symptom  = "Package's Registry.dat has $($uninst.Count) Uninstall\* leftover key(s)."
-                Recommendation = "Remove-MsixUninstallerArtifacts -PackagePath '$PackagePath'  (run elevated to also strip the registry entries)"
+                Recommendation = "Remove-MsixUninstallerArtifact -PackagePath '$PackagePath'  (run elevated to also strip the registry entries)"
                 Evidence = ($uninst | Select-Object -First 3 -ExpandProperty DisplayName) -join ', '
                 AppId    = $null
             })
         }
-    } catch {}
+    } catch { Write-MsixLog Debug "Uninstall registry heuristic skipped: $_" }
 
     # ── Shell context-menu entries invisible outside the MSIX container ───────
     try {
-        $shellMenus    = Get-MsixShellContextMenuEntries -PackagePath $PackagePath
+        $shellMenus    = Get-MsixShellContextMenuEntry -PackagePath $PackagePath
         $verbEntries   = @($shellMenus | Where-Object Type -eq 'ShellVerb')
         $shellextEntries = @($shellMenus | Where-Object Type -eq 'ShellExt')
 
@@ -1768,7 +1770,7 @@ function Get-MsixHeuristicFindings {
 
     # ── COM server registrations in Registry.dat ──────────────────────────────
     try {
-        $comEntries = Get-MsixComServerEntries -PackagePath $PackagePath
+        $comEntries = Get-MsixComServerEntry -PackagePath $PackagePath
         # Only surface InProc servers with a resolvable VFS DLL (package-bundled);
         # LocalServer and Unknown-type entries can't be auto-fixed and produce noise.
         $inprocPkg  = @($comEntries | Where-Object { $_.ServerType -eq 'InProc' -and $_.VfsDllPath })
@@ -1789,7 +1791,7 @@ function Get-MsixHeuristicFindings {
 
     # ── Nested installer packages inside the package ─────────────────────────
     try {
-        $nested = @(Get-MsixNestedPackageCandidates -PackagePath $PackagePath)
+        $nested = @(Get-MsixNestedPackageCandidate -PackagePath $PackagePath)
         if ($nested) {
             $out.Add([pscustomobject]@{
                 Severity       = 'Warning'
@@ -1931,3 +1933,15 @@ function Get-MsixHeuristicFindings {
     return $out
 }
 #endregion
+
+
+# Backward-compatible plural aliases
+Set-Alias Get-MsixKnownCapabilities Get-MsixKnownCapability
+Set-Alias Get-MsixUninstallerCandidates Get-MsixUninstallerCandidate
+Set-Alias Get-MsixUninstallRegistryEntries Get-MsixUninstallRegistryEntry
+Set-Alias Remove-MsixUninstallerArtifacts Remove-MsixUninstallerArtifact
+Set-Alias Get-MsixRunKeyEntries Get-MsixRunKeyEntry
+Set-Alias Get-MsixShellContextMenuEntries Get-MsixShellContextMenuEntry
+Set-Alias Get-MsixComServerEntries Get-MsixComServerEntry
+Set-Alias Get-MsixAliasCandidates Get-MsixAliasCandidate
+Set-Alias Get-MsixHeuristicFindings Get-MsixHeuristicFinding

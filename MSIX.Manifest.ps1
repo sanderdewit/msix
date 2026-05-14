@@ -34,6 +34,7 @@ function New-MsixManifestDocument {
         Get-MsixManifestApplication -Manifest $m -AppId App
     #>
     [CmdletBinding(DefaultParameterSetName = 'Path')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory, ParameterSetName = 'Path', Position = 0)]
         [string]$Path,
@@ -72,6 +73,7 @@ function Select-MsixManifestNode {
         Selects the first manifest node matching a namespace-aware XPath.
     #>
     [CmdletBinding()]
+    [OutputType([System.Xml.XmlNode])]
     param(
         [Parameter(Mandatory)]
         $Manifest,
@@ -94,6 +96,8 @@ function Select-MsixManifestNodes {
         Selects all manifest nodes matching a namespace-aware XPath.
     #>
     [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '')]
+    [OutputType([object[]])]
     param(
         [Parameter(Mandatory)]
         $Manifest,
@@ -225,7 +229,7 @@ function Add-MsixManifestNamespace {
     Write-MsixLog Debug "Namespace added: xmlns:$Prefix"
 }
 
-function Get-MsixManifestApplications {
+function Get-MsixManifestApplication {
     <#
     .SYNOPSIS
         Returns all Application XmlElements from the manifest.
@@ -298,6 +302,7 @@ function Set-MsixManifestMaxVersionTested {
         Ensures MaxVersionTested is at least the specified build number.
         Required for desktop9 context menu support (>= 10.0.21301.0).
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
         [xml]$Manifest,
@@ -313,3 +318,8 @@ function Set-MsixManifestMaxVersionTested {
         Write-MsixLog Info "MaxVersionTested updated to $($tdf.MaxVersionTested)"
     }
 }
+
+
+# Backward-compatible plural aliases
+
+Set-Alias Get-MsixManifestApplications Get-MsixManifestApplication

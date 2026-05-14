@@ -35,12 +35,13 @@ $script:MfrLocalKnownFolders = @(
 )
 $script:MfrCowOptions  = @('default','enablePe','disableAll')
 
-function Get-MsixMfrKnownFolders {
+function Get-MsixMfrKnownFolder {
     <#
     .SYNOPSIS
         Returns the documented MFR override folders by mode.
     #>
     [CmdletBinding()]
+    [OutputType([object[]])]
     param(
         [ValidateSet('Traditional','Local','Both')]
         [string]$Mode = 'Both'
@@ -64,7 +65,7 @@ function New-MsixMfrTraditionalRule {
         Build a single Traditional-mode MFR redirection rule.
 
     .PARAMETER KnownFolder
-        One of the values from Get-MsixMfrKnownFolders -Mode Traditional.
+        One of the values from Get-MsixMfrKnownFolder -Mode Traditional.
 
     .PARAMETER RelativePath
         Path relative to that known folder (forward slashes, no leading slash).
@@ -79,11 +80,12 @@ function New-MsixMfrTraditionalRule {
         If true, this rule respects uap10:installedLocationVirtualization.
     #>
     [OutputType([hashtable])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
         [ValidateScript({
             if ($_ -in $script:MfrTraditionalKnownFolders) { $true }
-            else { throw "Unknown traditional folder '$_'. Use Get-MsixMfrKnownFolders -Mode Traditional." }
+            else { throw "Unknown traditional folder '$_'. Use Get-MsixMfrKnownFolder -Mode Traditional." }
         })]
         [string]$KnownFolder,
         [Parameter(Mandatory)]
@@ -117,11 +119,12 @@ function New-MsixMfrLocalRule {
         See New-MsixMfrTraditionalRule.
     #>
     [OutputType([hashtable])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
         [ValidateScript({
             if ($_ -in $script:MfrLocalKnownFolders) { $true }
-            else { throw "Unknown local folder '$_'. Use Get-MsixMfrKnownFolders -Mode Local." }
+            else { throw "Unknown local folder '$_'. Use Get-MsixMfrKnownFolder -Mode Local." }
         })]
         [string]$KnownFolder,
         [Parameter(Mandatory)]
@@ -175,6 +178,7 @@ function New-MsixPsfMfrConfig {
         Add-MsixPsfV2 -PackagePath app.msix -Fixups @($mfr) -Pfx cert.pfx -PfxPassword 'P@ss'
     #>
     [OutputType([hashtable])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [hashtable[]]$TraditionalRules,
         [hashtable[]]$LocalRules,
@@ -200,3 +204,7 @@ function New-MsixPsfMfrConfig {
         config = $config
     }
 }
+
+
+# Backward-compatible plural aliases
+Set-Alias Get-MsixMfrKnownFolders Get-MsixMfrKnownFolder

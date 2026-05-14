@@ -112,7 +112,7 @@ function Get-MsixTraceOutput {
 }
 
 
-function Get-MsixTraceFailures {
+function Get-MsixTraceFailure {
     <#
     .SYNOPSIS
         Filters Get-MsixTraceOutput to only the rows whose Result indicates a
@@ -142,7 +142,7 @@ function Get-MsixTraceFailures {
 }
 
 
-function ConvertFrom-MsixTraceToFindings {
+function ConvertFrom-MsixTraceToFinding {
     <#
     .SYNOPSIS
         Converts trace failures into the same finding shape that
@@ -159,7 +159,7 @@ function ConvertFrom-MsixTraceToFindings {
         Findings are deduplicated by (Category + leaf path).
 
     .PARAMETER Failures
-        Output of Get-MsixTraceFailures.
+        Output of Get-MsixTraceFailure.
     #>
     [CmdletBinding()]
     param(
@@ -212,3 +212,8 @@ function ConvertFrom-MsixTraceToFindings {
     }
     END { $out }
 }
+
+
+# Backward-compatible plural aliases
+Set-Alias Get-MsixTraceFailures Get-MsixTraceFailure
+Set-Alias ConvertFrom-MsixTraceToFindings ConvertFrom-MsixTraceToFinding

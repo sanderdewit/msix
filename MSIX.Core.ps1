@@ -10,19 +10,20 @@ function Get-MsixToolsRoot {
         Search order (first hit wins, result cached for the session):
 
           1. $env:MSIX_TOOLS_PATH          explicit override
-          2. <module folder>\Tools\        installed by Install-MsixSdkTools
+          2. <module folder>\Tools\        installed by Install-MsixSdkTool
           3. Sibling / parent-walk         e.g. ..\0.56\Tools\
           4. Windows 10/11 SDK             %ProgramFiles(x86)%\Windows Kits\10\bin
           5. Auto-install (if -AutoInstall) one-call download from NuGet
 
     .PARAMETER AutoInstall
-        If set and nothing was found, run Install-MsixSdkTools to fetch
+        If set and nothing was found, run Install-MsixSdkTool to fetch
         Microsoft.Windows.SDK.BuildTools and use that.
 
     .PARAMETER Refresh
         Drop the cached result and re-resolve from scratch.
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [switch]$AutoInstall,
         [switch]$Refresh
@@ -36,7 +37,7 @@ function Get-MsixToolsRoot {
         return $script:ToolsRoot
     }
 
-    # 2) Tools folder next to this module file (Install-MsixSdkTools default)
+    # 2) Tools folder next to this module file (Install-MsixSdkTool default)
     if (Test-Path "$PSScriptRoot\Tools\MakeAppx.exe") {
         $script:ToolsRoot = $PSScriptRoot
         return $script:ToolsRoot
@@ -87,11 +88,11 @@ function Get-MsixToolsRoot {
 
     # 5) One-shot auto-install
     if ($AutoInstall) {
-        if (-not (Get-Command Install-MsixSdkTools -ErrorAction SilentlyContinue)) {
-            throw 'Install-MsixSdkTools is not available; cannot auto-install. Make sure the module loaded fully.'
+        if (-not (Get-Command Install-MsixSdkTool -ErrorAction SilentlyContinue)) {
+            throw 'Install-MsixSdkTool is not available; cannot auto-install. Make sure the module loaded fully.'
         }
-        Write-MsixLog Info 'No SDK tools found; auto-installing via Install-MsixSdkTools.'
-        Install-MsixSdkTools | Out-Null
+        Write-MsixLog Info 'No SDK tools found; auto-installing via Install-MsixSdkTool.'
+        Install-MsixSdkTool | Out-Null
         if (Test-Path "$PSScriptRoot\Tools\MakeAppx.exe") {
             $script:ToolsRoot = $PSScriptRoot
             return $script:ToolsRoot
@@ -103,7 +104,7 @@ MakeAppx.exe not found. Pick ONE of these:
 
   # Easiest -- auto-download MakeAppx + signtool from the official Microsoft
   # NuGet package (Microsoft.Windows.SDK.BuildTools), once per machine:
-  Install-MsixSdkTools
+  Install-MsixSdkTool
 
   # Or do everything (PSF + Procmon + msixmgr + SDK tools) in a single call:
   Initialize-MsixToolchain
@@ -115,6 +116,7 @@ MakeAppx.exe not found. Pick ONE of these:
 }
 
 function Set-MsixToolsRoot {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
         [string]$Path
@@ -127,6 +129,7 @@ function Set-MsixToolsRoot {
 }
 
 function New-MsixWorkspace {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
         [string]$PackageName

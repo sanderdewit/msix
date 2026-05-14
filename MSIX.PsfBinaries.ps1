@@ -56,7 +56,7 @@ function _MsixGitHubLatest {
 }
 
 
-function Install-MsixPsfBinaries {
+function Install-MsixPsfBinary {
     <#
     .SYNOPSIS
         Downloads the latest TMurgent PSF release and installs it under the
@@ -84,9 +84,9 @@ function Install-MsixPsfBinaries {
         Regex matched against asset names. Defaults to '\.zip$' so any zip works.
 
     .EXAMPLE
-        Install-MsixPsfBinaries
+        Install-MsixPsfBinary
     .EXAMPLE
-        Install-MsixPsfBinaries -Force
+        Install-MsixPsfBinary -Force
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -167,19 +167,20 @@ function Get-MsixPsfBinariesVersion {
 }
 
 
-function Update-MsixPsfBinaries {
+function Update-MsixPsfBinary {
     <#
     .SYNOPSIS
-        Convenience wrapper: re-runs Install-MsixPsfBinaries only when the GitHub
+        Convenience wrapper: re-runs Install-MsixPsfBinary only when the GitHub
         latest tag differs from what's installed.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param([string]$Destination)
 
+    if (-not $PSCmdlet.ShouldProcess($Destination, 'Update PSF Binaries')) { return }
     $current = Get-MsixPsfBinariesVersion -Path $Destination
     if (-not $current.Installed) {
         Write-MsixLog Info "No PSF found locally; installing."
-        return Install-MsixPsfBinaries -Destination $Destination
+        return Install-MsixPsfBinary -Destination $Destination
     }
 
     $latest = (_MsixGitHubLatest $script:TMurgentRepo).tag_name
@@ -188,7 +189,7 @@ function Update-MsixPsfBinaries {
         return $current
     }
     Write-MsixLog Info "Update available: $($current.Version) -> $latest"
-    return Install-MsixPsfBinaries -Destination $Destination -Force
+    return Install-MsixPsfBinary -Destination $Destination -Force
 }
 
 
@@ -261,13 +262,14 @@ function Update-MsixProcMon {
         Refreshes Process Monitor if the local copy is older than -MaxAgeDays
         (default 30). Sysinternals updates infrequently so a slow cadence is fine.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$Destination,
         [int]$MaxAgeDays = 30
     )
 
     if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'procmon' }
+    if (-not $PSCmdlet.ShouldProcess($Destination, 'Update Process Monitor')) { return }
     $marker = Join-Path $Destination 'procmon.installed'
 
     if (-not (Test-Path $marker)) {
@@ -284,7 +286,7 @@ function Update-MsixProcMon {
 }
 
 
-function Install-MsixSdkTools {
+function Install-MsixSdkTool {
     <#
     .SYNOPSIS
         Downloads MakeAppx.exe + signtool.exe from the official Microsoft
@@ -305,7 +307,7 @@ function Install-MsixSdkTools {
         This function pulls the latest stable version (or the version you
         pin via -Version), extracts the matching architecture into
         "$ToolsRoot\Tools\", and writes a `sdk.version` marker so
-        Update-MsixSdkTools knows what's installed.
+        Update-MsixSdkTool knows what's installed.
 
     .PARAMETER Destination
         Where to land the binaries. Default: the module folder. After install,
@@ -322,13 +324,13 @@ function Install-MsixSdkTools {
         Reinstall even if the version is already present.
 
     .EXAMPLE
-        Install-MsixSdkTools
+        Install-MsixSdkTool
 
     .EXAMPLE
-        Install-MsixSdkTools -Architecture x86 -Force
+        Install-MsixSdkTool -Architecture x86 -Force
 
     .EXAMPLE
-        Install-MsixSdkTools -Version '10.0.26100.1742'
+        Install-MsixSdkTool -Version '10.0.26100.1742'
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -424,22 +426,23 @@ function Install-MsixSdkTools {
 }
 
 
-function Update-MsixSdkTools {
+function Update-MsixSdkTool {
     <#
     .SYNOPSIS
         Refreshes the bundled SDK tools to the latest NuGet version, but only
         when a new one exists.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$Destination,
         [ValidateSet('x86','x64')]
         [string]$Architecture = 'x64'
     )
     if (-not $Destination) { $Destination = $PSScriptRoot }
+    if (-not $PSCmdlet.ShouldProcess($Destination, 'Update SDK Tools')) { return }
     $marker = Join-Path $Destination 'Tools\sdk.version'
     if (-not (Test-Path $marker)) {
-        return Install-MsixSdkTools -Destination $Destination -Architecture $Architecture
+        return Install-MsixSdkTool -Destination $Destination -Architecture $Architecture
     }
 
     # Find latest published version
@@ -455,7 +458,7 @@ function Update-MsixSdkTools {
         return [pscustomobject]@{ Path = "$Destination\Tools"; Version = $latest; Architecture = $Architecture; Updated = $false }
     }
     Write-MsixLog Info "SDK tools update available: $current -> $latest|$Architecture"
-    return Install-MsixSdkTools -Destination $Destination -Architecture $Architecture -Version $latest -Force
+    return Install-MsixSdkTool -Destination $Destination -Architecture $Architecture -Version $latest -Force
 }
 
 
@@ -503,9 +506,16 @@ function Initialize-MsixToolchain {
 
     $result = [ordered]@{ Sdk = $null; Psf = $null; Procmon = $null; MsixMgr = $null }
     # SDK tools first — everything else needs MakeAppx.exe to do anything useful.
-    if ($Skip -notcontains 'Sdk')     { $result.Sdk     = Update-MsixSdkTools }
-    if ($Skip -notcontains 'Psf')     { $result.Psf     = Update-MsixPsfBinaries }
+    if ($Skip -notcontains 'Sdk')     { $result.Sdk     = Update-MsixSdkTool }
+    if ($Skip -notcontains 'Psf')     { $result.Psf     = Update-MsixPsfBinary }
     if ($Skip -notcontains 'Procmon') { $result.Procmon = Update-MsixProcMon }
     if ($Skip -notcontains 'MsixMgr') { $result.MsixMgr = Update-MsixMgr }
     return [pscustomobject]$result
 }
+
+
+# Backward-compatible plural aliases
+Set-Alias Install-MsixPsfBinaries Install-MsixPsfBinary
+Set-Alias Update-MsixPsfBinaries Update-MsixPsfBinary
+Set-Alias Install-MsixSdkTools Install-MsixSdkTool
+Set-Alias Update-MsixSdkTools Update-MsixSdkTool

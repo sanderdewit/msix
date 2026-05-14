@@ -21,7 +21,8 @@
         RFC 3161 timestamp server URL. Defaults to DigiCert.
 
     .EXAMPLE
-        Invoke-MsixSigning -PackagePath app.msix -Pfx cert.pfx -PfxPassword 'P@ss'
+        $pw = Read-Host -AsSecureString
+        Invoke-MsixSigning -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw
 
     .EXAMPLE
         Invoke-MsixSigning -PackagePath app.msix
@@ -31,7 +32,7 @@
         [Parameter(Mandatory)]
         [string]$PackagePath,
         [string]$Pfx,
-        [string]$PfxPassword,
+        [SecureString]$PfxPassword,
         [string]$TimestampUrl = 'http://timestamp.digicert.com'
     )
 
@@ -43,9 +44,16 @@
     $signtool  = Join-Path $toolsRoot 'Tools\signtool.exe'
     $fileinfo  = Get-Item $PackagePath
 
-    $args = if ($Pfx) {
-        $cert = Get-Item $Pfx
-        "sign /v /tr `"$TimestampUrl`" /td sha256 /fd sha256 /f `"$($cert.FullName)`" /p `"$PfxPassword`" `"$($fileinfo.FullName)`""
+    $sigArgs = if ($Pfx) {
+        $cert   = Get-Item $Pfx
+        # Decrypt SecureString only at the CLI boundary — never stored in a plain variable
+        $bstr   = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PfxPassword)
+        try {
+            $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+            "sign /v /tr `"$TimestampUrl`" /td sha256 /fd sha256 /f `"$($cert.FullName)`" /p `"$plain`" `"$($fileinfo.FullName)`""
+        } finally {
+            [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+        }
     } else {
         "sign /v /tr `"$TimestampUrl`" /td sha256 /fd sha256 /a `"$($fileinfo.FullName)`""
     }
@@ -53,7 +61,7 @@
     Write-MsixLog Info "Signing: $($fileinfo.Name)"
 
     if ($PSCmdlet.ShouldProcess($fileinfo.FullName, 'Sign with signtool')) {
-        $r = Invoke-MsixProcess $signtool $args
+        $r = Invoke-MsixProcess $signtool $sigArgs
         if ($r.ExitCode -ne 0) {
             $detail = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
             throw "signtool failed (exit $($r.ExitCode)): $detail`nCheck: Microsoft-Windows-AppxPackagingOM event log."

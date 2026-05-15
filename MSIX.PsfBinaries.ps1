@@ -486,30 +486,177 @@ function Get-MsixSdkToolsVersion {
 }
 
 
+# ===========================================================================
+# Windows App Runtime + DesktopAppInstaller (for sandbox / fresh hosts)
+# ===========================================================================
+# Default Win11 Sandbox cannot install MSIX packages out of the box — it
+# lacks the AppInstaller MSIX shell handler and (depending on the package's
+# uap10:HostRuntimeDependency / Windows App SDK target) the Windows App
+# Runtime. These two installers fix both:
+#
+#   - DesktopAppInstaller    (Microsoft.DesktopAppInstaller msixbundle)
+#                            Adds the Add-AppPackage UI handler and winget.
+#                            Served by Microsoft at https://aka.ms/getwinget
+#                            (redirects to the latest stable msixbundle).
+#
+#   - WindowsAppRuntime      (WindowsAppRuntimeInstall-x64.exe)
+#                            The Windows App SDK runtime that many modern
+#                            MSIX packages depend on. Pinned to a known good
+#                            channel via Microsoft's aka.ms redirect.
+# ===========================================================================
+
+# aka.ms redirects — Microsoft keeps these stable across releases.
+$script:DesktopAppInstallerUrl = 'https://aka.ms/getwinget'
+$script:WindowsAppRuntimeUrl   = 'https://aka.ms/windowsappsdk/1.6/latest/windowsappruntimeinstall-x64.exe'
+
+
+function Install-MsixAppRuntime {
+    <#
+    .SYNOPSIS
+        Downloads the DesktopAppInstaller bundle and the Windows App Runtime
+        installer so a sandbox (or a freshly imaged host) can install MSIX
+        packages reliably.
+
+    .DESCRIPTION
+        Default Windows Sandbox lacks both components; double-clicking a
+        .msix file silently fails. This function caches them under
+        $ToolsRoot\runtime\ so:
+
+          - Start-MsixSandbox can map them into the sandbox and run them
+            from its bootstrap script.
+          - Operators on bare hosts can just `Add-AppPackage` and execute
+            the .exe to provision the platform.
+
+        DesktopAppInstaller is an msixbundle (Microsoft.DesktopAppInstaller).
+        WindowsAppRuntime is an .exe installer; pass /silent in unattended
+        scenarios.
+
+    .PARAMETER Destination
+        Cache folder. Defaults to "$Get-MsixToolsRoot\runtime".
+
+    .PARAMETER Force
+        Re-download even if both files are already present.
+
+    .EXAMPLE
+        Install-MsixAppRuntime
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [string]$Destination,
+        [switch]$Force
+    )
+    if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'runtime' }
+
+    $marker = Join-Path $Destination 'runtime.installed'
+    if ((Test-Path $marker) -and -not $Force) {
+        Write-MsixLog Info "Windows App Runtime + DesktopAppInstaller cached at $Destination. Use -Force to refresh."
+        return [pscustomobject]@{ Path = $Destination; Updated = $false }
+    }
+
+    if ($PSCmdlet.ShouldProcess($Destination, 'Install Windows App Runtime + DesktopAppInstaller')) {
+        New-Item $Destination -ItemType Directory -Force | Out-Null
+
+        $bundlePath  = Join-Path $Destination 'Microsoft.DesktopAppInstaller.msixbundle'
+        $runtimePath = Join-Path $Destination 'WindowsAppRuntimeInstall-x64.exe'
+
+        _MsixDownloadFile -Url $script:DesktopAppInstallerUrl -Destination $bundlePath
+        _MsixDownloadFile -Url $script:WindowsAppRuntimeUrl   -Destination $runtimePath
+
+        (Get-Date -Format o) | Set-Content $marker -Encoding ascii
+        Write-MsixLog Info "AppRuntime cached: $Destination"
+    }
+
+    return [pscustomobject]@{
+        Path                  = $Destination
+        Updated               = $true
+        DesktopAppInstaller   = Join-Path $Destination 'Microsoft.DesktopAppInstaller.msixbundle'
+        WindowsAppRuntimeExe  = Join-Path $Destination 'WindowsAppRuntimeInstall-x64.exe'
+    }
+}
+
+
+function Update-MsixAppRuntime {
+    <#
+    .SYNOPSIS
+        Refreshes the cached Windows App Runtime + DesktopAppInstaller if the
+        local copy is older than -MaxAgeDays (default 45).
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [string]$Destination,
+        [int]$MaxAgeDays = 45
+    )
+    if (-not $PSCmdlet.ShouldProcess($Destination, 'Update Windows App Runtime cache')) { return }
+    if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'runtime' }
+    $marker = Join-Path $Destination 'runtime.installed'
+
+    if (-not (Test-Path $marker)) {
+        return Install-MsixAppRuntime -Destination $Destination
+    }
+    $stamp = [datetime](Get-Content $marker -Raw).Trim()
+    $age   = (Get-Date) - $stamp
+    if ($age.TotalDays -gt $MaxAgeDays) {
+        Write-MsixLog Info "AppRuntime cache is $([int]$age.TotalDays) days old; refreshing."
+        return Install-MsixAppRuntime -Destination $Destination -Force
+    }
+    Write-MsixLog Info "AppRuntime cache is fresh ($([int]$age.TotalDays) days; threshold $MaxAgeDays)."
+    return [pscustomobject]@{ Path = $Destination; Updated = $false }
+}
+
+
+function Get-MsixAppRuntimeVersion {
+    <#
+    .SYNOPSIS
+        Reports the cached AppRuntime install timestamp and resolved paths.
+    #>
+    [CmdletBinding()]
+    param([string]$Path)
+
+    if (-not $Path) { $Path = Join-Path (Get-MsixToolsRoot) 'runtime' }
+    $marker = Join-Path $Path 'runtime.installed'
+
+    $bundle  = Join-Path $Path 'Microsoft.DesktopAppInstaller.msixbundle'
+    $runtime = Join-Path $Path 'WindowsAppRuntimeInstall-x64.exe'
+
+    return [pscustomobject]@{
+        Path                  = $Path
+        Installed             = Test-Path $marker
+        InstalledOn           = if (Test-Path $marker) { [datetime](Get-Content $marker -Raw).Trim() } else { $null }
+        DesktopAppInstaller   = if (Test-Path $bundle)  { $bundle  } else { $null }
+        WindowsAppRuntimeExe  = if (Test-Path $runtime) { $runtime } else { $null }
+    }
+}
+
+
 function Initialize-MsixToolchain {
     <#
     .SYNOPSIS
-        One-call setup: ensures PSF binaries (TMurgent), Process Monitor, and
-        msixmgr are present and up to date under the tools root. Run once
-        before doing any investigation/PSF injection/App Attach work.
+        One-call setup: ensures the SDK tools, PSF binaries (TMurgent),
+        Process Monitor, msixmgr, AND the Windows App Runtime +
+        DesktopAppInstaller (for sandbox/MSIX install support) are present
+        and up to date under the tools root.
 
     .EXAMPLE
-        Initialize-MsixToolchain                  # install/update everything
-        Initialize-MsixToolchain -Skip Procmon    # skip Procmon
-        Initialize-MsixToolchain -Skip Procmon,MsixMgr   # PSF only
+        Initialize-MsixToolchain                              # everything
+        Initialize-MsixToolchain -Skip Procmon                # skip Procmon
+        Initialize-MsixToolchain -Skip Procmon,MsixMgr,Runtime # PSF + SDK only
     #>
     [CmdletBinding()]
     param(
-        [ValidateSet('Sdk','Psf','Procmon','MsixMgr')]
+        [ValidateSet('Sdk','Psf','Procmon','MsixMgr','Runtime')]
         [string[]]$Skip
     )
 
-    $result = [ordered]@{ Sdk = $null; Psf = $null; Procmon = $null; MsixMgr = $null }
+    $result = [ordered]@{
+        Sdk = $null; Psf = $null; Procmon = $null
+        MsixMgr = $null; Runtime = $null
+    }
     # SDK tools first — everything else needs MakeAppx.exe to do anything useful.
     if ($Skip -notcontains 'Sdk')     { $result.Sdk     = Update-MsixSdkTool }
     if ($Skip -notcontains 'Psf')     { $result.Psf     = Update-MsixPsfBinary }
     if ($Skip -notcontains 'Procmon') { $result.Procmon = Update-MsixProcMon }
     if ($Skip -notcontains 'MsixMgr') { $result.MsixMgr = Update-MsixMgr }
+    if ($Skip -notcontains 'Runtime') { $result.Runtime = Update-MsixAppRuntime }
     return [pscustomobject]$result
 }
 

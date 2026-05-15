@@ -239,42 +239,57 @@ function Start-MsixDebugSession {
 function New-MsixSandboxConfig {
     <#
     .SYNOPSIS
-        Generates a Windows Sandbox (.wsb) configuration that maps a folder
-        containing this module + a target .msix into the sandbox, and runs
-        Start-MsixDebugSession on first login.
+        Generates a Windows Sandbox (.wsb) configuration that maps the module
+        + target .msix into the sandbox, installs the Windows App Runtime +
+        DesktopAppInstaller (which the default sandbox image lacks), optionally
+        trusts a self-signed certificate, then runs Start-MsixDebugSession.
 
     .DESCRIPTION
-        The resulting workflow:
+        Workflow:
 
-          1. Operator places the .msix to debug into <DropFolder>.
+          1. Operator drops the .msix in <DropFolder>.
           2. Operator runs:
-                $cfg = New-MsixSandboxConfig -DropFolder C:\debug-msix -PackageName app.msix
-                Start-Process $cfg
-          3. Windows Sandbox boots, the bootstrap script imports this module
-             from the mapped folder and invokes Start-MsixDebugSession with
-             -Install -LaunchProcMon -LaunchDebugView.
+                Start-MsixSandbox -DropFolder C:\drop -PackageName broken.msix
+          3. The sandbox bootstrap script:
+               a. Installs WindowsAppRuntimeInstall-x64.exe (silent)
+               b. Adds Microsoft.DesktopAppInstaller.msixbundle
+               c. (optional) Imports the self-signed cert into LocalMachine\Root
+                  + TrustedPeople so the package will install
+               d. Imports this module and runs Start-MsixDebugSession
 
-        The sandbox keeps the host clean and provides a disposable env per run.
+        The .wsb maps an extra read-only folder (`runtime`) that contains the
+        AppRuntime cache (see Initialize-MsixToolchain), and optionally a
+        certificate file.
 
     .PARAMETER DropFolder
-        Host folder containing the .msix to debug. Mapped read-write in the
-        sandbox so analysis output / captured PML can be retrieved.
+        Host folder containing the .msix to debug. Mapped read-write.
 
     .PARAMETER PackageName
-        Filename inside DropFolder (e.g. 'broken.msix').
+        Filename inside DropFolder.
 
     .PARAMETER ModulePath
-        Path to this module on the host. Defaults to the running module folder.
+        Module folder on the host. Defaults to the running module folder.
+
+    .PARAMETER RuntimePath
+        Folder containing DesktopAppInstaller msixbundle + WindowsAppRuntime
+        installer (cached by Install-MsixAppRuntime). Defaults to
+        $ToolsRoot\runtime; auto-populated if missing.
+
+    .PARAMETER CertPath
+        Optional path to a .cer file (public part of a self-signed cert) that
+        the bootstrap should trust before installing the package.
 
     .PARAMETER OutputPath
-        Where to write the .wsb file. Defaults to "$DropFolder\msix-debug.wsb".
+        Where to write the .wsb. Defaults to "$DropFolder\msix-debug.wsb".
 
     .PARAMETER vGPU / Networking
-        Enable/disable the sandbox features. Both default to enabled.
+        Sandbox features.
 
     .EXAMPLE
-        $wsb = New-MsixSandboxConfig -DropFolder C:\drop -PackageName broken.msix
-        Start-Process $wsb     # boots Windows Sandbox
+        # The package was signed with a self-signed cert (cert.cer next to .msix)
+        $wsb = New-MsixSandboxConfig -DropFolder C:\drop -PackageName broken.msix `
+                                     -CertPath C:\drop\debug-cert.cer
+        Start-Process $wsb
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
@@ -284,6 +299,8 @@ function New-MsixSandboxConfig {
         [Parameter(Mandatory)]
         [string]$PackageName,
         [string]$ModulePath,
+        [string]$RuntimePath,
+        [string]$CertPath,
         [string]$OutputPath,
         [bool]$vGPU = $true,
         [bool]$Networking = $true
@@ -293,31 +310,77 @@ function New-MsixSandboxConfig {
     $msix = Join-Path $DropFolder $PackageName
     if (-not (Test-Path $msix)) { throw "Package not in drop folder: $msix" }
 
-    if (-not $ModulePath) {
-        $ModulePath = $PSScriptRoot
+    if (-not $ModulePath)  { $ModulePath  = $PSScriptRoot }
+    if (-not $RuntimePath) {
+        # Auto-cache runtime installers if not provided
+        $runtimeResult = Update-MsixAppRuntime
+        $RuntimePath   = $runtimeResult.Path
     }
+    if (-not (Test-Path $RuntimePath)) {
+        throw "RuntimePath not found: $RuntimePath. Run Install-MsixAppRuntime first."
+    }
+    if ($CertPath -and -not (Test-Path $CertPath)) {
+        throw "CertPath not found: $CertPath"
+    }
+
     if (-not $OutputPath) {
         $OutputPath = Join-Path $DropFolder 'msix-debug.wsb'
     }
 
-    # Bootstrap script: written into the drop folder so the sandbox can run it
+    # Cert handling: if specified, copy into drop folder so the sandbox sees it
+    $certFileInSandbox = ''
+    if ($CertPath) {
+        $certLeaf = Split-Path $CertPath -Leaf
+        $certTarget = Join-Path $DropFolder $certLeaf
+        if ((Resolve-Path $CertPath).Path -ne (Resolve-Path $certTarget -ErrorAction SilentlyContinue).Path) {
+            Copy-Item $CertPath $certTarget -Force
+        }
+        $certFileInSandbox = "C:\msix-drop\$certLeaf"
+    }
+
+    # Bootstrap script (PowerShell, runs inside sandbox)
     $bootstrap = Join-Path $DropFolder 'sandbox-bootstrap.ps1'
+    $certBlock = if ($certFileInSandbox) { @"
+
+# 3. Trust the self-signed signing certificate so the package will install
+Write-Host '==> Trusting signing certificate' -ForegroundColor Cyan
+Import-Certificate -FilePath '$certFileInSandbox' -CertStoreLocation 'Cert:\LocalMachine\Root'        | Out-Null
+Import-Certificate -FilePath '$certFileInSandbox' -CertStoreLocation 'Cert:\LocalMachine\TrustedPeople' | Out-Null
+"@ } else { '' }
+
     @"
 # Auto-generated by New-MsixSandboxConfig
 `$ErrorActionPreference = 'Stop'
 Set-ExecutionPolicy -Scope Process Bypass -Force
+
+# 1. Install Windows App Runtime (silent EXE installer, no deps)
+Write-Host '==> Installing Windows App Runtime' -ForegroundColor Cyan
+Start-Process -FilePath 'C:\msix-runtime\WindowsAppRuntimeInstall-x64.exe' ``
+              -ArgumentList '--silent' -Wait -PassThru | Out-Null
+
+# 2. Install DesktopAppInstaller msixbundle (provides the AppInstaller UI
+#    handler + winget; required for .msix double-click installs to work).
+Write-Host '==> Installing DesktopAppInstaller' -ForegroundColor Cyan
+Add-AppPackage -Path 'C:\msix-runtime\Microsoft.DesktopAppInstaller.msixbundle' ``
+               -ForceApplicationShutdown -ErrorAction SilentlyContinue
+$certBlock
+
+# 4. Load module and run the debug session
+Write-Host '==> Loading MSIX module and starting debug session' -ForegroundColor Cyan
 Import-Module 'C:\msix-module\MSIX.psm1' -Force
-Initialize-MsixToolchain | Out-Null
+Initialize-MsixToolchain -Skip Procmon | Out-Null  # Procmon already covered host-side
+
 Start-MsixDebugSession ``
     -PackagePath     'C:\msix-drop\$PackageName' ``
     -Install         ``
     -LaunchProcMon   ``
     -LaunchDebugView ``
     -OutputDirectory 'C:\msix-drop\debug-output'
+
 Read-Host 'Press Enter to close the sandbox session'
 "@ | Set-Content -Path $bootstrap -Encoding utf8
 
-    # Wrapper .cmd because LogonCommand wants a single argv
+    # .cmd wrapper because LogonCommand wants a single argv
     $cmdWrap = Join-Path $DropFolder 'sandbox-bootstrap.cmd'
     "powershell.exe -NoExit -ExecutionPolicy Bypass -File ""C:\msix-drop\sandbox-bootstrap.ps1""" |
         Set-Content -Path $cmdWrap -Encoding ascii
@@ -340,6 +403,11 @@ Read-Host 'Press Enter to close the sandbox session'
       <SandboxFolder>C:\msix-module</SandboxFolder>
       <ReadOnly>true</ReadOnly>
     </MappedFolder>
+    <MappedFolder>
+      <HostFolder>$RuntimePath</HostFolder>
+      <SandboxFolder>C:\msix-runtime</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
   </MappedFolders>
   <LogonCommand>
     <Command>C:\msix-drop\sandbox-bootstrap.cmd</Command>
@@ -359,17 +427,44 @@ function Start-MsixSandbox {
     .SYNOPSIS
         Generates a sandbox config (if not provided) and launches Windows Sandbox.
 
+    .DESCRIPTION
+        When -AutoSign is set and the package is unsigned (or its signature
+        chain won't validate inside a fresh sandbox), the function:
+
+          1. Generates a self-signed certificate with the manifest's Publisher
+             as the subject.
+          2. Re-signs the .msix with it.
+          3. Exports the public .cer.
+          4. Passes the .cer to New-MsixSandboxConfig so the bootstrap installs
+             it into LocalMachine\Root + TrustedPeople before installing the
+             package.
+
     .PARAMETER DropFolder / PackageName
         Forwarded to New-MsixSandboxConfig if -ConfigPath isn't given.
 
     .PARAMETER ConfigPath
         Use an existing .wsb file instead of generating one.
+
+    .PARAMETER AutoSign
+        If the package isn't signed (or the signature chain won't validate),
+        auto-generate a self-signed cert that matches the manifest Publisher
+        and use it to sign the package + trust it in the sandbox.
+
+    .PARAMETER CertPath
+        Bring your own .cer file to trust in the sandbox (instead of
+        -AutoSign generating one).
+
+    .EXAMPLE
+        # Fast path: auto-sign and run
+        Start-MsixSandbox -DropFolder C:\drop -PackageName broken.msix -AutoSign
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$DropFolder,
         [string]$PackageName,
-        [string]$ConfigPath
+        [string]$ConfigPath,
+        [switch]$AutoSign,
+        [string]$CertPath
     )
 
     if (-not (Get-Command WindowsSandbox.exe -ErrorAction SilentlyContinue)) {
@@ -380,7 +475,27 @@ function Start-MsixSandbox {
         if (-not $DropFolder -or -not $PackageName) {
             throw '-DropFolder and -PackageName are required if -ConfigPath is not given.'
         }
-        $ConfigPath = New-MsixSandboxConfig -DropFolder $DropFolder -PackageName $PackageName
+
+        $effectiveCertPath = $CertPath
+
+        if ($AutoSign -and -not $effectiveCertPath) {
+            $msix = Join-Path $DropFolder $PackageName
+            $needsSelfSign = (Test-MsixSignature -PackagePath $msix).NeedsSelfSign
+            if ($needsSelfSign) {
+                Write-MsixLog Info 'Package signature missing/invalid; generating self-signed cert and re-signing.'
+                $signed = Invoke-MsixSelfSignAndDebug -PackagePath $msix
+                $effectiveCertPath = $signed.CertPath
+            } else {
+                Write-MsixLog Info 'Package signature is valid; skipping self-sign.'
+            }
+        }
+
+        $cfgArgs = @{
+            DropFolder  = $DropFolder
+            PackageName = $PackageName
+        }
+        if ($effectiveCertPath) { $cfgArgs['CertPath'] = $effectiveCertPath }
+        $ConfigPath = New-MsixSandboxConfig @cfgArgs
     }
 
     if (-not $PSCmdlet.ShouldProcess($ConfigPath, 'Launch Windows Sandbox')) { return }

@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.12.0'
+    ModuleVersion     = '0.13.0'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, PSADT-style standard scripts, TMEditX-style heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -37,10 +37,16 @@
         'Get-MsixPsfBinariesVersion', 'Install-MsixProcMon',
         'Update-MsixProcMon', 'Install-MsixSdkTools',
         'Update-MsixSdkTools', 'Get-MsixSdkToolsVersion',
+        # v0.13: Windows App Runtime + DesktopAppInstaller for sandbox use
+        'Install-MsixAppRuntime', 'Update-MsixAppRuntime',
+        'Get-MsixAppRuntimeVersion',
         'Initialize-MsixToolchain',
         'Start-MsixDebugSession', 'Get-MsixDebugRecommendations',
         'New-MsixSandboxConfig', 'Start-MsixSandbox',
         'Resolve-MsixDebugViewPath',
+        # v0.13: self-signed cert flow for unsigned packages in sandbox
+        'New-MsixSelfSignedCertificate', 'Test-MsixSignature',
+        'Invoke-MsixSelfSignAndDebug',
         'New-MsixAppAttachImage', 'Mount-MsixAppAttachImage',
         'Dismount-MsixAppAttachImage', 'Test-MsixAppAttachImage',
         'Resolve-MsixMgrPath',
@@ -80,9 +86,12 @@
     )
 
     AliasesToExport   = @(
-        'Invoke-MsixCmd', 'start-MsixCmd', 'update-MsixSigner',
-        'add-MsixPsf', 'new-MsixPsfJson', 'add-MsixAlias',
-        'remove-MsixStartMenuEntry', 'add-MsixStartMenuFolder',
+        # Only aliases whose name differs from the underlying function are
+        # listed. Self-aliasing was removed in v0.13: PowerShell is
+        # case-insensitive so 'update-MsixSigner' and 'Update-MsixSigner'
+        # collide, breaking the function.
+        'Invoke-MsixCmd', 'start-MsixCmd',
+        'add-MsixPsf',
         'Get-PublisherIdFromPublisher'
     )
 
@@ -95,6 +104,46 @@
                             'TMEditX','Enterprise','CICD','Pester','PSADT')
             ProjectUri  = 'https://github.com/microsoft/MSIX-PackageSupportFramework'
             ReleaseNotes = @'
+## v0.13.0 - Alias collision fix, sandbox runtime, self-signed cert flow
+
+Bug fixes:
+- Removed 5 self-aliasing backward-compat entries that broke their own
+  functions: update-MsixSigner, new-MsixPsfJson, add-MsixAlias,
+  remove-MsixStartMenuEntry, add-MsixStartMenuFolder. PowerShell is
+  case-insensitive, so Set-Alias from 'name' to 'Name' shadows the function
+  and `Get-Command Name` started returning the alias instead of the
+  function. AliasesToExport in this manifest is now down to the four that
+  legitimately differ from their target names.
+
+Architecture:
+- Public package-operation functions moved out of MSIX.psm1 into a dedicated
+  MSIX.Functions.ps1, matching the per-area sub-module convention used by
+  the rest of the project. The root .psm1 is now just dot-source loader +
+  Export-ModuleMember.
+
+New: Sandbox-ready Windows App Runtime + DesktopAppInstaller cache
+- Install-MsixAppRuntime / Update-MsixAppRuntime / Get-MsixAppRuntimeVersion
+  cache the DesktopAppInstaller msixbundle (https://aka.ms/getwinget) and
+  the Windows App Runtime installer EXE under $ToolsRoot\runtime\. Default
+  Win11 Sandbox lacks both and silently fails to install MSIX packages
+  until they're present.
+- Initialize-MsixToolchain now downloads them too (skip with -Skip Runtime).
+- New-MsixSandboxConfig maps the runtime cache into the sandbox at
+  C:\msix-runtime\ and the bootstrap script runs the .exe + Add-AppPackage
+  of the bundle before installing the target .msix.
+
+New: Self-signed certificate flow (Start-MsixSandbox -AutoSign)
+- Test-MsixSignature reports whether a package needs self-signing to install
+  in a clean sandbox (NotSigned / HashMismatch / Incompatible / UnknownError).
+- New-MsixSelfSignedCertificate creates a cert whose Subject EXACTLY
+  matches the manifest's Publisher attribute (mismatch triggers signtool
+  0x8007000B), exports PFX + public .cer, returns the paths.
+- Invoke-MsixSelfSignAndDebug: end-to-end self-sign helper.
+- Start-MsixSandbox -AutoSign auto-generates the cert when needed, signs
+  the package, and the sandbox bootstrap installs the .cer into
+  LocalMachine\Root + TrustedPeople before installing the package.
+- New-MsixSandboxConfig -CertPath: bring your own .cer if you have one.
+
 ## v0.11.0 - Connect-the-dots autofix, more detection, -NoSign, polymorphic Get-MsixManifest
 
 Bug fixes:

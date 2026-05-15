@@ -17,9 +17,16 @@ function Resolve-MsixDebugViewPath {
     }
     $cmd = Get-Command Dbgview.exe, Dbgview64.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($cmd) { return $cmd.Source }
+
+    $toolsRoot = Get-MsixToolsRoot
     foreach ($p in @(
-        (Join-Path (Get-MsixToolsRoot) 'procmon\Dbgview.exe'),
+        (Join-Path $toolsRoot 'debugview\Dbgview64.exe'),
+        (Join-Path $toolsRoot 'debugview\Dbgview.exe'),
+        (Join-Path $toolsRoot 'procmon\Dbgview64.exe'),
+        (Join-Path $toolsRoot 'procmon\Dbgview.exe'),
+        "${env:ProgramFiles}\SysInternals\Dbgview64.exe",
         "${env:ProgramFiles}\SysInternals\Dbgview.exe",
+        "${env:ProgramFiles}\SysInternalsSuite\Dbgview64.exe",
         "${env:ProgramFiles}\SysInternalsSuite\Dbgview.exe"
     )) {
         if (Test-Path $p) { return $p }
@@ -150,7 +157,7 @@ function Start-MsixDebugSession {
         Filters Procmon to a specific image name (improves signal-to-noise).
 
     .PARAMETER OutputDirectory
-        Where to write the report.txt + recommended-commands.ps1 file.
+        Where to write report.html + report.json + recommended-commands.ps1.
         Defaults to a "msix-debug-<pkg>" folder on the desktop.
 
     .EXAMPLE
@@ -183,8 +190,18 @@ function Start-MsixDebugSession {
     $report  = Invoke-MsixInvestigation -PackagePath $PackagePath
     $commands = Get-MsixDebugRecommendation -Report $report -PackagePath $PackagePath
 
-    $report   | Format-List | Out-File (Join-Path $OutputDirectory 'report.txt')
-    $commands | Out-File    (Join-Path $OutputDirectory 'recommended-commands.ps1') -Encoding utf8
+    # Structured output -- both JSON (programmable) and HTML (human-readable).
+    # The old report.txt rendered nested objects as @{Foo=...; Bar=...} which
+    # was unreadable; ConvertTo-MsixReportHtml fans the Findings array into a
+    # real <table> and embeds the recommended commands as a code block.
+    $jsonPath = Join-Path $OutputDirectory 'report.json'
+    $htmlPath = Join-Path $OutputDirectory 'report.html'
+    $cmdsPath = Join-Path $OutputDirectory 'recommended-commands.ps1'
+
+    $report   | ConvertTo-Json -Depth 12 | Set-Content -Path $jsonPath -Encoding utf8
+    $commands | Set-Content       -Path $cmdsPath -Encoding utf8
+    ConvertTo-MsixReportHtml -Report $report -Commands $commands -PackagePath $PackagePath |
+        Set-Content -Path $htmlPath -Encoding utf8
 
     Write-Information ''
     Write-Information '────────────────────────────────────────────────────────────────────'
@@ -217,22 +234,149 @@ function Start-MsixDebugSession {
         }
     }
 
-    # 4) DebugView
+    # 4) DebugView -- auto-install on miss (mirrors the Procmon path above)
     if ($LaunchDebugView) {
         $dv = Resolve-MsixDebugViewPath
+        if (-not $dv) {
+            Write-MsixLog Info 'DebugView not found; downloading from Sysinternals.'
+            try {
+                Install-MsixDebugView | Out-Null
+                $dv = Resolve-MsixDebugViewPath
+            } catch {
+                Write-MsixLog Warning "DebugView install failed: $($_.Exception.Message)"
+            }
+        }
         if ($dv) {
             Start-Process $dv
             Write-MsixLog Info "DebugView launched: $dv"
         } else {
-            Write-MsixLog Warning 'DebugView not found. Download from https://learn.microsoft.com/sysinternals/downloads/debugview and set $env:MSIX_DEBUGVIEW_PATH.'
+            Write-MsixLog Warning 'DebugView not found. Run Install-MsixDebugView or set $env:MSIX_DEBUGVIEW_PATH manually.'
         }
     }
 
     return [pscustomobject]@{
         Report           = $report
         OutputDirectory  = $OutputDirectory
-        RecommendedFile  = Join-Path $OutputDirectory 'recommended-commands.ps1'
+        ReportHtml       = $htmlPath
+        ReportJson       = $jsonPath
+        RecommendedFile  = $cmdsPath
     }
+}
+
+
+function ConvertTo-MsixReportHtml {
+    <#
+    .SYNOPSIS
+        Renders a compatibility report into a standalone HTML page with
+        sortable tables for Findings, embedded RecommendedCommands as a code
+        block, and links back to the package + raw JSON.
+
+    .DESCRIPTION
+        Self-contained HTML (inline CSS, no external dependencies) so the
+        operator can copy it out of the sandbox / debug folder and open it
+        anywhere.
+
+    .PARAMETER Report
+        Output of Invoke-MsixInvestigation / Get-MsixCompatibilityReport.
+
+    .PARAMETER Commands
+        Output of Get-MsixDebugRecommendation (string array).
+
+    .PARAMETER PackagePath
+        Original .msix path; included in the header.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] $Report,
+        [string[]]$Commands,
+        [string]$PackagePath
+    )
+
+    function _Esc([string]$s) {
+        if ($null -eq $s) { return '' }
+        ($s -replace '&','&amp;') -replace '<','&lt;' -replace '>','&gt;' -replace '"','&quot;'
+    }
+
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine('<!doctype html><html lang="en"><head><meta charset="utf-8">')
+    [void]$sb.AppendLine("<title>MSIX Debug Report -- $(_Esc (Split-Path $PackagePath -Leaf))</title>")
+    [void]$sb.AppendLine(@'
+<style>
+:root { color-scheme: light dark; }
+body { font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+       margin: 2em auto; max-width: 1100px; padding: 0 1em; }
+h1 { border-bottom: 2px solid #888; padding-bottom: .25em; }
+h2 { margin-top: 2em; }
+table { border-collapse: collapse; width: 100%; margin: .5em 0 1.5em; }
+th, td { border: 1px solid #888; padding: .35em .6em; text-align: left;
+         vertical-align: top; }
+th { background: #eee; }
+@media (prefers-color-scheme: dark) {
+  th { background: #333; }
+  body { background: #1e1e1e; color: #ddd; }
+  td, th { border-color: #555; }
+}
+.sev-Error    { color: #b00020; font-weight: 600; }
+.sev-Warning  { color: #b25e00; font-weight: 600; }
+.sev-Info     { color: #555; }
+pre { background: #111; color: #eee; padding: 1em; border-radius: 6px;
+      overflow-x: auto; white-space: pre-wrap; }
+code { font: 13px/1.4 Consolas, Menlo, monospace; }
+.meta { color: #666; font-size: 12px; }
+.kv { display: grid; grid-template-columns: 9em 1fr; gap: .25em 1em; }
+</style>
+'@)
+    [void]$sb.AppendLine('</head><body>')
+
+    [void]$sb.AppendLine("<h1>MSIX Debug Report</h1>")
+    [void]$sb.AppendLine('<div class="meta">')
+    [void]$sb.AppendLine("Package: <code>$(_Esc $PackagePath)</code><br>")
+    [void]$sb.AppendLine("Generated: $(_Esc ([DateTime]::Now.ToString('o')))<br>")
+    [void]$sb.AppendLine('</div>')
+
+    # --- Findings ---
+    $findings = @($Report.Findings)
+    [void]$sb.AppendLine("<h2>Findings ($($findings.Count))</h2>")
+    if ($findings) {
+        [void]$sb.AppendLine('<table><tr><th>#</th><th>Severity</th><th>Category</th><th>AppId</th><th>Symptom</th><th>Recommendation</th><th>Evidence</th></tr>')
+        $i = 0
+        foreach ($f in $findings) {
+            $i++
+            $sev = _Esc $f.Severity
+            [void]$sb.AppendLine("<tr><td>$i</td><td class=""sev-$sev"">$sev</td><td>$(_Esc $f.Category)</td><td>$(_Esc $f.AppId)</td><td>$(_Esc $f.Symptom)</td><td>$(_Esc $f.Recommendation)</td><td>$(_Esc $f.Evidence)</td></tr>")
+        }
+        [void]$sb.AppendLine('</table>')
+    } else {
+        [void]$sb.AppendLine('<p><em>No findings — package looks ready to deploy.</em></p>')
+    }
+
+    # --- Recommended commands ---
+    if ($Commands -and $Commands.Count -gt 0) {
+        [void]$sb.AppendLine('<h2>Recommended commands</h2>')
+        [void]$sb.AppendLine('<p>Copy-paste these into PowerShell, or use the bundled <code>recommended-commands.ps1</code>.</p>')
+        [void]$sb.AppendLine('<pre><code>')
+        foreach ($c in $Commands) { [void]$sb.AppendLine((_Esc $c)) }
+        [void]$sb.AppendLine('</code></pre>')
+    }
+
+    # --- Suggested fixups (raw) ---
+    if ($Report.SuggestedFixups) {
+        [void]$sb.AppendLine('<h2>Suggested fixups (raw)</h2>')
+        [void]$sb.AppendLine('<pre><code>')
+        [void]$sb.AppendLine((_Esc ($Report.SuggestedFixups | ConvertTo-Json -Depth 10)))
+        [void]$sb.AppendLine('</code></pre>')
+    }
+
+    # --- ProcMon log path ---
+    if ($Report.ProcMonLog) {
+        [void]$sb.AppendLine('<h2>Process Monitor capture</h2>')
+        [void]$sb.AppendLine("<p><code>$(_Esc $Report.ProcMonLog)</code></p>")
+    }
+
+    [void]$sb.AppendLine('<p class="meta">Full structured data: <code>report.json</code></p>')
+    [void]$sb.AppendLine('</body></html>')
+    return $sb.ToString()
 }
 
 
@@ -319,6 +463,25 @@ function New-MsixSandboxConfig {
     if (-not (Test-Path $RuntimePath)) {
         throw "RuntimePath not found: $RuntimePath. Run Install-MsixAppRuntime first."
     }
+
+    # ── Pre-flight: discover what WindowsAppRuntime channels the package
+    #    actually declares as dependencies, and ensure they are cached.
+    #    Otherwise the sandbox install fails with HRESULT 0x80073CF3.
+    try {
+        $required = @(Get-MsixRequiredAppRuntimeChannel -PackagePath $msix)
+        if ($required) {
+            Write-MsixLog Info "Package requires WindowsAppRuntime channels: $($required -join ', ')"
+            $missing = $required | Where-Object {
+                -not (Test-Path (Join-Path $RuntimePath "WindowsAppRuntimeInstall-x64-$_.exe"))
+            }
+            if ($missing) {
+                Write-MsixLog Info "Caching missing channels: $($missing -join ', ')"
+                Install-MsixAppRuntime -Destination $RuntimePath -Channels $missing | Out-Null
+            }
+        }
+    } catch {
+        Write-MsixLog Warning "Could not pre-detect WindowsAppRuntime dependencies: $($_.Exception.Message)"
+    }
     if ($CertPath -and -not (Test-Path $CertPath)) {
         throw "CertPath not found: $CertPath"
     }
@@ -353,22 +516,41 @@ Import-Certificate -FilePath '$certFileInSandbox' -CertStoreLocation 'Cert:\Loca
 `$ErrorActionPreference = 'Stop'
 Set-ExecutionPolicy -Scope Process Bypass -Force
 
-# 1. Install Windows App Runtime (silent EXE installer, no deps)
-Write-Host '==> Installing Windows App Runtime' -ForegroundColor Cyan
-Start-Process -FilePath 'C:\msix-runtime\WindowsAppRuntimeInstall-x64.exe' ``
-              -ArgumentList '--silent' -Wait -PassThru | Out-Null
+# 1. Install every WindowsAppRuntime channel we cached. The package may
+#    pin a specific channel (e.g. Notepad 8.9.x pins 1.4); installing
+#    only the latest fails with HRESULT 0x80073CF3 because the runtime
+#    versions are SIDE-BY-SIDE -- newer doesn't satisfy older deps.
+Write-Host '==> Installing all WindowsAppRuntime channels' -ForegroundColor Cyan
+Get-ChildItem 'C:\msix-runtime\WindowsAppRuntimeInstall-x64*.exe' -File |
+    Sort-Object Name |
+    ForEach-Object {
+        Write-Host "    - `$(`$_.Name)" -ForegroundColor DarkGray
+        `$proc = Start-Process -FilePath `$_.FullName -ArgumentList '--silent' ``
+                              -Wait -PassThru
+        if (`$proc.ExitCode -ne 0) {
+            Write-Warning "Runtime installer `$(`$_.Name) exited with `$(`$proc.ExitCode)"
+        }
+    }
 
 # 2. Install DesktopAppInstaller msixbundle (provides the AppInstaller UI
-#    handler + winget; required for .msix double-click installs to work).
+#    handler + winget; required for .msix double-click installs to work
+#    in default Win11 Sandbox, which doesn't ship it).
 Write-Host '==> Installing DesktopAppInstaller' -ForegroundColor Cyan
-Add-AppPackage -Path 'C:\msix-runtime\Microsoft.DesktopAppInstaller.msixbundle' ``
-               -ForceApplicationShutdown -ErrorAction SilentlyContinue
+try {
+    Add-AppPackage -Path 'C:\msix-runtime\Microsoft.DesktopAppInstaller.msixbundle' ``
+                   -ForceApplicationShutdown -ErrorAction Stop
+} catch {
+    Write-Warning "DesktopAppInstaller install failed: `$(`$_.Exception.Message)"
+    Write-Warning 'Continuing anyway -- Add-AppPackage of the target .msix may still work.'
+}
 $certBlock
 
 # 4. Load module and run the debug session
 Write-Host '==> Loading MSIX module and starting debug session' -ForegroundColor Cyan
 Import-Module 'C:\msix-module\MSIX.psm1' -Force
-Initialize-MsixToolchain -Skip Procmon | Out-Null  # Procmon already covered host-side
+# Skip everything that needs network; the host already pre-cached anything
+# the sandbox needs in C:\msix-runtime.
+Initialize-MsixToolchain -Skip Sdk,Psf,Procmon,DebugView,MsixMgr,Runtime | Out-Null
 
 Start-MsixDebugSession ``
     -PackagePath     'C:\msix-drop\$PackageName' ``

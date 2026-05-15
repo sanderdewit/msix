@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.13.0'
+    ModuleVersion     = '0.14.0'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, PSADT-style standard scripts, TMEditX-style heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -40,10 +40,16 @@
         # v0.13: Windows App Runtime + DesktopAppInstaller for sandbox use
         'Install-MsixAppRuntime', 'Update-MsixAppRuntime',
         'Get-MsixAppRuntimeVersion',
+        # v0.14: multi-channel runtime detection + DebugView auto-install
+        'Get-MsixRequiredAppRuntimeChannel',
+        'Install-MsixDebugView', 'Update-MsixDebugView',
+        'Get-MsixDebugViewVersion',
         'Initialize-MsixToolchain',
         'Start-MsixDebugSession', 'Get-MsixDebugRecommendations',
         'New-MsixSandboxConfig', 'Start-MsixSandbox',
         'Resolve-MsixDebugViewPath',
+        # v0.14: structured HTML/JSON debug reports
+        'ConvertTo-MsixReportHtml',
         # v0.13: self-signed cert flow for unsigned packages in sandbox
         'New-MsixSelfSignedCertificate', 'Test-MsixSignature',
         'Invoke-MsixSelfSignAndDebug',
@@ -104,6 +110,48 @@
                             'TMEditX','Enterprise','CICD','Pester','PSADT')
             ProjectUri  = 'https://github.com/microsoft/MSIX-PackageSupportFramework'
             ReleaseNotes = @'
+## v0.14.0 - Multi-channel WindowsAppRuntime, DebugView auto-install, HTML/JSON reports
+
+Three real-world sandbox failures fixed.
+
+1. WindowsAppRuntime version pinning. Notepad 8.9.x declares
+   <PackageDependency Name="Microsoft.WindowsAppRuntime.1.4" .../> but
+   we were only installing the 1.6 channel, so the sandbox install died
+   with HRESULT 0x80073CF3. v0.14 keeps a per-channel cache (1.4 / 1.5 /
+   1.6 by default) and the sandbox bootstrap installs EVERY .exe found
+   in C:\msix-runtime\ on first launch.
+
+   New:
+     Get-MsixRequiredAppRuntimeChannel  - parse manifest dependencies
+     Install-MsixAppRuntime -Channels   - download per-channel installers
+                                          (filename has the channel suffix
+                                          so they live side-by-side)
+     New-MsixSandboxConfig auto-detects required channels from the
+     manifest before generating the .wsb and caches whatever's missing.
+
+2. DebugView auto-install. The Sysinternals DebugView zip is separate
+   from ProcessMonitor.zip, so Start-MsixDebugSession was logging
+   "DebugView not found" even after Initialize-MsixToolchain. v0.14
+   adds:
+     Install-MsixDebugView, Update-MsixDebugView, Get-MsixDebugViewVersion
+     Initialize-MsixToolchain pulls DebugView too (-Skip DebugView to omit)
+     Resolve-MsixDebugViewPath now looks in $ToolsRoot\debugview\ first
+     Start-MsixDebugSession -LaunchDebugView auto-downloads on miss
+
+3. Structured debug reports. report.txt was unreadable - PowerShell
+   Format-List on nested objects rendered Findings as @{Sev=...;Cat=...}
+   strings. v0.14 writes:
+     report.json   - full structured data (Findings + SuggestedFixups
+                     + RecommendedCommands + ProcMonLog), Depth=12
+     report.html   - standalone single-file HTML with sortable Findings
+                     table, severity colour coding, embedded code block
+                     of recommended commands, dark-mode aware CSS.
+     recommended-commands.ps1 - unchanged, still the copy-paste path.
+   Old report.txt is retired.
+
+   New cmdlet ConvertTo-MsixReportHtml renders any
+   Get-MsixCompatibilityReport result to a self-contained HTML page.
+
 ## v0.13.0 - Alias collision fix, sandbox runtime, self-signed cert flow
 
 Bug fixes:

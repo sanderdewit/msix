@@ -108,6 +108,10 @@ Export-ModuleMember -Function @(
     'Install-MsixAppRuntime'
     'Update-MsixAppRuntime'
     'Get-MsixAppRuntimeVersion'
+    'Get-MsixRequiredAppRuntimeChannel'
+    'Install-MsixDebugView'
+    'Update-MsixDebugView'
+    'Get-MsixDebugViewVersion'
     'Initialize-MsixToolchain'
     # Debug session
     'Start-MsixDebugSession'
@@ -115,6 +119,7 @@ Export-ModuleMember -Function @(
     'New-MsixSandboxConfig'
     'Start-MsixSandbox'
     'Resolve-MsixDebugViewPath'
+    'ConvertTo-MsixReportHtml'
     # Self-signed certificate flow for debug / sandbox
     'New-MsixSelfSignedCertificate'
     'Test-MsixSignature'

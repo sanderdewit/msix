@@ -125,6 +125,82 @@ function Get-MsixDebugRecommendation {
 }
 
 
+function Set-MsixProcMonFilterRule {
+    <#
+        Writes Procmon filter rules to the registry so they are active when
+        Process Monitor next launches.  Procmon reads
+        HKCU\Software\Sysinternals\Process Monitor\FilterRules (REG_BINARY)
+        on startup and applies whatever is stored there.
+
+        Binary layout (Procmon v3+):
+          [uint32 ruleCount]
+          Per rule:
+            [uint32 columnId]  -- alphabetical index from the filter dialog
+            [uint32 relationId] -- is=0, is not=1, contains=6, etc.
+            [uint32 action]    -- Include=0, Exclude=1
+            [uint32 valLen]    -- char count INCLUDING null terminator
+            [UTF-16LE bytes]   -- null-terminated string, valLen*2 bytes
+
+        Column IDs used here (Procmon 3.x alphabetical order):
+          Process Name = 16   Result = 18
+
+        Returns $true on success, $false on failure (procmon still launches,
+        just without pre-set filters).
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([bool])]
+    param(
+        # One or more process image names to include (e.g. 'myapp.exe').
+        [string[]]$ProcessNames,
+        # When set, also adds a "Result is not SUCCESS" include rule so only
+        # failures are captured.
+        [switch]$FailuresOnly
+    )
+
+    # Build rule descriptors
+    $ruleList = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($pn in $ProcessNames) {
+        $ruleList.Add(@{ Col = 16; Rel = 0; Act = 0; Val = $pn })  # Process Name is <pn> Include
+    }
+    if ($FailuresOnly) {
+        $ruleList.Add(@{ Col = 18; Rel = 1; Act = 0; Val = 'SUCCESS' })  # Result is not SUCCESS Include
+    }
+    if ($ruleList.Count -eq 0) { return $true }
+
+    try {
+        $isLE  = [System.BitConverter]::IsLittleEndian
+        $u32   = { param($v)
+            $b = [System.BitConverter]::GetBytes([uint32]$v)
+            if (-not $isLE) { [Array]::Reverse($b) }
+            $b
+        }
+
+        $bytes = [System.Collections.Generic.List[byte]]::new()
+        $bytes.AddRange((& $u32 $ruleList.Count))
+
+        foreach ($r in $ruleList) {
+            $valBytes = [System.Text.Encoding]::Unicode.GetBytes($r.Val + "`0")  # null-terminated UTF-16LE
+            $valLen   = $valBytes.Length / 2   # length in chars including null
+            $bytes.AddRange((& $u32 $r.Col))
+            $bytes.AddRange((& $u32 $r.Rel))
+            $bytes.AddRange((& $u32 $r.Act))
+            $bytes.AddRange((& $u32 $valLen))
+            $bytes.AddRange($valBytes)
+        }
+
+        $regPath = 'HKCU:\Software\Sysinternals\Process Monitor'
+        if (-not $PSCmdlet.ShouldProcess($regPath, 'Set ProcMon filter rules')) { return $false }
+
+        if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
+        Set-ItemProperty -Path $regPath -Name 'FilterRules' -Value $bytes.ToArray() -Type Binary
+        return $true
+    } catch {
+        Write-MsixLog Warning "Could not write Procmon filter rules to registry: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+
 function Start-MsixDebugSession {
     <#
     .SYNOPSIS
@@ -153,15 +229,31 @@ function Start-MsixDebugSession {
     .PARAMETER LaunchProcMon / LaunchDebugView
         Open the corresponding Sysinternals tool. Auto-installs Procmon if missing.
 
+    .PARAMETER AddTraceFixup
+        Inject the PSF TraceFixup DLL into the package before debugging so that
+        file-system and registry failures are emitted via OutputDebugString.
+        DebugView is launched automatically when this switch is set.
+        Requires -Pfx / -PfxPassword when the package needs re-signing.
+
     .PARAMETER ProcessName
-        Filters Procmon to a specific image name (improves signal-to-noise).
+        Filters Procmon to a specific image name. Auto-detected from the manifest
+        when not supplied.
 
     .PARAMETER OutputDirectory
         Where to write report.html + report.json + recommended-commands.ps1.
         Defaults to a "msix-debug-<pkg>" folder on the desktop.
 
+    .PARAMETER Pfx / PfxPassword
+        Certificate used to re-sign the package after TraceFixup injection
+        (required when -AddTraceFixup modifies the package).
+
     .EXAMPLE
         Start-MsixDebugSession -PackagePath C:\Drop\app.msix -Install -LaunchProcMon -LaunchDebugView
+
+    .EXAMPLE
+        # PSF TraceFixup path (no Procmon required)
+        Start-MsixDebugSession -PackagePath C:\Drop\app.msix -Install -AddTraceFixup `
+            -Pfx C:\certs\debug.pfx -PfxPassword (Read-Host -AsSecureString)
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -170,13 +262,15 @@ function Start-MsixDebugSession {
         [switch]$Install,
         [switch]$LaunchProcMon,
         [switch]$LaunchDebugView,
+        [switch]$AddTraceFixup,
         [string]$ProcessName,
-        [string]$OutputDirectory
+        [string]$OutputDirectory,
+        [string]$Pfx,
+        [SecureString]$PfxPassword
     )
 
     if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Start MSIX Debug Session')) { return }
 
-    $null = $ProcessName  # forwarded to Process Monitor filter when -LaunchProcMon is used
     $fileinfo = Get-Item $PackagePath
     if (-not $OutputDirectory) {
         $OutputDirectory = Join-Path ([Environment]::GetFolderPath('Desktop')) "msix-debug-$($fileinfo.BaseName)"
@@ -185,6 +279,21 @@ function Start-MsixDebugSession {
 
     Write-MsixLog Info "=== MSIX Debug Session: $($fileinfo.Name) ==="
     Write-MsixLog Info "Output: $OutputDirectory"
+
+    # 0) Auto-detect target process name from manifest when not supplied by caller
+    if (-not $ProcessName) {
+        try {
+            $mf  = Get-MsixManifest $PackagePath
+            $app = Get-MsixManifestApplication $mf
+            if ($app) {
+                $exeAttr = $app.GetAttribute('Executable')
+                if ($exeAttr) { $ProcessName = [System.IO.Path]::GetFileName($exeAttr) }
+            }
+        } catch {
+            Write-MsixLog Warning "Could not auto-detect process name from manifest: $($_.Exception.Message)"
+        }
+    }
+    if ($ProcessName) { Write-MsixLog Info "Target process: $ProcessName" }
 
     # 1) Analysis
     $report  = Invoke-MsixInvestigation -PackagePath $PackagePath
@@ -211,13 +320,28 @@ function Start-MsixDebugSession {
     Write-Information '────────────────────────────────────────────────────────────────────'
     Write-Information ''
 
-    # 2) Install
+    # 2) PSF TraceFixup injection (before install so the installed copy carries it)
+    if ($AddTraceFixup) {
+        Write-MsixLog Info "Injecting PSF TraceFixup (filesystem + registry allFailures)…"
+        $traceFixup = New-MsixPsfTraceConfig -FilesystemLevel allFailures -RegistryLevel allFailures
+        $psfArgs = @{
+            PackagePath = $fileinfo.FullName
+            Fixups      = @($traceFixup)
+        }
+        if ($Pfx)         { $psfArgs['Pfx']         = $Pfx }
+        if ($PfxPassword) { $psfArgs['PfxPassword']  = $PfxPassword }
+        Add-MsixPsfV2 @psfArgs
+        Write-MsixLog Info 'TraceFixup injected — failures will appear in DebugView via OutputDebugString.'
+        $LaunchDebugView = $true   # DebugView is the capture sink for TraceFixup output
+    }
+
+    # 3) Install
     if ($Install) {
         Write-MsixLog Info "Installing package…"
         Add-AppPackage -Path $fileinfo.FullName -ForceApplicationShutdown -ErrorAction Stop
     }
 
-    # 3) Procmon
+    # 4) Procmon
     if ($LaunchProcMon) {
         $procmon = Resolve-MsixProcMonPath
         if (-not $procmon) {
@@ -226,6 +350,16 @@ function Start-MsixDebugSession {
             $procmon = Resolve-MsixProcMonPath
         }
         if ($procmon) {
+            # Pre-configure filter rules in registry before launch (best-effort)
+            if ($ProcessName) {
+        $filtered = Set-MsixProcMonFilterRule -ProcessNames @($ProcessName)
+                if ($filtered) {
+                    Write-MsixLog Info "Procmon filter set: Process Name is '$ProcessName'"
+                } else {
+                    Write-MsixLog Warning "Could not pre-set Procmon filter; set manually: Process Name is '$ProcessName'"
+                }
+            }
+
             $pmlPath = Join-Path $OutputDirectory 'capture.pml'
             $pmArgs  = @('/AcceptEula', '/Quiet', '/Minimized', '/BackingFile', "`"$pmlPath`"")
             Start-Process $procmon -ArgumentList $pmArgs
@@ -234,7 +368,7 @@ function Start-MsixDebugSession {
         }
     }
 
-    # 4) DebugView -- auto-install on miss (mirrors the Procmon path above)
+    # 5) DebugView -- auto-install on miss (mirrors the Procmon path above)
     if ($LaunchDebugView) {
         $dv = Resolve-MsixDebugViewPath
         if (-not $dv) {
@@ -525,7 +659,7 @@ Get-ChildItem 'C:\msix-runtime\WindowsAppRuntimeInstall-x64*.exe' -File |
     Sort-Object Name |
     ForEach-Object {
         Write-Host "    - `$(`$_.Name)" -ForegroundColor DarkGray
-        `$proc = Start-Process -FilePath `$_.FullName -ArgumentList '--silent' ``
+        `$proc = Start-Process -FilePath `$_.FullName ``
                               -Wait -PassThru
         if (`$proc.ExitCode -ne 0) {
             Write-Warning "Runtime installer `$(`$_.Name) exited with `$(`$proc.ExitCode)"
@@ -632,13 +766,24 @@ function Start-MsixSandbox {
         auto-generate a self-signed cert that matches the manifest Publisher
         and use it to sign the package + trust it in the sandbox.
 
+    .PARAMETER AddTraceFixup
+        Inject the PSF TraceFixup DLL into the package before launching the
+        sandbox.  When -AutoSign is also set, TraceFixup is injected first
+        (without signing) and then auto-sign covers the modified package in a
+        single pass — no double-signing required.  When -AutoSign is NOT set,
+        -Pfx / -PfxPassword must be supplied for the re-sign step.
+
     .PARAMETER CertPath
         Bring your own .cer file to trust in the sandbox (instead of
         -AutoSign generating one).
 
+    .PARAMETER Pfx / PfxPassword
+        Certificate for re-signing after TraceFixup injection when -AutoSign
+        is not used.
+
     .EXAMPLE
-        # Fast path: auto-sign and run
-        Start-MsixSandbox -DropFolder C:\drop -PackageName broken.msix -AutoSign
+        # Fast path: auto-sign, inject TraceFixup, launch sandbox + DebugView
+        Start-MsixSandbox -DropFolder C:\drop -PackageName broken.msix -AutoSign -AddTraceFixup
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -646,7 +791,10 @@ function Start-MsixSandbox {
         [string]$PackageName,
         [string]$ConfigPath,
         [switch]$AutoSign,
-        [string]$CertPath
+        [switch]$AddTraceFixup,
+        [string]$CertPath,
+        [string]$Pfx,
+        [SecureString]$PfxPassword
     )
 
     if (-not (Get-Command WindowsSandbox.exe -ErrorAction SilentlyContinue)) {
@@ -658,10 +806,30 @@ function Start-MsixSandbox {
             throw '-DropFolder and -PackageName are required if -ConfigPath is not given.'
         }
 
+        $msix              = Join-Path $DropFolder $PackageName
         $effectiveCertPath = $CertPath
 
+        # Inject TraceFixup BEFORE signing so the auto-sign (or caller-supplied
+        # cert) covers the modified package in a single pass.
+        if ($AddTraceFixup) {
+            Write-MsixLog Info 'Injecting PSF TraceFixup (filesystem + registry allFailures)…'
+            $traceFixup = New-MsixPsfTraceConfig -FilesystemLevel allFailures -RegistryLevel allFailures
+            $psfArgs    = @{
+                PackagePath = $msix
+                Fixups      = @($traceFixup)
+            }
+            if ($AutoSign) {
+                # Defer signing — auto-sign block below will cover this
+                $psfArgs['SkipSigning'] = $true
+            } else {
+                if ($Pfx)         { $psfArgs['Pfx']         = $Pfx }
+                if ($PfxPassword) { $psfArgs['PfxPassword']  = $PfxPassword }
+            }
+            Add-MsixPsfV2 @psfArgs
+            Write-MsixLog Info 'TraceFixup injected. DebugView inside the sandbox will capture its output.'
+        }
+
         if ($AutoSign -and -not $effectiveCertPath) {
-            $msix = Join-Path $DropFolder $PackageName
             $needsSelfSign = (Test-MsixSignature -PackagePath $msix).NeedsSelfSign
             if ($needsSelfSign) {
                 Write-MsixLog Info 'Package signature missing/invalid; generating self-signed cert and re-signing.'

@@ -627,7 +627,7 @@ $script:DesktopAppInstallerUrl = 'https://aka.ms/getwinget'
 # channels (Notepad 8.9.x pins 1.4, etc.) so we keep a broad floor here.
 # The sandbox bootstrap also reads the actual manifest dependencies and
 # downloads any missing channel on demand.
-$script:WindowsAppRuntimeDefaultChannels = @('1.4','1.5','1.6')
+$script:WindowsAppRuntimeDefaultChannels = @('1.4','1.5','1.6','1.7','1.8')
 
 function _MsixAppRuntimeUrl {
     param([string]$Channel)
@@ -760,6 +760,7 @@ function Get-MsixRequiredAppRuntimeChannel {
         # => @('1.4')
     #>
     [CmdletBinding()]
+    [OutputType([string[]])]
     param(
         [Parameter(Mandatory)]
         [string]$PackagePath

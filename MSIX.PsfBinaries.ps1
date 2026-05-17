@@ -13,7 +13,8 @@
 # =============================================================================
 
 $script:TMurgentRepo  = 'TimMangan/MSIX-PackageSupportFramework'
-$script:ProcmonZipUrl = 'https://download.sysinternals.com/files/ProcessMonitor.zip'
+$script:ProcmonZipUrl    = 'https://download.sysinternals.com/files/ProcessMonitor.zip'
+$script:DebugViewZipUrl  = 'https://download.sysinternals.com/files/DebugView.zip'
 $script:SdkToolsNuGet = 'Microsoft.Windows.SDK.BuildTools'   # publishes MakeAppx + signtool
 
 function _MsixDownloadFile {
@@ -286,6 +287,120 @@ function Update-MsixProcMon {
 }
 
 
+function Install-MsixDebugView {
+    <#
+    .SYNOPSIS
+        Downloads and extracts Sysinternals DebugView under the tools root,
+        ready for Resolve-MsixDebugViewPath / Start-MsixDebugSession.
+
+    .DESCRIPTION
+        DebugView ships separately from Process Monitor (different zip on
+        the Sysinternals download server). Start-MsixDebugSession was
+        printing "DebugView not found" if the operator had only run
+        Initialize-MsixToolchain; this cmdlet closes that gap.
+
+    .PARAMETER Destination
+        Where to extract. Defaults to "$Get-MsixToolsRoot\debugview".
+
+    .PARAMETER Force
+        Re-download even if already present.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [string]$Destination,
+        [switch]$Force
+    )
+
+    if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'debugview' }
+
+    $marker = Join-Path $Destination 'debugview.installed'
+    if ((Test-Path $marker) -and -not $Force) {
+        Write-MsixLog Info "DebugView already installed at $Destination. Use -Force to reinstall."
+        return [pscustomobject]@{ Path = $Destination; Updated = $false }
+    }
+
+    $tmp = Join-Path $env:TEMP "debugview-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    New-Item $tmp -ItemType Directory -Force | Out-Null
+    $zip = Join-Path $tmp 'DebugView.zip'
+
+    if ($PSCmdlet.ShouldProcess($Destination, 'Install DebugView')) {
+        try {
+            _MsixDownloadFile -Url $script:DebugViewZipUrl -Destination $zip
+            New-Item $Destination -ItemType Directory -Force | Out-Null
+            Expand-Archive -LiteralPath $zip -DestinationPath $Destination -Force
+            (Get-Date -Format o) | Set-Content $marker -Encoding ascii
+
+            # Make Resolve-MsixDebugViewPath find it via env-var hint
+            $exe = Join-Path $Destination 'Dbgview64.exe'
+            if (-not (Test-Path $exe)) { $exe = Join-Path $Destination 'Dbgview.exe' }
+            if (Test-Path $exe) {
+                $env:MSIX_DEBUGVIEW_PATH = $exe
+                Write-MsixLog Info "DebugView installed at $exe"
+            } else {
+                Write-MsixLog Warning "Dbgview.exe / Dbgview64.exe not found after extraction; check $Destination"
+            }
+        } finally {
+            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    return [pscustomobject]@{
+        Path    = $Destination
+        Updated = $true
+        Source  = $script:DebugViewZipUrl
+    }
+}
+
+
+function Update-MsixDebugView {
+    <#
+    .SYNOPSIS
+        Refreshes DebugView if older than -MaxAgeDays (default 30).
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [string]$Destination,
+        [int]$MaxAgeDays = 30
+    )
+    if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'debugview' }
+    if (-not $PSCmdlet.ShouldProcess($Destination, 'Update DebugView')) { return }
+    $marker = Join-Path $Destination 'debugview.installed'
+
+    if (-not (Test-Path $marker)) {
+        return Install-MsixDebugView -Destination $Destination
+    }
+    $stamp = [datetime](Get-Content $marker -Raw).Trim()
+    $age   = (Get-Date) - $stamp
+    if ($age.TotalDays -gt $MaxAgeDays) {
+        Write-MsixLog Info "DebugView is $([int]$age.TotalDays) days old; refreshing."
+        return Install-MsixDebugView -Destination $Destination -Force
+    }
+    Write-MsixLog Info "DebugView is fresh ($([int]$age.TotalDays) days old; threshold $MaxAgeDays)."
+    return [pscustomobject]@{ Path = $Destination; Updated = $false }
+}
+
+
+function Get-MsixDebugViewVersion {
+    <#
+    .SYNOPSIS
+        Reports the cached DebugView install timestamp and resolved Dbgview path.
+    #>
+    [CmdletBinding()]
+    param([string]$Path)
+    if (-not $Path) { $Path = Join-Path (Get-MsixToolsRoot) 'debugview' }
+    $marker = Join-Path $Path 'debugview.installed'
+    $exe    = Join-Path $Path 'Dbgview64.exe'
+    if (-not (Test-Path $exe)) { $exe = Join-Path $Path 'Dbgview.exe' }
+
+    return [pscustomobject]@{
+        Path        = $Path
+        Installed   = Test-Path $marker
+        InstalledOn = if (Test-Path $marker) { [datetime](Get-Content $marker -Raw).Trim() } else { $null }
+        Executable  = if (Test-Path $exe) { $exe } else { $null }
+    }
+}
+
+
 function Install-MsixSdkTool {
     <#
     .SYNOPSIS
@@ -486,30 +601,265 @@ function Get-MsixSdkToolsVersion {
 }
 
 
-function Initialize-MsixToolchain {
+# ===========================================================================
+# Windows App Runtime + DesktopAppInstaller (for sandbox / fresh hosts)
+# ===========================================================================
+# Default Win11 Sandbox cannot install MSIX packages out of the box — it
+# lacks the AppInstaller MSIX shell handler and (depending on the package's
+# uap10:HostRuntimeDependency / Windows App SDK target) the Windows App
+# Runtime. These two installers fix both:
+#
+#   - DesktopAppInstaller    (Microsoft.DesktopAppInstaller msixbundle)
+#                            Adds the Add-AppPackage UI handler and winget.
+#                            Served by Microsoft at https://aka.ms/getwinget
+#                            (redirects to the latest stable msixbundle).
+#
+#   - WindowsAppRuntime      (WindowsAppRuntimeInstall-x64.exe)
+#                            The Windows App SDK runtime that many modern
+#                            MSIX packages depend on. Pinned to a known good
+#                            channel via Microsoft's aka.ms redirect.
+# ===========================================================================
+
+# aka.ms redirects -- Microsoft keeps these stable across releases.
+$script:DesktopAppInstallerUrl = 'https://aka.ms/getwinget'
+
+# Channels we cache by default. Real-world packages still pin specific
+# channels (Notepad 8.9.x pins 1.4, etc.) so we keep a broad floor here.
+# The sandbox bootstrap also reads the actual manifest dependencies and
+# downloads any missing channel on demand.
+$script:WindowsAppRuntimeDefaultChannels = @('1.4','1.5','1.6')
+
+function _MsixAppRuntimeUrl {
+    param([string]$Channel)
+    "https://aka.ms/windowsappsdk/$Channel/latest/windowsappruntimeinstall-x64.exe"
+}
+
+function _MsixAppRuntimeFileName {
+    param([string]$Channel)
+    "WindowsAppRuntimeInstall-x64-$Channel.exe"
+}
+
+
+function Install-MsixAppRuntime {
     <#
     .SYNOPSIS
-        One-call setup: ensures PSF binaries (TMurgent), Process Monitor, and
-        msixmgr are present and up to date under the tools root. Run once
-        before doing any investigation/PSF injection/App Attach work.
+        Downloads the DesktopAppInstaller bundle + one or more Windows App
+        Runtime channel installers so a sandbox (or a freshly imaged host)
+        can install ANY MSIX package, including ones that pin a specific
+        WindowsAppRuntime version.
+
+    .DESCRIPTION
+        Default Windows Sandbox lacks both components; .msix install fails
+        with HRESULT 0x80073CF3 when the required WindowsAppRuntime channel
+        is missing.
+
+        Packages declare their WindowsAppRuntime dependency in the manifest:
+            <PackageDependency Name="Microsoft.WindowsAppRuntime.1.4" .../>
+        So one fixed installer is not enough. This function caches ALL
+        requested channels under $ToolsRoot\runtime\ as
+        WindowsAppRuntimeInstall-x64-<channel>.exe.
+
+        Use Get-MsixRequiredAppRuntimeChannel against a specific .msix to
+        find out which channels it pins, then pass that list to -Channels.
+
+    .PARAMETER Destination
+        Cache folder. Defaults to "$Get-MsixToolsRoot\runtime".
+
+    .PARAMETER Channels
+        WindowsAppRuntime channels (major.minor strings, e.g. '1.4').
+        Defaults to 1.4 / 1.5 / 1.6 so the cache covers the long tail.
+
+    .PARAMETER Force
+        Re-download even if cached.
 
     .EXAMPLE
-        Initialize-MsixToolchain                  # install/update everything
-        Initialize-MsixToolchain -Skip Procmon    # skip Procmon
-        Initialize-MsixToolchain -Skip Procmon,MsixMgr   # PSF only
+        Install-MsixAppRuntime
+
+    .EXAMPLE
+        # Cache only what one specific package actually needs
+        $req = Get-MsixRequiredAppRuntimeChannel -PackagePath app.msix
+        Install-MsixAppRuntime -Channels $req
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [string]$Destination,
+        [string[]]$Channels = $script:WindowsAppRuntimeDefaultChannels,
+        [switch]$Force
+    )
+    if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'runtime' }
+
+    $marker = Join-Path $Destination 'runtime.installed'
+    if ((Test-Path $marker) -and -not $Force) {
+        # Check whether all requested channels are cached; if any is missing
+        # we still need to download just that one (don't bail out).
+        $missing = $Channels | Where-Object {
+            -not (Test-Path (Join-Path $Destination (_MsixAppRuntimeFileName $_)))
+        }
+        if (-not $missing) {
+            Write-MsixLog Info "Windows App Runtime ($($Channels -join ', ')) + DesktopAppInstaller cached at $Destination."
+            return [pscustomobject]@{
+                Path = $Destination; Updated = $false; Channels = $Channels
+            }
+        }
+        $Channels = $missing
+        Write-MsixLog Info "Caching additional WindowsAppRuntime channels: $($missing -join ', ')"
+    }
+
+    if (-not $PSCmdlet.ShouldProcess($Destination, "Install Windows App Runtime ($($Channels -join ', ')) + DesktopAppInstaller")) { return }
+
+    New-Item $Destination -ItemType Directory -Force | Out-Null
+
+    # DesktopAppInstaller msixbundle (only download if missing or -Force)
+    $bundlePath = Join-Path $Destination 'Microsoft.DesktopAppInstaller.msixbundle'
+    if ($Force -or -not (Test-Path $bundlePath)) {
+        _MsixDownloadFile -Url $script:DesktopAppInstallerUrl -Destination $bundlePath
+    }
+
+    # Each WindowsAppRuntime channel installer
+    $runtimePaths = foreach ($ch in $Channels) {
+        $rt = Join-Path $Destination (_MsixAppRuntimeFileName $ch)
+        try {
+            _MsixDownloadFile -Url (_MsixAppRuntimeUrl $ch) -Destination $rt
+            $rt
+        } catch {
+            Write-MsixLog Warning "Channel $ch download failed: $($_.Exception.Message)"
+        }
+    }
+
+    (Get-Date -Format o) | Set-Content $marker -Encoding ascii
+    Write-MsixLog Info "AppRuntime cached: $Destination"
+
+    return [pscustomobject]@{
+        Path                  = $Destination
+        Updated               = $true
+        Channels              = $Channels
+        DesktopAppInstaller   = $bundlePath
+        WindowsAppRuntimeExes = @($runtimePaths)
+    }
+}
+
+
+function Get-MsixRequiredAppRuntimeChannel {
+    <#
+    .SYNOPSIS
+        Parses the AppxManifest of an MSIX package and returns the list of
+        Microsoft.WindowsAppRuntime.<channel> dependencies it declares.
+
+    .DESCRIPTION
+        Returns an array of channel strings ('1.4', '1.5', etc.) that can be
+        passed directly to Install-MsixAppRuntime -Channels.
+
+        Returns an empty array if the manifest declares no WindowsAppRuntime
+        dependency (typical for older unpackaged-bridged Win32 apps).
+
+    .PARAMETER PackagePath
+        Path to the .msix / .appx / folder containing AppxManifest.xml.
+
+    .EXAMPLE
+        Get-MsixRequiredAppRuntimeChannel -PackagePath app.msix
+        # => @('1.4')
     #>
     [CmdletBinding()]
     param(
-        [ValidateSet('Sdk','Psf','Procmon','MsixMgr')]
+        [Parameter(Mandatory)]
+        [string]$PackagePath
+    )
+
+    [xml]$m = Get-MsixManifest -Path $PackagePath
+    $deps   = @($m.Package.Dependencies.PackageDependency) | Where-Object { $_.Name }
+
+    $channels = foreach ($d in $deps) {
+        if ($d.Name -match '^Microsoft\.WindowsAppRuntime\.(\d+\.\d+)$') {
+            $matches[1]
+        }
+    }
+    return @($channels | Sort-Object -Unique)
+}
+
+
+function Update-MsixAppRuntime {
+    <#
+    .SYNOPSIS
+        Refreshes the cached Windows App Runtime + DesktopAppInstaller if the
+        local copy is older than -MaxAgeDays (default 45).
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [string]$Destination,
+        [int]$MaxAgeDays = 45
+    )
+    if (-not $PSCmdlet.ShouldProcess($Destination, 'Update Windows App Runtime cache')) { return }
+    if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'runtime' }
+    $marker = Join-Path $Destination 'runtime.installed'
+
+    if (-not (Test-Path $marker)) {
+        return Install-MsixAppRuntime -Destination $Destination
+    }
+    $stamp = [datetime](Get-Content $marker -Raw).Trim()
+    $age   = (Get-Date) - $stamp
+    if ($age.TotalDays -gt $MaxAgeDays) {
+        Write-MsixLog Info "AppRuntime cache is $([int]$age.TotalDays) days old; refreshing."
+        return Install-MsixAppRuntime -Destination $Destination -Force
+    }
+    Write-MsixLog Info "AppRuntime cache is fresh ($([int]$age.TotalDays) days; threshold $MaxAgeDays)."
+    return [pscustomobject]@{ Path = $Destination; Updated = $false }
+}
+
+
+function Get-MsixAppRuntimeVersion {
+    <#
+    .SYNOPSIS
+        Reports the cached AppRuntime install timestamp and resolved paths.
+    #>
+    [CmdletBinding()]
+    param([string]$Path)
+
+    if (-not $Path) { $Path = Join-Path (Get-MsixToolsRoot) 'runtime' }
+    $marker = Join-Path $Path 'runtime.installed'
+
+    $bundle  = Join-Path $Path 'Microsoft.DesktopAppInstaller.msixbundle'
+    $runtime = Join-Path $Path 'WindowsAppRuntimeInstall-x64.exe'
+
+    return [pscustomobject]@{
+        Path                  = $Path
+        Installed             = Test-Path $marker
+        InstalledOn           = if (Test-Path $marker) { [datetime](Get-Content $marker -Raw).Trim() } else { $null }
+        DesktopAppInstaller   = if (Test-Path $bundle)  { $bundle  } else { $null }
+        WindowsAppRuntimeExe  = if (Test-Path $runtime) { $runtime } else { $null }
+    }
+}
+
+
+function Initialize-MsixToolchain {
+    <#
+    .SYNOPSIS
+        One-call setup: ensures SDK tools, PSF binaries (TMurgent),
+        Process Monitor, DebugView, msixmgr, AND the Windows App Runtime +
+        DesktopAppInstaller (for sandbox/MSIX install support) are present
+        and up to date under the tools root.
+
+    .EXAMPLE
+        Initialize-MsixToolchain                              # everything
+        Initialize-MsixToolchain -Skip Procmon                # skip Procmon
+        Initialize-MsixToolchain -Skip Procmon,MsixMgr,Runtime # PSF + SDK + DebugView only
+    #>
+    [CmdletBinding()]
+    param(
+        [ValidateSet('Sdk','Psf','Procmon','DebugView','MsixMgr','Runtime')]
         [string[]]$Skip
     )
 
-    $result = [ordered]@{ Sdk = $null; Psf = $null; Procmon = $null; MsixMgr = $null }
-    # SDK tools first — everything else needs MakeAppx.exe to do anything useful.
-    if ($Skip -notcontains 'Sdk')     { $result.Sdk     = Update-MsixSdkTool }
-    if ($Skip -notcontains 'Psf')     { $result.Psf     = Update-MsixPsfBinary }
-    if ($Skip -notcontains 'Procmon') { $result.Procmon = Update-MsixProcMon }
-    if ($Skip -notcontains 'MsixMgr') { $result.MsixMgr = Update-MsixMgr }
+    $result = [ordered]@{
+        Sdk = $null; Psf = $null; Procmon = $null; DebugView = $null
+        MsixMgr = $null; Runtime = $null
+    }
+    # SDK tools first -- everything else needs MakeAppx.exe to do anything useful.
+    if ($Skip -notcontains 'Sdk')       { $result.Sdk       = Update-MsixSdkTool }
+    if ($Skip -notcontains 'Psf')       { $result.Psf       = Update-MsixPsfBinary }
+    if ($Skip -notcontains 'Procmon')   { $result.Procmon   = Update-MsixProcMon }
+    if ($Skip -notcontains 'DebugView') { $result.DebugView = Update-MsixDebugView }
+    if ($Skip -notcontains 'MsixMgr')   { $result.MsixMgr   = Update-MsixMgr }
+    if ($Skip -notcontains 'Runtime')   { $result.Runtime   = Update-MsixAppRuntime }
     return [pscustomobject]$result
 }
 

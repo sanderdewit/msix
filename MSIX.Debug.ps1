@@ -17,9 +17,16 @@ function Resolve-MsixDebugViewPath {
     }
     $cmd = Get-Command Dbgview.exe, Dbgview64.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($cmd) { return $cmd.Source }
+
+    $toolsRoot = Get-MsixToolsRoot
     foreach ($p in @(
-        (Join-Path (Get-MsixToolsRoot) 'procmon\Dbgview.exe'),
+        (Join-Path $toolsRoot 'debugview\Dbgview64.exe'),
+        (Join-Path $toolsRoot 'debugview\Dbgview.exe'),
+        (Join-Path $toolsRoot 'procmon\Dbgview64.exe'),
+        (Join-Path $toolsRoot 'procmon\Dbgview.exe'),
+        "${env:ProgramFiles}\SysInternals\Dbgview64.exe",
         "${env:ProgramFiles}\SysInternals\Dbgview.exe",
+        "${env:ProgramFiles}\SysInternalsSuite\Dbgview64.exe",
         "${env:ProgramFiles}\SysInternalsSuite\Dbgview.exe"
     )) {
         if (Test-Path $p) { return $p }
@@ -150,7 +157,7 @@ function Start-MsixDebugSession {
         Filters Procmon to a specific image name (improves signal-to-noise).
 
     .PARAMETER OutputDirectory
-        Where to write the report.txt + recommended-commands.ps1 file.
+        Where to write report.html + report.json + recommended-commands.ps1.
         Defaults to a "msix-debug-<pkg>" folder on the desktop.
 
     .EXAMPLE
@@ -183,8 +190,18 @@ function Start-MsixDebugSession {
     $report  = Invoke-MsixInvestigation -PackagePath $PackagePath
     $commands = Get-MsixDebugRecommendation -Report $report -PackagePath $PackagePath
 
-    $report   | Format-List | Out-File (Join-Path $OutputDirectory 'report.txt')
-    $commands | Out-File    (Join-Path $OutputDirectory 'recommended-commands.ps1') -Encoding utf8
+    # Structured output -- both JSON (programmable) and HTML (human-readable).
+    # The old report.txt rendered nested objects as @{Foo=...; Bar=...} which
+    # was unreadable; ConvertTo-MsixReportHtml fans the Findings array into a
+    # real <table> and embeds the recommended commands as a code block.
+    $jsonPath = Join-Path $OutputDirectory 'report.json'
+    $htmlPath = Join-Path $OutputDirectory 'report.html'
+    $cmdsPath = Join-Path $OutputDirectory 'recommended-commands.ps1'
+
+    $report   | ConvertTo-Json -Depth 12 | Set-Content -Path $jsonPath -Encoding utf8
+    $commands | Set-Content       -Path $cmdsPath -Encoding utf8
+    ConvertTo-MsixReportHtml -Report $report -Commands $commands -PackagePath $PackagePath |
+        Set-Content -Path $htmlPath -Encoding utf8
 
     Write-Information ''
     Write-Information '────────────────────────────────────────────────────────────────────'
@@ -217,64 +234,206 @@ function Start-MsixDebugSession {
         }
     }
 
-    # 4) DebugView
+    # 4) DebugView -- auto-install on miss (mirrors the Procmon path above)
     if ($LaunchDebugView) {
         $dv = Resolve-MsixDebugViewPath
+        if (-not $dv) {
+            Write-MsixLog Info 'DebugView not found; downloading from Sysinternals.'
+            try {
+                Install-MsixDebugView | Out-Null
+                $dv = Resolve-MsixDebugViewPath
+            } catch {
+                Write-MsixLog Warning "DebugView install failed: $($_.Exception.Message)"
+            }
+        }
         if ($dv) {
             Start-Process $dv
             Write-MsixLog Info "DebugView launched: $dv"
         } else {
-            Write-MsixLog Warning 'DebugView not found. Download from https://learn.microsoft.com/sysinternals/downloads/debugview and set $env:MSIX_DEBUGVIEW_PATH.'
+            Write-MsixLog Warning 'DebugView not found. Run Install-MsixDebugView or set $env:MSIX_DEBUGVIEW_PATH manually.'
         }
     }
 
     return [pscustomobject]@{
         Report           = $report
         OutputDirectory  = $OutputDirectory
-        RecommendedFile  = Join-Path $OutputDirectory 'recommended-commands.ps1'
+        ReportHtml       = $htmlPath
+        ReportJson       = $jsonPath
+        RecommendedFile  = $cmdsPath
     }
+}
+
+
+function ConvertTo-MsixReportHtml {
+    <#
+    .SYNOPSIS
+        Renders a compatibility report into a standalone HTML page with
+        sortable tables for Findings, embedded RecommendedCommands as a code
+        block, and links back to the package + raw JSON.
+
+    .DESCRIPTION
+        Self-contained HTML (inline CSS, no external dependencies) so the
+        operator can copy it out of the sandbox / debug folder and open it
+        anywhere.
+
+    .PARAMETER Report
+        Output of Invoke-MsixInvestigation / Get-MsixCompatibilityReport.
+
+    .PARAMETER Commands
+        Output of Get-MsixDebugRecommendation (string array).
+
+    .PARAMETER PackagePath
+        Original .msix path; included in the header.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] $Report,
+        [string[]]$Commands,
+        [string]$PackagePath
+    )
+
+    function _Esc([string]$s) {
+        if ($null -eq $s) { return '' }
+        ($s -replace '&','&amp;') -replace '<','&lt;' -replace '>','&gt;' -replace '"','&quot;'
+    }
+
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine('<!doctype html><html lang="en"><head><meta charset="utf-8">')
+    [void]$sb.AppendLine("<title>MSIX Debug Report -- $(_Esc (Split-Path $PackagePath -Leaf))</title>")
+    [void]$sb.AppendLine(@'
+<style>
+:root { color-scheme: light dark; }
+body { font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+       margin: 2em auto; max-width: 1100px; padding: 0 1em; }
+h1 { border-bottom: 2px solid #888; padding-bottom: .25em; }
+h2 { margin-top: 2em; }
+table { border-collapse: collapse; width: 100%; margin: .5em 0 1.5em; }
+th, td { border: 1px solid #888; padding: .35em .6em; text-align: left;
+         vertical-align: top; }
+th { background: #eee; }
+@media (prefers-color-scheme: dark) {
+  th { background: #333; }
+  body { background: #1e1e1e; color: #ddd; }
+  td, th { border-color: #555; }
+}
+.sev-Error    { color: #b00020; font-weight: 600; }
+.sev-Warning  { color: #b25e00; font-weight: 600; }
+.sev-Info     { color: #555; }
+pre { background: #111; color: #eee; padding: 1em; border-radius: 6px;
+      overflow-x: auto; white-space: pre-wrap; }
+code { font: 13px/1.4 Consolas, Menlo, monospace; }
+.meta { color: #666; font-size: 12px; }
+.kv { display: grid; grid-template-columns: 9em 1fr; gap: .25em 1em; }
+</style>
+'@)
+    [void]$sb.AppendLine('</head><body>')
+
+    [void]$sb.AppendLine("<h1>MSIX Debug Report</h1>")
+    [void]$sb.AppendLine('<div class="meta">')
+    [void]$sb.AppendLine("Package: <code>$(_Esc $PackagePath)</code><br>")
+    [void]$sb.AppendLine("Generated: $(_Esc ([DateTime]::Now.ToString('o')))<br>")
+    [void]$sb.AppendLine('</div>')
+
+    # --- Findings ---
+    $findings = @($Report.Findings)
+    [void]$sb.AppendLine("<h2>Findings ($($findings.Count))</h2>")
+    if ($findings) {
+        [void]$sb.AppendLine('<table><tr><th>#</th><th>Severity</th><th>Category</th><th>AppId</th><th>Symptom</th><th>Recommendation</th><th>Evidence</th></tr>')
+        $i = 0
+        foreach ($f in $findings) {
+            $i++
+            $sev = _Esc $f.Severity
+            [void]$sb.AppendLine("<tr><td>$i</td><td class=""sev-$sev"">$sev</td><td>$(_Esc $f.Category)</td><td>$(_Esc $f.AppId)</td><td>$(_Esc $f.Symptom)</td><td>$(_Esc $f.Recommendation)</td><td>$(_Esc $f.Evidence)</td></tr>")
+        }
+        [void]$sb.AppendLine('</table>')
+    } else {
+        [void]$sb.AppendLine('<p><em>No findings — package looks ready to deploy.</em></p>')
+    }
+
+    # --- Recommended commands ---
+    if ($Commands -and $Commands.Count -gt 0) {
+        [void]$sb.AppendLine('<h2>Recommended commands</h2>')
+        [void]$sb.AppendLine('<p>Copy-paste these into PowerShell, or use the bundled <code>recommended-commands.ps1</code>.</p>')
+        [void]$sb.AppendLine('<pre><code>')
+        foreach ($c in $Commands) { [void]$sb.AppendLine((_Esc $c)) }
+        [void]$sb.AppendLine('</code></pre>')
+    }
+
+    # --- Suggested fixups (raw) ---
+    if ($Report.SuggestedFixups) {
+        [void]$sb.AppendLine('<h2>Suggested fixups (raw)</h2>')
+        [void]$sb.AppendLine('<pre><code>')
+        [void]$sb.AppendLine((_Esc ($Report.SuggestedFixups | ConvertTo-Json -Depth 10)))
+        [void]$sb.AppendLine('</code></pre>')
+    }
+
+    # --- ProcMon log path ---
+    if ($Report.ProcMonLog) {
+        [void]$sb.AppendLine('<h2>Process Monitor capture</h2>')
+        [void]$sb.AppendLine("<p><code>$(_Esc $Report.ProcMonLog)</code></p>")
+    }
+
+    [void]$sb.AppendLine('<p class="meta">Full structured data: <code>report.json</code></p>')
+    [void]$sb.AppendLine('</body></html>')
+    return $sb.ToString()
 }
 
 
 function New-MsixSandboxConfig {
     <#
     .SYNOPSIS
-        Generates a Windows Sandbox (.wsb) configuration that maps a folder
-        containing this module + a target .msix into the sandbox, and runs
-        Start-MsixDebugSession on first login.
+        Generates a Windows Sandbox (.wsb) configuration that maps the module
+        + target .msix into the sandbox, installs the Windows App Runtime +
+        DesktopAppInstaller (which the default sandbox image lacks), optionally
+        trusts a self-signed certificate, then runs Start-MsixDebugSession.
 
     .DESCRIPTION
-        The resulting workflow:
+        Workflow:
 
-          1. Operator places the .msix to debug into <DropFolder>.
+          1. Operator drops the .msix in <DropFolder>.
           2. Operator runs:
-                $cfg = New-MsixSandboxConfig -DropFolder C:\debug-msix -PackageName app.msix
-                Start-Process $cfg
-          3. Windows Sandbox boots, the bootstrap script imports this module
-             from the mapped folder and invokes Start-MsixDebugSession with
-             -Install -LaunchProcMon -LaunchDebugView.
+                Start-MsixSandbox -DropFolder C:\drop -PackageName broken.msix
+          3. The sandbox bootstrap script:
+               a. Installs WindowsAppRuntimeInstall-x64.exe (silent)
+               b. Adds Microsoft.DesktopAppInstaller.msixbundle
+               c. (optional) Imports the self-signed cert into LocalMachine\Root
+                  + TrustedPeople so the package will install
+               d. Imports this module and runs Start-MsixDebugSession
 
-        The sandbox keeps the host clean and provides a disposable env per run.
+        The .wsb maps an extra read-only folder (`runtime`) that contains the
+        AppRuntime cache (see Initialize-MsixToolchain), and optionally a
+        certificate file.
 
     .PARAMETER DropFolder
-        Host folder containing the .msix to debug. Mapped read-write in the
-        sandbox so analysis output / captured PML can be retrieved.
+        Host folder containing the .msix to debug. Mapped read-write.
 
     .PARAMETER PackageName
-        Filename inside DropFolder (e.g. 'broken.msix').
+        Filename inside DropFolder.
 
     .PARAMETER ModulePath
-        Path to this module on the host. Defaults to the running module folder.
+        Module folder on the host. Defaults to the running module folder.
+
+    .PARAMETER RuntimePath
+        Folder containing DesktopAppInstaller msixbundle + WindowsAppRuntime
+        installer (cached by Install-MsixAppRuntime). Defaults to
+        $ToolsRoot\runtime; auto-populated if missing.
+
+    .PARAMETER CertPath
+        Optional path to a .cer file (public part of a self-signed cert) that
+        the bootstrap should trust before installing the package.
 
     .PARAMETER OutputPath
-        Where to write the .wsb file. Defaults to "$DropFolder\msix-debug.wsb".
+        Where to write the .wsb. Defaults to "$DropFolder\msix-debug.wsb".
 
     .PARAMETER vGPU / Networking
-        Enable/disable the sandbox features. Both default to enabled.
+        Sandbox features.
 
     .EXAMPLE
-        $wsb = New-MsixSandboxConfig -DropFolder C:\drop -PackageName broken.msix
-        Start-Process $wsb     # boots Windows Sandbox
+        # The package was signed with a self-signed cert (cert.cer next to .msix)
+        $wsb = New-MsixSandboxConfig -DropFolder C:\drop -PackageName broken.msix `
+                                     -CertPath C:\drop\debug-cert.cer
+        Start-Process $wsb
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
@@ -284,6 +443,8 @@ function New-MsixSandboxConfig {
         [Parameter(Mandatory)]
         [string]$PackageName,
         [string]$ModulePath,
+        [string]$RuntimePath,
+        [string]$CertPath,
         [string]$OutputPath,
         [bool]$vGPU = $true,
         [bool]$Networking = $true
@@ -293,31 +454,115 @@ function New-MsixSandboxConfig {
     $msix = Join-Path $DropFolder $PackageName
     if (-not (Test-Path $msix)) { throw "Package not in drop folder: $msix" }
 
-    if (-not $ModulePath) {
-        $ModulePath = $PSScriptRoot
+    if (-not $ModulePath)  { $ModulePath  = $PSScriptRoot }
+    if (-not $RuntimePath) {
+        # Auto-cache runtime installers if not provided
+        $runtimeResult = Update-MsixAppRuntime
+        $RuntimePath   = $runtimeResult.Path
     }
+    if (-not (Test-Path $RuntimePath)) {
+        throw "RuntimePath not found: $RuntimePath. Run Install-MsixAppRuntime first."
+    }
+
+    # ── Pre-flight: discover what WindowsAppRuntime channels the package
+    #    actually declares as dependencies, and ensure they are cached.
+    #    Otherwise the sandbox install fails with HRESULT 0x80073CF3.
+    try {
+        $required = @(Get-MsixRequiredAppRuntimeChannel -PackagePath $msix)
+        if ($required) {
+            Write-MsixLog Info "Package requires WindowsAppRuntime channels: $($required -join ', ')"
+            $missing = $required | Where-Object {
+                -not (Test-Path (Join-Path $RuntimePath "WindowsAppRuntimeInstall-x64-$_.exe"))
+            }
+            if ($missing) {
+                Write-MsixLog Info "Caching missing channels: $($missing -join ', ')"
+                Install-MsixAppRuntime -Destination $RuntimePath -Channels $missing | Out-Null
+            }
+        }
+    } catch {
+        Write-MsixLog Warning "Could not pre-detect WindowsAppRuntime dependencies: $($_.Exception.Message)"
+    }
+    if ($CertPath -and -not (Test-Path $CertPath)) {
+        throw "CertPath not found: $CertPath"
+    }
+
     if (-not $OutputPath) {
         $OutputPath = Join-Path $DropFolder 'msix-debug.wsb'
     }
 
-    # Bootstrap script: written into the drop folder so the sandbox can run it
+    # Cert handling: if specified, copy into drop folder so the sandbox sees it
+    $certFileInSandbox = ''
+    if ($CertPath) {
+        $certLeaf = Split-Path $CertPath -Leaf
+        $certTarget = Join-Path $DropFolder $certLeaf
+        if ((Resolve-Path $CertPath).Path -ne (Resolve-Path $certTarget -ErrorAction SilentlyContinue).Path) {
+            Copy-Item $CertPath $certTarget -Force
+        }
+        $certFileInSandbox = "C:\msix-drop\$certLeaf"
+    }
+
+    # Bootstrap script (PowerShell, runs inside sandbox)
     $bootstrap = Join-Path $DropFolder 'sandbox-bootstrap.ps1'
+    $certBlock = if ($certFileInSandbox) { @"
+
+# 3. Trust the self-signed signing certificate so the package will install
+Write-Host '==> Trusting signing certificate' -ForegroundColor Cyan
+Import-Certificate -FilePath '$certFileInSandbox' -CertStoreLocation 'Cert:\LocalMachine\Root'        | Out-Null
+Import-Certificate -FilePath '$certFileInSandbox' -CertStoreLocation 'Cert:\LocalMachine\TrustedPeople' | Out-Null
+"@ } else { '' }
+
     @"
 # Auto-generated by New-MsixSandboxConfig
 `$ErrorActionPreference = 'Stop'
 Set-ExecutionPolicy -Scope Process Bypass -Force
+
+# 1. Install every WindowsAppRuntime channel we cached. The package may
+#    pin a specific channel (e.g. Notepad 8.9.x pins 1.4); installing
+#    only the latest fails with HRESULT 0x80073CF3 because the runtime
+#    versions are SIDE-BY-SIDE -- newer doesn't satisfy older deps.
+Write-Host '==> Installing all WindowsAppRuntime channels' -ForegroundColor Cyan
+Get-ChildItem 'C:\msix-runtime\WindowsAppRuntimeInstall-x64*.exe' -File |
+    Sort-Object Name |
+    ForEach-Object {
+        Write-Host "    - `$(`$_.Name)" -ForegroundColor DarkGray
+        `$proc = Start-Process -FilePath `$_.FullName -ArgumentList '--silent' ``
+                              -Wait -PassThru
+        if (`$proc.ExitCode -ne 0) {
+            Write-Warning "Runtime installer `$(`$_.Name) exited with `$(`$proc.ExitCode)"
+        }
+    }
+
+# 2. Install DesktopAppInstaller msixbundle (provides the AppInstaller UI
+#    handler + winget; required for .msix double-click installs to work
+#    in default Win11 Sandbox, which doesn't ship it).
+Write-Host '==> Installing DesktopAppInstaller' -ForegroundColor Cyan
+try {
+    Add-AppPackage -Path 'C:\msix-runtime\Microsoft.DesktopAppInstaller.msixbundle' ``
+                   -ForceApplicationShutdown -ErrorAction Stop
+} catch {
+    Write-Warning "DesktopAppInstaller install failed: `$(`$_.Exception.Message)"
+    Write-Warning 'Continuing anyway -- Add-AppPackage of the target .msix may still work.'
+}
+$certBlock
+
+# 4. Load module and run the debug session
+Write-Host '==> Loading MSIX module and starting debug session' -ForegroundColor Cyan
 Import-Module 'C:\msix-module\MSIX.psm1' -Force
-Initialize-MsixToolchain | Out-Null
+# Skip everything that needs network; the host already pre-cached anything
+# the sandbox needs in C:\msix-runtime.
+Initialize-MsixToolchain -Skip Sdk,Psf,Procmon,DebugView,MsixMgr,Runtime | Out-Null
+
 Start-MsixDebugSession ``
     -PackagePath     'C:\msix-drop\$PackageName' ``
     -Install         ``
     -LaunchProcMon   ``
     -LaunchDebugView ``
     -OutputDirectory 'C:\msix-drop\debug-output'
+
 Read-Host 'Press Enter to close the sandbox session'
 "@ | Set-Content -Path $bootstrap -Encoding utf8
 
-    # Wrapper .cmd because LogonCommand wants a single argv
+    # .cmd wrapper because LogonCommand wants a single argv
     $cmdWrap = Join-Path $DropFolder 'sandbox-bootstrap.cmd'
     "powershell.exe -NoExit -ExecutionPolicy Bypass -File ""C:\msix-drop\sandbox-bootstrap.ps1""" |
         Set-Content -Path $cmdWrap -Encoding ascii
@@ -340,6 +585,11 @@ Read-Host 'Press Enter to close the sandbox session'
       <SandboxFolder>C:\msix-module</SandboxFolder>
       <ReadOnly>true</ReadOnly>
     </MappedFolder>
+    <MappedFolder>
+      <HostFolder>$RuntimePath</HostFolder>
+      <SandboxFolder>C:\msix-runtime</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
   </MappedFolders>
   <LogonCommand>
     <Command>C:\msix-drop\sandbox-bootstrap.cmd</Command>
@@ -359,17 +609,44 @@ function Start-MsixSandbox {
     .SYNOPSIS
         Generates a sandbox config (if not provided) and launches Windows Sandbox.
 
+    .DESCRIPTION
+        When -AutoSign is set and the package is unsigned (or its signature
+        chain won't validate inside a fresh sandbox), the function:
+
+          1. Generates a self-signed certificate with the manifest's Publisher
+             as the subject.
+          2. Re-signs the .msix with it.
+          3. Exports the public .cer.
+          4. Passes the .cer to New-MsixSandboxConfig so the bootstrap installs
+             it into LocalMachine\Root + TrustedPeople before installing the
+             package.
+
     .PARAMETER DropFolder / PackageName
         Forwarded to New-MsixSandboxConfig if -ConfigPath isn't given.
 
     .PARAMETER ConfigPath
         Use an existing .wsb file instead of generating one.
+
+    .PARAMETER AutoSign
+        If the package isn't signed (or the signature chain won't validate),
+        auto-generate a self-signed cert that matches the manifest Publisher
+        and use it to sign the package + trust it in the sandbox.
+
+    .PARAMETER CertPath
+        Bring your own .cer file to trust in the sandbox (instead of
+        -AutoSign generating one).
+
+    .EXAMPLE
+        # Fast path: auto-sign and run
+        Start-MsixSandbox -DropFolder C:\drop -PackageName broken.msix -AutoSign
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$DropFolder,
         [string]$PackageName,
-        [string]$ConfigPath
+        [string]$ConfigPath,
+        [switch]$AutoSign,
+        [string]$CertPath
     )
 
     if (-not (Get-Command WindowsSandbox.exe -ErrorAction SilentlyContinue)) {
@@ -380,7 +657,27 @@ function Start-MsixSandbox {
         if (-not $DropFolder -or -not $PackageName) {
             throw '-DropFolder and -PackageName are required if -ConfigPath is not given.'
         }
-        $ConfigPath = New-MsixSandboxConfig -DropFolder $DropFolder -PackageName $PackageName
+
+        $effectiveCertPath = $CertPath
+
+        if ($AutoSign -and -not $effectiveCertPath) {
+            $msix = Join-Path $DropFolder $PackageName
+            $needsSelfSign = (Test-MsixSignature -PackagePath $msix).NeedsSelfSign
+            if ($needsSelfSign) {
+                Write-MsixLog Info 'Package signature missing/invalid; generating self-signed cert and re-signing.'
+                $signed = Invoke-MsixSelfSignAndDebug -PackagePath $msix
+                $effectiveCertPath = $signed.CertPath
+            } else {
+                Write-MsixLog Info 'Package signature is valid; skipping self-sign.'
+            }
+        }
+
+        $cfgArgs = @{
+            DropFolder  = $DropFolder
+            PackageName = $PackageName
+        }
+        if ($effectiveCertPath) { $cfgArgs['CertPath'] = $effectiveCertPath }
+        $ConfigPath = New-MsixSandboxConfig @cfgArgs
     }
 
     if (-not $PSCmdlet.ShouldProcess($ConfigPath, 'Launch Windows Sandbox')) { return }

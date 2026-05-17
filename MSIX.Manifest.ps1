@@ -1,6 +1,7 @@
 ﻿# Known namespace prefixes used across MSIX manifests
 $script:KnownNamespaces = [ordered]@{
     uap      = 'http://schemas.microsoft.com/appx/manifest/uap/windows10'
+    uap2     = 'http://schemas.microsoft.com/appx/manifest/uap/windows10/2'   # SupportedVerbs
     uap3     = 'http://schemas.microsoft.com/appx/manifest/uap/windows10/3'
     uap4     = 'http://schemas.microsoft.com/appx/manifest/uap/windows10/4'
     uap5     = 'http://schemas.microsoft.com/appx/manifest/uap/windows10/5'   # windows.startupTask
@@ -229,26 +230,33 @@ function Add-MsixManifestNamespace {
     Write-MsixLog Debug "Namespace added: xmlns:$Prefix"
 }
 
-function Get-MsixManifestApplication {
+function Get-MsixManifestApplications {
     <#
     .SYNOPSIS
         Returns all Application XmlElements from the manifest.
         Uses namespace-aware XPath so it is reliable even after namespace
         declarations have been modified by Add-MsixManifestNamespace.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '')]
     param(
         [Parameter(Mandatory)]
-        [xml]$Manifest
+        $Manifest
     )
 
-    $nodes = Select-MsixManifestNodes -Manifest $Manifest -XPath '//f:Application'
+    $manifestDocument = if ($Manifest.PSTypeNames -contains 'MSIX.ManifestDocument') {
+        $Manifest
+    } else {
+        New-MsixManifestDocument -Document $Manifest
+    }
+
+    $nodes = Select-MsixManifestNodes -Manifest $manifestDocument -XPath '//f:Application'
 
     if ($nodes -and $nodes.Count -gt 0) {
         return @($nodes)
     }
 
     # Fallback: namespace-agnostic XPath (handles non-standard manifests)
-    $nodes = $Manifest.SelectNodes('//*[local-name()="Application"]')
+    $nodes = $manifestDocument.Document.SelectNodes('//*[local-name()="Application"]')
     if ($nodes -and $nodes.Count -gt 0) {
         return @($nodes)
     }
@@ -284,7 +292,7 @@ function Get-MsixManifestApplication {
 
     if ($node) { return $node }
 
-    $apps = @($manifestDocument.Document.SelectNodes('//*[local-name()="Application"]'))
+    $apps = @(Get-MsixManifestApplications -Manifest $manifestDocument)
     if ($AppId) {
         return $apps | Where-Object { $_.GetAttribute('Id') -eq $AppId } | Select-Object -First 1
     }
@@ -318,8 +326,3 @@ function Set-MsixManifestMaxVersionTested {
         Write-MsixLog Info "MaxVersionTested updated to $($tdf.MaxVersionTested)"
     }
 }
-
-
-# Backward-compatible plural aliases
-
-Set-Alias Get-MsixManifestApplications Get-MsixManifestApplication

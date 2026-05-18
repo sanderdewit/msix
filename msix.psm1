@@ -37,7 +37,6 @@
 #   update-MsixSigner, new-MsixPsfJson, add-MsixAlias,
 #   remove-MsixStartMenuEntry, add-MsixStartMenuFolder
 Set-Alias -Name add-MsixPsf                  -Value Add-MsixPsfV2
-Set-Alias -Name Get-PublisherIdFromPublisher -Value Get-MsixPublisherId
 #endregion
 
 

@@ -308,13 +308,13 @@ function Set-MsixManifestMaxVersionTested {
     <#
     .SYNOPSIS
         Ensures MaxVersionTested is at least the specified build number.
-        Required for desktop9 context menu support (>= 10.0.21301.0).
+        Pass -MinBuild with the feature's required build (e.g. 19041, 22000).
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
         [xml]$Manifest,
-        [int]$MinBuild = 21301
+        [int]$MinBuild = 19041
     )
 
     $tdf = $Manifest.Package.Dependencies.TargetDeviceFamily

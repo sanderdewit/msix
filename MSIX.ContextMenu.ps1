@@ -79,9 +79,8 @@
 
     if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Add Legacy Context Menu')) { return }
 
-    # Two GUID formats required by the manifest schema:
-    #   com:Class Id                    → ST_GUID  → bare,   no braces
-    #   desktop9:ExtensionHandler Clsid → ST_CLSID → bare: no braces
+    # Both com:Class Id and desktop9:ExtensionHandler Clsid use bare GUID format
+    # (no curly braces): xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
     $ClsidBare = $Clsid.Trim().Trim('{', '}')
 
     # Resolve MSIX folder-variable prefixes ([{ProgramFilesX64}]\...) to VFS paths.
@@ -114,8 +113,8 @@
         Add-MsixManifestNamespace $manifest 'com'
         Add-MsixManifestNamespace $manifest 'desktop9'
 
-        # desktop9 requires MaxVersionTested >= 10.0.21301.0
-        Set-MsixManifestMaxVersionTested $manifest -MinBuild 21301
+        # desktop9 requires MaxVersionTested >= 10.0.22000.0 (Windows 11 21H2)
+        Set-MsixManifestMaxVersionTested $manifest -MinBuild 22000
 
         # ── Locate the target Application ─────────────────────────────────
         $apps = @($manifest.Package.Applications.Application)
@@ -248,9 +247,8 @@ function Add-MsixFileExplorerContextMenu {
 
     if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Add File Explorer Context Menu')) { return }
 
-    # desktop4:Verb Clsid is ST_CLSID
-    #remove by Sander, because unnecessary
-	$VerbClsid = $verbClsid.Trim().Trim('{', '}')
+    # desktop4:Verb Clsid also uses bare GUID format (no curly braces)
+    $verbClsid = $verbClsid.Trim().Trim('{', '}')
 
     $null = $AppId, $FileTypes, $VerbId  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
@@ -283,7 +281,7 @@ function Add-MsixFileExplorerContextMenu {
 
             $verbNode = $manifest.CreateElement('desktop4:Verb', $d4Uri)
             $verbNode.SetAttribute('Id',    $VerbId)
-            $verbNode.SetAttribute('Clsid', $VerbClsid)  # ST_CLSID — without braces
+            $verbNode.SetAttribute('Clsid', $verbClsid)
 
             $null = $itemType.AppendChild($verbNode)
             $null = $ctxMenus.AppendChild($itemType)

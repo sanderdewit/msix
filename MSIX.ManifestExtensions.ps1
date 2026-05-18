@@ -1128,8 +1128,7 @@ function Add-MsixShellVerbExtension {
         Add-MsixManifestNamespace $M 'uap2'
         Add-MsixManifestNamespace $M 'uap3'
         # uap2:SupportedVerbs + uap3:Verb require build 16299+ (Win10 1709).
-        # Use 21301 to match the rest of the module and avoid schema edge cases.
-        Set-MsixManifestMaxVersionTested $M -MinBuild 21301
+        Set-MsixManifestMaxVersionTested $M -MinBuild 16299
 
         $app    = _MsixGetOrCreateApplicationExtensions $M $AppId
         $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')

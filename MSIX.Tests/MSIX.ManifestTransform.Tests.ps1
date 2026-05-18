@@ -1,4 +1,4 @@
-BeforeAll {
+﻿BeforeAll {
     Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psm1')) -Force
 
     $script:SampleXml = @'
@@ -42,7 +42,10 @@ Describe 'Invoke-MsixManifestTransform' -Tag 'Manifest' {
 
     It 'Returns the same xml object (in-place mutation)' {
         [xml]$xml = $script:SampleXml
-        $result = Invoke-MsixManifestTransform -Manifest $xml -Transform { param([xml]$m) }
+        $result = Invoke-MsixManifestTransform -Manifest $xml -Transform {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'm')]
+            param([xml]$m)
+        }
         $result | Should -BeOfType 'System.Xml.XmlDocument'
     }
 
@@ -50,7 +53,10 @@ Describe 'Invoke-MsixManifestTransform' -Tag 'Manifest' {
         # No MakeAppx, no temp files — pure in-memory operation
         [xml]$xml = $script:SampleXml
         $before = (Get-ChildItem $env:TEMP -Filter 'msix-*' -ErrorAction SilentlyContinue).Count
-        $null = Invoke-MsixManifestTransform -Manifest $xml -Transform { param([xml]$m) }
+        $null = Invoke-MsixManifestTransform -Manifest $xml -Transform {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'm')]
+            param([xml]$m)
+        }
         $after  = (Get-ChildItem $env:TEMP -Filter 'msix-*' -ErrorAction SilentlyContinue).Count
         $after | Should -Be $before
     }

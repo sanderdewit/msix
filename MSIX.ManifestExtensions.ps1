@@ -66,7 +66,7 @@ function _MsixMutateManifest {
         $null = Test-MsixManifest "$workspace\AppxManifest.xml"
         [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
 
-        & $Mutate $manifest
+        $manifest = Invoke-MsixManifestTransform -Manifest $manifest -Transform $Mutate
 
         Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
 
@@ -99,6 +99,30 @@ function _MsixGetOrCreatePackageExtensions {
         $null = $Manifest.Package.AppendChild($ext)
     }
     return $ext
+}
+
+
+function Invoke-MsixManifestTransform {
+    <#
+    Pure manifest transform — no file IO, no signing.
+    Accepts an [xml] or MSIX.ManifestDocument, runs $Transform against it,
+    returns the mutated [xml]. Used internally by _MsixMutateManifest.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Manifest,
+        [Parameter(Mandatory)] [scriptblock] $Transform
+    )
+    # Normalise to raw [xml] — callers that pass MSIX.ManifestDocument get its .Document
+    $xml = if ($Manifest.PSTypeNames -contains 'MSIX.ManifestDocument') {
+        $Manifest.Document
+    } elseif ($Manifest -is [System.Xml.XmlDocument]) {
+        $Manifest
+    } else {
+        [xml]$Manifest
+    }
+    & $Transform $xml
+    return $xml
 }
 
 
@@ -542,14 +566,15 @@ function Add-MsixFirewallRule {
         the MSIX package.
 
     .DESCRIPTION
-        Adds a desktop2:FirewallRules extension under Application/Extensions.
+        Adds a desktop2:FirewallRules extension under Package/Extensions.
         Replaces ad-hoc netsh / New-NetFirewallRule calls in installer scripts —
         the rule lifecycle now follows the package.
 
         Min OS: Windows 10 build 15063.
 
     .PARAMETER AppId
-        Application ID this rule applies to (must exist in the manifest).
+        Application ID to validate against the manifest. Firewall rules are
+        emitted at package scope, as required by the Windows manifest schema.
 
     .PARAMETER Executable
         The executable subject to the rule (package-relative path).
@@ -601,15 +626,19 @@ function Add-MsixFirewallRule {
                         -Activity 'desktop2:FirewallRules' -Mutate {
         param([xml]$M)
         Add-MsixManifestNamespace $M 'desktop2'
+        Add-MsixManifestNamespace $M 'rescap'
         Set-MsixManifestMaxVersionTested $M -MinBuild 15063
 
-        $app = _MsixGetOrCreateApplicationExtensions $M $AppId
+        $app = Get-MsixManifestApplication -Manifest $M -AppId $AppId
+        if (-not $app) { throw "Application '$AppId' not found in the manifest." }
+
         $d2  = Get-MsixManifestNamespaceUri 'desktop2'
 
-        # Find or create the desktop2:Extension wrapping FirewallRules for this Executable
-        $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
+        # windows.firewallRules is a package-level extension:
+        # Package/Extensions/desktop2:Extension/desktop2:FirewallRules
+        $pkgExt = _MsixGetOrCreatePackageExtensions $M
         $rulesParent = $null
-        foreach ($e in @($appExt.ChildNodes | Where-Object { $_.LocalName -eq 'Extension' -and $_.Category -eq 'windows.firewallRules' })) {
+        foreach ($e in @($pkgExt.ChildNodes | Where-Object { $_.LocalName -eq 'Extension' -and $_.Category -eq 'windows.firewallRules' })) {
             $rules = $e.SelectSingleNode('*[local-name()="FirewallRules"]')
             if ($rules.Executable -eq $Executable) { $rulesParent = $rules; break }
         }
@@ -619,7 +648,23 @@ function Add-MsixFirewallRule {
             $rulesParent = $M.CreateElement('desktop2:FirewallRules', $d2)
             $rulesParent.SetAttribute('Executable', $Executable)
             $null = $ext.AppendChild($rulesParent)
-            $null = $appExt.AppendChild($ext)
+            $null = $pkgExt.AppendChild($ext)
+        }
+
+        $rescapUri = Get-MsixManifestNamespaceUri 'rescap'
+        $capsNode  = $M.Package.Capabilities
+        if (-not $capsNode) {
+            $capsNode = $M.CreateElement('Capabilities', $M.Package.NamespaceURI)
+            $null = $M.Package.AppendChild($capsNode)
+        }
+        $hasFullTrust = $capsNode.ChildNodes | Where-Object {
+            $_.LocalName -eq 'Capability' -and $_.GetAttribute('Name') -eq 'runFullTrust'
+        }
+        if (-not $hasFullTrust) {
+            $cap = $M.CreateElement('rescap:Capability', $rescapUri)
+            $cap.SetAttribute('Name', 'runFullTrust')
+            $null = $capsNode.AppendChild($cap)
+            Write-MsixLog Info 'Capability added: runFullTrust'
         }
 
         # Idempotent rule add
@@ -1104,23 +1149,24 @@ function Add-MsixShellVerbExtension {
         -Activity "Add shell verb '$VerbDisplayName'" -Mutate {
         param([xml]$M)
         Add-MsixManifestNamespace $M 'uap'
+        Add-MsixManifestNamespace $M 'uap2'
         Add-MsixManifestNamespace $M 'uap3'
-        # uap3:SupportedVerbs + uap3:Verb require build 16299+ (Win10 1709).
-        # Use 21301 to match the rest of the module and avoid schema edge cases.
-        Set-MsixManifestMaxVersionTested $M -MinBuild 21301
+        # uap2:SupportedVerbs + uap3:Verb require build 16299+ (Win10 1709).
+        Set-MsixManifestMaxVersionTested $M -MinBuild 16299
 
         $app    = _MsixGetOrCreateApplicationExtensions $M $AppId
         $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
         $uap    = Get-MsixManifestNamespaceUri 'uap'
+        $uap2   = Get-MsixManifestNamespaceUri 'uap2'
         $uap3   = Get-MsixManifestNamespaceUri 'uap3'
 
         # Schema structure (per MSIX manifest spec):
         #   <uap:Extension Category="windows.fileTypeAssociation">   ← uap namespace
         #     <uap3:FileTypeAssociation Name="...">                  ← substitution-group child
         #       <uap:SupportedFileTypes> ... </uap:SupportedFileTypes>
-        #       <uap3:SupportedVerbs>
+        #       <uap2:SupportedVerbs>
         #         <uap3:Verb Id="..." Parameters="...">Label</uap3:Verb>
-        #       </uap3:SupportedVerbs>
+        #       </uap2:SupportedVerbs>
         #     </uap3:FileTypeAssociation>
         #   </uap:Extension>
         # NOTE: the EXTENSION element must be uap:Extension; uap3:Extension does NOT
@@ -1154,7 +1200,7 @@ function Add-MsixShellVerbExtension {
         $null = $fta.AppendChild($supported)
 
         # Verb element
-        $verbs    = $M.CreateElement('uap3:SupportedVerbs', $uap3)
+        $verbs    = $M.CreateElement('uap2:SupportedVerbs', $uap2)
         $verbElem = $M.CreateElement('uap3:Verb', $uap3)
         $verbElem.SetAttribute('Id', $VerbId)
         if ($Parameters) { $verbElem.SetAttribute('Parameters', $Parameters) }

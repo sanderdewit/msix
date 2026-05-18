@@ -51,7 +51,7 @@ function Get-MsixInfo {
 
         if ($Detailed) {
             $result | Add-Member -NotePropertyName Applications `
-                                 -NotePropertyValue @(Get-MsixManifestApplication -Manifest $appinfo)
+                                 -NotePropertyValue @(Get-MsixManifestApplications -Manifest $appinfo)
         }
 
         return $result

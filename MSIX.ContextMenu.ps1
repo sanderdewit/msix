@@ -258,8 +258,7 @@ function Add-MsixFileExplorerContextMenu {
 
         Add-MsixManifestNamespace $manifest 'desktop4'
 
-        $app = @($manifest.Package.Applications.Application) | Where-Object { $_.Id -eq $AppId }
-        if (-not $app) { throw "Application '$AppId' not found in the manifest." }
+        $app = Get-MsixManifestApplication -Manifest $manifest -AppId $AppId
 
         $d4Uri = Get-MsixManifestNamespaceUri 'desktop4'
 

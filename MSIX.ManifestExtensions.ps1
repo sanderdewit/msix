@@ -66,7 +66,7 @@ function _MsixMutateManifest {
         $null = Test-MsixManifest "$workspace\AppxManifest.xml"
         [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
 
-        & $Mutate $manifest
+        $manifest = Invoke-MsixManifestTransform -Manifest $manifest -Transform $Mutate
 
         Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
 
@@ -99,6 +99,30 @@ function _MsixGetOrCreatePackageExtensions {
         $null = $Manifest.Package.AppendChild($ext)
     }
     return $ext
+}
+
+
+function Invoke-MsixManifestTransform {
+    <#
+    Pure manifest transform — no file IO, no signing.
+    Accepts an [xml] or MSIX.ManifestDocument, runs $Transform against it,
+    returns the mutated [xml]. Used internally by _MsixMutateManifest.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] $Manifest,
+        [Parameter(Mandatory)] [scriptblock] $Transform
+    )
+    # Normalise to raw [xml] — callers that pass MSIX.ManifestDocument get its .Document
+    $xml = if ($Manifest.PSTypeNames -contains 'MSIX.ManifestDocument') {
+        $Manifest.Document
+    } elseif ($Manifest -is [System.Xml.XmlDocument]) {
+        $Manifest
+    } else {
+        [xml]$Manifest
+    }
+    & $Transform $xml
+    return $xml
 }
 
 

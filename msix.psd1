@@ -88,6 +88,7 @@
         'Invoke-MsixCommand',
         'Invoke-MsixContainerCommand',
         'Invoke-MsixInvestigation',
+        'Invoke-MsixManifestTransform',
         'Invoke-MsixPipeline',
         'Invoke-MsixProcess',
         'Invoke-MsixProcMonCapture',

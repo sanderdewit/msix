@@ -507,7 +507,7 @@ function Add-MsixPsfV2 {
 
         if ($isPsfPresent -and (Test-Path $configPath)) {
             # Merge mode: read existing config, append new fixups to each process entry
-            $existingCfg  = Get-Content $configPath -Raw | ConvertFrom-Json
+            $existingCfg  = Get-Content $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
             $existingApps = @($existingCfg.applications)
 
             # Build a map of process entries keyed by executable name

@@ -1,5 +1,5 @@
 BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psm1')) -Force
+    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
 }
 
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }

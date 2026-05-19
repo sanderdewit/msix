@@ -99,7 +99,7 @@
         if ($Config.Publisher) {
             $oldPublisher = $manifest.Package.Identity.Publisher
             if ($oldPublisher -cne $Config.Publisher) {
-                $manifest.Package.Identity.Publisher = $Config.Publisher
+                Set-MsixManifestPublisher -Manifest $manifest -Publisher $Config.Publisher | Out-Null
                 $manifestDirty = $true
                 Write-MsixLog Info "Publisher: $oldPublisher → $($Config.Publisher)"
             } else {

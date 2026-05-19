@@ -270,57 +270,49 @@ function Add-MsixManifestNamespace {
     Write-MsixLog Debug "Namespace added: xmlns:$Prefix"
 }
 
-function Get-MsixManifestApplications {
-    <#
-    .SYNOPSIS
-        Returns all Application XmlElements from the manifest.
-        Uses namespace-aware XPath so it is reliable even after namespace
-        declarations have been modified by Add-MsixManifestNamespace.
-    #>
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '')]
-    param(
-        [Parameter(Mandatory)]
-        $Manifest
-    )
-
-    $manifestDocument = if ($Manifest.PSTypeNames -contains 'MSIX.ManifestDocument') {
-        $Manifest
-    } else {
-        New-MsixManifestDocument -Document $Manifest
-    }
-
-    $nodes = Select-MsixManifestNodes -Manifest $manifestDocument -XPath '//f:Application'
-
-    if ($nodes -and $nodes.Count -gt 0) {
-        return @($nodes)
-    }
-
-    # Fallback: namespace-agnostic XPath (handles non-standard manifests)
-    $nodes = $manifestDocument.Document.SelectNodes('//*[local-name()="Application"]')
-    if ($nodes -and $nodes.Count -gt 0) {
-        return @($nodes)
-    }
-
-    return @()
-}
-
 function Get-MsixManifestApplication {
     <#
     .SYNOPSIS
-        Returns a single Application element by Id, or the first Application
-        when no Id is supplied.
+        Returns Application elements from the manifest. Single canonical
+        reader for both the "one app" and "all apps" cases — singular noun
+        per Get-Verb / PSUseSingularNouns convention (cf. Get-ChildItem).
+
+    .DESCRIPTION
+        Parameter sets:
+          First (default) — returns the first Application element.
+          ById            — returns the single Application matching -AppId.
+          All             — returns every Application as an array.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(DefaultParameterSetName = 'First')]
     param(
         [Parameter(Mandatory)]
         $Manifest,
-        [string]$AppId
+        [Parameter(Mandatory, ParameterSetName = 'ById')]
+        [string]$AppId,
+        [Parameter(Mandatory, ParameterSetName = 'All')]
+        [switch]$All
     )
 
     $manifestDocument = if ($Manifest.PSTypeNames -contains 'MSIX.ManifestDocument') {
         $Manifest
     } else {
         New-MsixManifestDocument -Document $Manifest
+    }
+
+    if ($All) {
+        $nodes = Select-MsixManifestNodes -Manifest $manifestDocument -XPath '//f:Application'
+
+        if ($nodes -and $nodes.Count -gt 0) {
+            return @($nodes)
+        }
+
+        # Fallback: namespace-agnostic XPath (handles non-standard manifests)
+        $nodes = $manifestDocument.Document.SelectNodes('//*[local-name()="Application"]')
+        if ($nodes -and $nodes.Count -gt 0) {
+            return @($nodes)
+        }
+
+        return @()
     }
 
     if ($AppId) {
@@ -332,11 +324,87 @@ function Get-MsixManifestApplication {
 
     if ($node) { return $node }
 
-    $apps = @(Get-MsixManifestApplications -Manifest $manifestDocument)
+    # Fallback: namespace-agnostic search for non-standard manifests
+    $allNodes = @($manifestDocument.Document.SelectNodes('//*[local-name()="Application"]'))
     if ($AppId) {
-        return $apps | Where-Object { $_.GetAttribute('Id') -eq $AppId } | Select-Object -First 1
+        return $allNodes | Where-Object { $_.GetAttribute('Id') -eq $AppId } | Select-Object -First 1
     }
-    return $apps | Select-Object -First 1
+    return $allNodes | Select-Object -First 1
+}
+
+function Get-MsixManifestApplications {
+    <#
+    .SYNOPSIS
+        DEPRECATED. Use Get-MsixManifestApplication -All.
+        Returns every Application XmlElement from the manifest.
+
+    .DESCRIPTION
+        Thin wrapper retained for backward compatibility. New code should call
+        Get-MsixManifestApplication -All directly. The plural noun violates
+        PSUseSingularNouns; the suppression is documented inline.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '',
+        Justification = 'Plural retained as deprecated wrapper for backward compatibility; new code uses Get-MsixManifestApplication -All.')]
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        $Manifest
+    )
+    Write-MsixLog Debug 'Get-MsixManifestApplications is deprecated; use Get-MsixManifestApplication -All.'
+    return Get-MsixManifestApplication -Manifest $Manifest -All
+}
+
+function Set-MsixManifestPublisher {
+    <#
+    .SYNOPSIS
+        Pure in-memory transform: updates Identity.Publisher on the manifest.
+    .DESCRIPTION
+        Testable without unpacking a package — accepts an [xml] document and
+        mutates it in place. Returns the same document for pipeline use.
+    .EXAMPLE
+        [xml]$m = $manifestXml
+        Set-MsixManifestPublisher -Manifest $m -Publisher 'CN=Contoso, O=Contoso, C=NL'
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Pure in-memory transform on a caller-owned XmlDocument; no IO, no side effects outside the input object.')]
+    [CmdletBinding()]
+    [OutputType([System.Xml.XmlDocument])]
+    param(
+        [Parameter(Mandatory)] [xml]$Manifest,
+        [Parameter(Mandatory)] [string]$Publisher
+    )
+    $Manifest.Package.Identity.Publisher = $Publisher
+    return $Manifest
+}
+
+function Set-MsixManifestIdentity {
+    <#
+    .SYNOPSIS
+        Pure in-memory transform: updates one or more Identity attributes
+        (Name, Publisher, Version) on the manifest. Only the parameters you
+        supply are changed.
+    .EXAMPLE
+        Set-MsixManifestIdentity -Manifest $m -Version '2.0.0.0'
+    .EXAMPLE
+        Set-MsixManifestIdentity -Manifest $m -Name 'Contoso.App' `
+            -Publisher 'CN=Contoso, O=Contoso, C=NL' -Version '1.2.3.4'
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Pure in-memory transform on a caller-owned XmlDocument; no IO, no side effects outside the input object.')]
+    [CmdletBinding()]
+    [OutputType([System.Xml.XmlDocument])]
+    param(
+        [Parameter(Mandatory)] [xml]$Manifest,
+        [string]$Name,
+        [string]$Publisher,
+        [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$',
+            ErrorMessage = 'Version must be a 4-part dotted-decimal like 1.2.3.4.')]
+        [string]$Version
+    )
+    if ($PSBoundParameters.ContainsKey('Name'))      { $Manifest.Package.Identity.Name      = $Name }
+    if ($PSBoundParameters.ContainsKey('Publisher')) { $Manifest.Package.Identity.Publisher = $Publisher }
+    if ($PSBoundParameters.ContainsKey('Version'))   { $Manifest.Package.Identity.Version   = $Version }
+    return $Manifest
 }
 
 function Get-MsixManifestNamespaceUri {

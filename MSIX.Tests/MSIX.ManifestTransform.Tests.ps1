@@ -1,5 +1,5 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psm1')) -Force
+    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
 
     $script:SampleXml = @'
 <?xml version="1.0" encoding="utf-8"?>

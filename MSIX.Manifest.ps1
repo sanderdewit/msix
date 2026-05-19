@@ -1,4 +1,50 @@
-﻿# Known namespace prefixes used across MSIX manifests
+﻿function _MsixLoadXmlSecure {
+    <#
+    .SYNOPSIS
+        Loads XML from a file or string with DTD processing prohibited and
+        external entity resolution disabled. Use for ALL untrusted XML input
+        (anything that came out of a user-supplied MSIX archive).
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'Path')]
+    [OutputType([xml])]
+    param(
+        [Parameter(Mandatory, ParameterSetName = 'Path', Position = 0)]
+        [string]$Path,
+        [Parameter(Mandatory, ParameterSetName = 'Text')]
+        [string]$XmlText
+    )
+
+    $settings = New-Object System.Xml.XmlReaderSettings
+    $settings.DtdProcessing                = [System.Xml.DtdProcessing]::Prohibit
+    $settings.XmlResolver                  = $null
+    $settings.MaxCharactersFromEntities    = 1048576     # 1 MB — sane upper bound
+    $settings.MaxCharactersInDocument      = 268435456   # 256 MB — generous but bounded
+
+    $doc = New-Object System.Xml.XmlDocument
+    $doc.PreserveWhitespace = $true
+    $doc.XmlResolver        = $null
+
+    $stringReader = $null
+    if ($PSCmdlet.ParameterSetName -eq 'Path') {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+            throw "XML file not found: $Path"
+        }
+        $reader = [System.Xml.XmlReader]::Create($Path, $settings)
+    } else {
+        $stringReader = New-Object System.IO.StringReader $XmlText
+        $reader       = [System.Xml.XmlReader]::Create($stringReader, $settings)
+    }
+
+    try {
+        $doc.Load($reader)
+    } finally {
+        $reader.Dispose()
+        if ($stringReader) { $stringReader.Dispose() }
+    }
+    return $doc
+}
+
+# Known namespace prefixes used across MSIX manifests
 $script:KnownNamespaces = [ordered]@{
     uap      = 'http://schemas.microsoft.com/appx/manifest/uap/windows10'
     uap2     = 'http://schemas.microsoft.com/appx/manifest/uap/windows10/2'   # SupportedVerbs
@@ -46,12 +92,9 @@ function New-MsixManifestDocument {
     )
 
     if ($PSCmdlet.ParameterSetName -eq 'Path') {
-        $Document = Get-MsixManifest -Path $Path
+        $Document = _MsixLoadXmlSecure -Path $Path
     } elseif ($PSCmdlet.ParameterSetName -eq 'XmlText') {
-        $Document = New-Object System.Xml.XmlDocument
-        $Document.PreserveWhitespace = $true
-        $Document.XmlResolver = $null
-        $Document.LoadXml($XmlText)
+        $Document = _MsixLoadXmlSecure -XmlText $XmlText
     }
 
     $nsMgr = New-Object System.Xml.XmlNamespaceManager($Document.NameTable)
@@ -154,8 +197,7 @@ function Get-MsixManifest {
         if (-not (Test-Path $candidate)) {
             throw "No AppxManifest.xml under '$($item.FullName)'."
         }
-        [xml]$xml = Get-Content $candidate -Raw
-        return $xml
+        return (_MsixLoadXmlSecure -Path $candidate)
     }
 
     if ($item.Extension -in '.msix', '.appx', '.msixbundle', '.appxbundle') {
@@ -172,8 +214,7 @@ function Get-MsixManifest {
                 }
                 $out = Join-Path $tmp 'AppxManifest.xml'
                 [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $out, $true)
-                [xml]$xml = Get-Content $out -Raw
-                return $xml
+                return (_MsixLoadXmlSecure -Path $out)
             } finally { $zip.Dispose() }
         } finally {
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
@@ -181,8 +222,7 @@ function Get-MsixManifest {
     }
 
     # Default: assume an XML file path.
-    [xml]$xml = Get-Content $Path -Raw
-    return $xml
+    return (_MsixLoadXmlSecure -Path $Path)
 }
 
 function Save-MsixManifest {

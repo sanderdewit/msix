@@ -151,7 +151,7 @@ function Update-MsixSigner {
 
         try {
             Write-MsixLog Info "Unpacking: $($fileinfo.FullName)"
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
             Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
             [xml]$appinfo = Get-MsixManifest "$workspace\AppxManifest.xml"
@@ -171,7 +171,7 @@ function Update-MsixSigner {
                 Write-MsixLog Info "Publisher unchanged; repacking with same identity"
             }
 
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$outputPath`" /d `"$workspace`" /o"
+            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $outputPath, '/d', $workspace, '/o')
             Assert-MsixProcessSuccess $r 'MakeAppx pack'
 
             Invoke-MsixSigning -PackagePath $outputPath -Pfx $Pfx -PfxPassword $PfxPassword
@@ -220,7 +220,7 @@ function New-MsixPsfJson {
     )
 
     Write-Warning 'New-MsixPsfJson is obsolete and produces incorrect output for multi-app packages. Use New-MsixPsfConfig with typed builders (New-MsixPsfFileRedirectionConfig, etc.) and Add-MsixPsfV2 instead.'
-    [xml]$appinfo  = Get-Content (Get-Item $AppxManifest).FullName -Raw
+    [xml]$appinfo  = _MsixLoadXmlSecure -Path (Get-Item $AppxManifest).FullName
     $apps          = @($appinfo.Package.Applications.Application)
 
     $appEntries = foreach ($app in $apps) {
@@ -297,7 +297,8 @@ function Add-MsixAlias {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [SecureString]$PfxPassword
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
     )
 
     PROCESS {
@@ -308,6 +309,7 @@ function Add-MsixAlias {
 
         _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
             -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+            -UnsignedOutputPath $UnsignedOutputPath `
             -Activity 'Add AppExecutionAlias' -Mutate {
             param([xml]$manifest)
 
@@ -412,7 +414,8 @@ function Remove-MsixStartMenuEntry {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [SecureString]$PfxPassword
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
     )
 
     PROCESS {
@@ -423,6 +426,7 @@ function Remove-MsixStartMenuEntry {
 
         _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
             -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+            -UnsignedOutputPath $UnsignedOutputPath `
             -Activity 'Remove Start menu entry' -Mutate {
             param([xml]$manifest)
 
@@ -479,7 +483,8 @@ function Add-MsixStartMenuFolder {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [SecureString]$PfxPassword
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
     )
 
     PROCESS {
@@ -487,6 +492,7 @@ function Add-MsixStartMenuFolder {
 
         _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
             -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+            -UnsignedOutputPath $UnsignedOutputPath `
             -Activity "Set VisualGroup '$FolderName'" -Mutate {
             param([xml]$manifest)
 

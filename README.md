@@ -450,8 +450,13 @@ Invoke-MsixAccelerator -PackagePath line.msix -AcceleratorPath line.yaml `
     -Pfx cert.pfx -PfxPassword 'P@ss'
 ```
 
-`Install-Module powershell-yaml` for full YAML support; otherwise a minimal
-fallback parser handles top-level scalar keys.
+Accelerator YAML is parsed by an intentionally-restricted scalar parser:
+only flat `key: value` and `key: [a, b, c]` forms are supported. YAML tags,
+anchors, references, multi-document streams, and nested mappings are NOT
+supported -- by design. The module deliberately does not call
+`powershell-yaml` (or any full YAML library) on accelerator files, because
+type tags in a full YAML parser can instantiate arbitrary .NET objects and
+accelerator authors are untrusted.
 
 ---
 

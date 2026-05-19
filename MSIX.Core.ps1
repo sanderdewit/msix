@@ -142,40 +142,105 @@ function New-MsixWorkspace {
 }
 
 function Invoke-MsixProcess {
+    <#
+    .SYNOPSIS
+        Runs an external executable and captures its exit code, stdout, and stderr.
+
+    .DESCRIPTION
+        Arguments are passed as an array (one element per argument) so each argument
+        is correctly quoted by the .NET process API. This prevents argument injection
+        from filenames or values that contain spaces, quotes, or shell metacharacters.
+
+    .PARAMETER FilePath
+        Absolute path to the executable.
+
+    .PARAMETER ArgumentList
+        Array of arguments. Each element is one argument; do not pre-concatenate.
+        Example: @('unpack', '/p', $path, '/d', $workspace, '/o')
+
+    .PARAMETER Arguments
+        DEPRECATED. Legacy single-string argument form. Internally split with a
+        naive parser for backward compatibility -- new callers MUST use -ArgumentList.
+        Logs a warning to encourage migration.
+
+    .EXAMPLE
+        Invoke-MsixProcess "$root\Tools\MakeAppx.exe" -ArgumentList @(
+            'unpack', '/p', $packagePath, '/d', $workspace, '/o'
+        )
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'ArgumentList')]
     param(
         [Parameter(Mandatory)]
         [string]$FilePath,
-        [Parameter(Mandatory)]
+
+        [Parameter(Mandatory, ParameterSetName = 'ArgumentList', Position = 1)]
+        [AllowEmptyCollection()]
+        [string[]]$ArgumentList,
+
+        [Parameter(Mandatory, ParameterSetName = 'LegacyString', Position = 1)]
         [string]$Arguments
     )
 
-    if (-not (Test-Path $FilePath)) {
+    if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
         throw "Executable not found: $FilePath"
     }
 
-    Write-MsixLog Debug "Exec: $FilePath $Arguments"
+    # Backward-compat: split the legacy single string into an array using a
+    # quote-aware tokenizer. Issues a deprecation warning so callers migrate.
+    if ($PSCmdlet.ParameterSetName -eq 'LegacyString') {
+        Write-MsixLog Warning "Invoke-MsixProcess: -Arguments (single string) is deprecated. Pass -ArgumentList @(...) instead. Caller: $((Get-PSCallStack)[1].Command)"
+        $ArgumentList = @()
+        if ($Arguments) {
+            # Honour double-quoted segments containing spaces; otherwise split on whitespace.
+            $regex = [regex]'(?<=^|\s)"([^"]*)"(?=\s|$)|\S+'
+            foreach ($m in $regex.Matches($Arguments)) {
+                $ArgumentList += if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Value }
+            }
+        }
+    }
 
-    $psi                       = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName              = $FilePath
-    $psi.Arguments             = $Arguments
-    $psi.RedirectStandardError = $true
-    $psi.RedirectStandardOutput= $true
-    $psi.UseShellExecute       = $false
-    $psi.WorkingDirectory      = (Get-Location).Path
+    Write-MsixLog Debug "Exec: $FilePath $([string]::Join(' ', ($ArgumentList | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } })))"
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName               = $FilePath
+    $psi.RedirectStandardError  = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.UseShellExecute        = $false
+    $psi.WorkingDirectory       = (Get-Location).Path
+
+    # PowerShell 5.1 / .NET Framework 4.x does not expose ProcessStartInfo.ArgumentList.
+    # Fall back to safely quoting into the single Arguments string. The quoting rules
+    # match CommandLineToArgvW: wrap in double quotes; escape embedded " as \" ; double
+    # trailing backslashes before closing quote.
+    if ($null -ne $psi.PSObject.Properties['ArgumentList']) {
+        foreach ($a in $ArgumentList) { [void]$psi.ArgumentList.Add([string]$a) }
+    } else {
+        $psi.Arguments = [string]::Join(' ', ($ArgumentList | ForEach-Object {
+            $s = [string]$_
+            if ($s -eq '') { return '""' }
+            if ($s -notmatch '[\s"]') { return $s }
+            # Escape embedded backslashes-before-quotes per CommandLineToArgvW rules.
+            $escaped = $s -replace '(\\*)"', '$1$1\"'
+            $escaped = $escaped -replace '(\\+)$', '$1$1'
+            return '"' + $escaped + '"'
+        }))
+    }
 
     $p = New-Object System.Diagnostics.Process
     $p.StartInfo = $psi
-    $null = $p.Start()
-
-    # Read both streams concurrently to prevent buffer deadlocks
-    $stdoutTask = $p.StandardOutput.ReadToEndAsync()
-    $stderrTask = $p.StandardError.ReadToEndAsync()
-    $p.WaitForExit()
-
-    return [pscustomobject]@{
-        ExitCode = $p.ExitCode
-        StdOut   = $stdoutTask.Result
-        StdErr   = $stderrTask.Result
+    try {
+        $null = $p.Start()
+        # Read both streams concurrently to prevent buffer deadlocks
+        $stdoutTask = $p.StandardOutput.ReadToEndAsync()
+        $stderrTask = $p.StandardError.ReadToEndAsync()
+        $p.WaitForExit()
+        return [pscustomobject]@{
+            ExitCode = $p.ExitCode
+            StdOut   = $stdoutTask.Result
+            StdErr   = $stderrTask.Result
+        }
+    } finally {
+        $p.Dispose()
     }
 }
 

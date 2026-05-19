@@ -37,10 +37,15 @@
             Capabilities      [string[]]   Add Win32 isolation capabilities
 
           Signing      [hashtable]   Keys:
-            Pfx               [string]
-            PfxPassword       [string]
-            TimestampUrl      [string]
-            Skip              [bool]      Skip signing entirely (default: false)
+            Pfx                 [string]
+            PfxPassword         [SecureString]
+            TimestampUrl        [string]
+            Skip                [bool]          Skip signing entirely (default: false)
+            UnsignedOutputPath  [string]        When signing fails, copy the
+                                                unsigned scratch package here so
+                                                the operator can manually re-sign.
+                                                The original target is never
+                                                overwritten when signing fails.
 
     .EXAMPLE
         Invoke-MsixPipeline -PackagePath app.msix -Config @{
@@ -71,7 +76,7 @@
 
         # ── Unpack into workspace ────────────────────────────────────────
         Write-MsixLog Info 'Stage: Unpack'
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         # ── Validate ─────────────────────────────────────────────────────
@@ -118,54 +123,82 @@
             Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
         }
 
-        # ── PSF injection ────────────────────────────────────────────────
-        # Repack the workspace into a scratch .msix so Add-MsixPsfV2 (which
-        # does its own unpack/repack) sees all manifest edits.
-        $needsPsf = [bool]$Config.PSF
-        if ($needsPsf) {
-            Write-MsixLog Info 'Stage: PSF injection'
+        # ── Repack to SCRATCH (never to $target until sign succeeds) ─────
+        # Atomic pack-then-sign: original target is preserved if signing fails.
+        $scratchExt = [System.IO.Path]::GetExtension($target)
+        if (-not $scratchExt) { $scratchExt = '.msix' }
+        $scratch = Join-Path $env:TEMP ("msix-pipeline-{0}-{1}{2}" -f `
+            $fileinfo.BaseName, ([guid]::NewGuid().ToString('N').Substring(0,8)), $scratchExt)
 
-            $scratch = Join-Path $env:TEMP "scratch-$($fileinfo.BaseName)-$([guid]::NewGuid().ToString('N').Substring(0,8)).msix"
+        $needsPsf      = [bool]$Config.PSF
+        $packSucceeded = $false
+        $signSucceeded = $false
 
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$scratch`" /d `"$workspace`" /o"
-            Assert-MsixProcessSuccess $r 'MakeAppx pack (pre-PSF scratch)'
+        try {
+            if ($needsPsf) {
+                Write-MsixLog Info 'Stage: PSF injection'
+                $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+                Assert-MsixProcessSuccess $r 'MakeAppx pack (pre-PSF scratch)'
 
-            $psfArgs = @{
-                PackagePath  = $scratch
-                Fixups       = $Config.PSF.Fixups
-                SkipSigning  = $true        # we sign once at the end
+                $psfArgs = @{
+                    PackagePath  = $scratch
+                    Fixups       = $Config.PSF.Fixups
+                    SkipSigning  = $true        # we sign once at the end
+                }
+                foreach ($k in 'PsfSourcePath','WorkingDirectory','AppOptions','AdditionalFiles') {
+                    if ($Config.PSF.ContainsKey($k)) { $psfArgs[$k] = $Config.PSF[$k] }
+                }
+                Add-MsixPsfV2 @psfArgs
+            } else {
+                Write-MsixLog Info 'Stage: Repack'
+                $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+                Assert-MsixProcessSuccess $r 'MakeAppx pack'
             }
-            foreach ($k in 'PsfSourcePath','WorkingDirectory','AppOptions','AdditionalFiles') {
-                if ($Config.PSF.ContainsKey($k)) { $psfArgs[$k] = $Config.PSF[$k] }
-            }
-            Add-MsixPsfV2 @psfArgs
-            # Move scratch to final target
-            Move-Item $scratch $target -Force
+            $packSucceeded = $true
 
-        } else {
-            # ── Repack only ──────────────────────────────────────────────
-            Write-MsixLog Info 'Stage: Repack'
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$target`" /d `"$workspace`" /o"
-            Assert-MsixProcessSuccess $r 'MakeAppx pack'
+            # ── Sign (once, at the end, AT THE SCRATCH PATH) ──────────────
+            $skipSign = $Config.Signing -and $Config.Signing.Skip
+            if ($Config.Signing -and -not $skipSign) {
+                Write-MsixLog Info 'Stage: Sign (final)'
+                $signArgs = @{ PackagePath = $scratch }
+                foreach ($k in 'Pfx','PfxPassword','TimestampUrl','Signer',
+                              'TrustedSigningAccount','TrustedSigningProfile',
+                              'TrustedSigningEndpoint','TrustedSigningClientDll',
+                              'KeyVaultUrl','KeyVaultCertificate','KeyVaultTenantId',
+                              'KeyVaultClientId','KeyVaultClientSecret') {
+                    if ($Config.Signing.ContainsKey($k)) { $signArgs[$k] = $Config.Signing[$k] }
+                }
+                Invoke-MsixSigning @signArgs
+            } elseif (-not $Config.Signing) {
+                Write-MsixLog Info 'No Signing block in config; output is unsigned.'
+            } else {
+                Write-MsixLog Info 'Signing.Skip=true; output is unsigned.'
+            }
+            $signSucceeded = $true
+
+            # ── Atomic move: only NOW does the target change ─────────────
+            Move-Item -LiteralPath $scratch -Destination $target -Force
+            Write-MsixLog Info "=== Pipeline complete: $target ==="
+            return Get-Item -LiteralPath $target
+
+        } catch {
+            if ($packSucceeded -and -not $signSucceeded -and `
+                $Config.Signing -and $Config.Signing.UnsignedOutputPath) {
+                try {
+                    Copy-Item -LiteralPath $scratch -Destination $Config.Signing.UnsignedOutputPath -Force -ErrorAction Stop
+                    Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $($Config.Signing.UnsignedOutputPath)"
+                } catch {
+                    Write-MsixLog Error "Signing failed AND unsigned-output copy to '$($Config.Signing.UnsignedOutputPath)' failed: $_"
+                }
+            } elseif ($packSucceeded -and -not $signSucceeded) {
+                Write-MsixLog Warning "Signing failed. Original target '$target' is unchanged. Set Config.Signing.UnsignedOutputPath to preserve the unsigned package next time."
+            }
+            throw
+        } finally {
+            if (Test-Path -LiteralPath $scratch) {
+                Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue
+            }
         }
-
-        # ── Sign (once, at the end) ──────────────────────────────────────
-        $skipSign = $Config.Signing -and $Config.Signing.Skip
-        if ($Config.Signing -and -not $skipSign) {
-            Write-MsixLog Info 'Stage: Sign (final)'
-            $signArgs = @{ PackagePath = $target }
-            foreach ($k in 'Pfx','PfxPassword','TimestampUrl') {
-                if ($Config.Signing.ContainsKey($k)) { $signArgs[$k] = $Config.Signing[$k] }
-            }
-            Invoke-MsixSigning @signArgs
-        } elseif (-not $Config.Signing) {
-            Write-MsixLog Info 'No Signing block in config; output is unsigned.'
-        } else {
-            Write-MsixLog Info 'Signing.Skip=true; output is unsigned.'
-        }
-
-        Write-MsixLog Info "=== Pipeline complete: $target ==="
-        return Get-Item $target
 
     } finally {
         Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue

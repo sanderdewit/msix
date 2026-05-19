@@ -88,7 +88,7 @@ function Add-MsixCapability {
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace $fileinfo.BaseName
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         $null = Test-MsixManifest "$workspace\AppxManifest.xml"
@@ -141,7 +141,7 @@ function Add-MsixCapability {
         }
 
         $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$target`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $target, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx pack'
 
         if (-not $SkipSigning) {
@@ -185,7 +185,7 @@ function Get-MsixUninstallerCandidate {
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-unin"
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
@@ -236,7 +236,7 @@ function Get-MsixUninstallRegistryEntry {
     if (-not (_MsixIsAdmin)) {
         Write-MsixLog Warning 'Get-MsixUninstallRegistryEntry: not elevated — string scan only (no value details).'
         try {
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
             Assert-MsixProcessSuccess $r 'MakeAppx unpack'
             $datPath = Join-Path $workspace 'Registry.dat'
             if (-not (Test-Path $datPath)) { return @() }
@@ -268,7 +268,7 @@ function Get-MsixUninstallRegistryEntry {
         }
     }
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         $datPath = Join-Path $workspace 'Registry.dat'
@@ -365,7 +365,7 @@ function Remove-MsixUninstallerArtifact {
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace $fileinfo.BaseName
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         # ── Strip files ────────────────────────────────────────────────────
@@ -431,7 +431,7 @@ function Remove-MsixUninstallerArtifact {
         if ($removedKeys)  { Write-MsixLog Info "Reg keys removed: $($removedKeys -join ', ')" }
 
         $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$target`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $target, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx pack'
 
         if (-not $SkipSigning) {
@@ -467,7 +467,7 @@ function Get-MsixRunKeyEntry {
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-runkeys"
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         # MSIX packages ship Registry.dat + User.dat for the virtual hive.
@@ -596,7 +596,7 @@ function Get-MsixShellContextMenuEntry {
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-shellctx"
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         $datPath = Join-Path $workspace 'Registry.dat'
@@ -785,7 +785,7 @@ function Get-MsixComServerEntry {
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-comsrv"
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         $datPath = Join-Path $workspace 'Registry.dat'
@@ -887,7 +887,7 @@ function Get-MsixAliasCandidate {
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-alias"
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
@@ -960,7 +960,7 @@ function Add-MsixSplashScreen {
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace $fileinfo.BaseName
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         # Find config.json — should be next to PsfLauncher
@@ -985,7 +985,7 @@ function Add-MsixSplashScreen {
         $cfg | ConvertTo-Json -Depth 15 | Set-Content $cfgPath -Encoding utf8
 
         $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$target`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $target, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx pack'
 
         if (-not $SkipSigning) {
@@ -1033,7 +1033,7 @@ function Update-MsixPackageVersion {
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace $fileinfo.BaseName
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         $null = Test-MsixManifest "$workspace\AppxManifest.xml"
@@ -1064,7 +1064,7 @@ function Update-MsixPackageVersion {
         }
 
         $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$target`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $target, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx pack'
 
         if (-not $SkipSigning) {
@@ -1812,7 +1812,7 @@ function Get-MsixHeuristicFinding {
         $fileinfo  = Get-Item $PackagePath
         $tmp = New-MsixWorkspace "$($fileinfo.BaseName)-mfheur"
         try {
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$tmp`" /o"
+            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $tmp, '/o')
             if ($r.ExitCode -eq 0) {
                 [xml]$mf = Get-MsixManifest "$tmp\AppxManifest.xml"
                 $exts    = @($mf.Package.Extensions.Extension)

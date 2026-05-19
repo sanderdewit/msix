@@ -74,7 +74,8 @@
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [SecureString]$PfxPassword
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
     )
 
     if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Add Legacy Context Menu')) { return }
@@ -106,6 +107,7 @@
     $null = $AppId, $DisplayName, $FileTypes, $MenuType  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+        -UnsignedOutputPath $UnsignedOutputPath `
         -Activity 'Add Legacy Context Menu' -Mutate {
         param([xml]$manifest)
 
@@ -199,6 +201,9 @@ function Add-MsixFileExplorerContextMenu {
         for new shell extensions (not legacy IContextMenu COM servers).
         Added at the Application level.
 
+        Min OS: Windows 10 build 17134 (1803). MaxVersionTested is bumped
+        automatically.
+
     .PARAMETER PackagePath
         Path to the .msix file to modify.
 
@@ -242,7 +247,8 @@ function Add-MsixFileExplorerContextMenu {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [SecureString]$PfxPassword
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
     )
 
     if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Add File Explorer Context Menu')) { return }
@@ -253,10 +259,12 @@ function Add-MsixFileExplorerContextMenu {
     $null = $AppId, $FileTypes, $VerbId  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+        -UnsignedOutputPath $UnsignedOutputPath `
         -Activity 'Add File Explorer Context Menu' -Mutate {
         param([xml]$manifest)
 
         Add-MsixManifestNamespace $manifest 'desktop4'
+        Set-MsixManifestMaxVersionTested $manifest -MinBuild 17134
 
         $app = Get-MsixManifestApplication -Manifest $manifest -AppId $AppId
 

@@ -17,6 +17,109 @@ $script:ProcmonZipUrl    = 'https://download.sysinternals.com/files/ProcessMonit
 $script:DebugViewZipUrl  = 'https://download.sysinternals.com/files/DebugView.zip'
 $script:SdkToolsNuGet = 'Microsoft.Windows.SDK.BuildTools'   # publishes MakeAppx + signtool
 
+# =============================================================================
+# Authenticode verification of downloaded tool binaries (Wave 2a / H1)
+# -----------------------------------------------------------------------------
+# Trusted publisher Subject prefixes. Match against the leaf cert's Subject
+# (case-insensitive, StartsWith). New entries added here become trusted across
+# the entire toolchain.
+# =============================================================================
+$script:MsixTrustedPublishers = @(
+    'CN=Microsoft Corporation,',                    # Microsoft (incl. Windows SDK, signtool, MakeAppx, DesktopAppInstaller, Windows App Runtime)
+    'CN=Microsoft Windows,',                        # Some Microsoft signing certs
+    'CN=Microsoft Windows Publisher,',              # Microsoft publisher (Procmon, DebugView via Sysinternals signing)
+    'CN=Microsoft 3rd Party Application Component,', # Sysinternals tools sometimes use this
+    'CN=Tim Mangan,',                               # PSF maintainer (TMurgent fork)
+    'CN=TMurgent Technologies, LLP,'                # PSF maintainer corporate
+)
+
+function _MsixVerifyAuthenticode {
+    <#
+    .SYNOPSIS
+        Verifies a file is Authenticode-signed by a trusted publisher.
+    .DESCRIPTION
+        Reject the file unless:
+          - signature Status is 'Valid'
+          - signer cert is in $script:MsixTrustedPublishers
+        Throws on rejection; returns the signature object on success.
+    .PARAMETER Path
+        File to verify.
+    .PARAMETER ToolName
+        Logical tool name for error messages.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [string]$ToolName
+    )
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Cannot verify Authenticode: file not found at $Path"
+    }
+    $sig = Get-AuthenticodeSignature -LiteralPath $Path
+    if ($sig.Status -ne 'Valid') {
+        throw "Authenticode verification FAILED for $ToolName at $Path. Status: $($sig.Status). $($sig.StatusMessage)"
+    }
+    $subject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '' }
+    if (-not $subject) {
+        throw "Authenticode verification FAILED for $ToolName at $Path`: no signer cert."
+    }
+    $isTrusted = $false
+    foreach ($prefix in $script:MsixTrustedPublishers) {
+        if ($subject -like "$prefix*") { $isTrusted = $true; break }
+    }
+    if (-not $isTrusted) {
+        throw @"
+Authenticode verification FAILED for $ToolName at $Path.
+Signer is NOT in the trusted-publisher allowlist:
+  Subject:    $subject
+  Thumbprint: $($sig.SignerCertificate.Thumbprint)
+If you trust this publisher, add the CN prefix to `$script:MsixTrustedPublishers in MSIX.PsfBinaries.ps1.
+"@
+    }
+    Write-MsixLog Info "Authenticode verified: $ToolName ($subject)"
+    return $sig
+}
+
+function _MsixVerifyAuthenticodeFolder {
+    <#
+    .SYNOPSIS
+        Verifies every .exe and .dll under a folder.
+    .DESCRIPTION
+        Calls _MsixVerifyAuthenticode against every .exe / .dll under the given
+        folder (recursively). Throws on the first untrusted / unsigned binary.
+        Logs a warning if no .exe/.dll were found at all (caller decides whether
+        that's acceptable - e.g. for archives that bundle only data).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$Folder,
+        [Parameter(Mandatory)] [string]$ToolName
+    )
+    $files = @(Get-ChildItem -LiteralPath $Folder -Recurse -Include '*.exe','*.dll' -File -ErrorAction SilentlyContinue)
+    if ($files.Count -eq 0) {
+        Write-MsixLog Warning "No .exe/.dll under $Folder to verify ($ToolName)"
+        return
+    }
+    foreach ($file in $files) {
+        _MsixVerifyAuthenticode -Path $file.FullName -ToolName "$ToolName/$($file.Name)" | Out-Null
+    }
+}
+
+function _MsixVerifyAuthenticodeMsixBundle {
+    <#
+    .SYNOPSIS
+        Verifies a .msix / .msixbundle / .appxbundle is Authenticode-signed by a
+        trusted publisher. Unlike _MsixVerifyAuthenticodeFolder this expects a
+        single signed file (the bundle itself).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [string]$ToolName
+    )
+    _MsixVerifyAuthenticode -Path $Path -ToolName $ToolName | Out-Null
+}
+
 function _MsixDownloadFile {
     param(
         [string]$Url,
@@ -121,11 +224,19 @@ function Install-MsixPsfBinary {
     $zip = Join-Path $tmp $asset.name
 
     if ($PSCmdlet.ShouldProcess($Destination, "Install PSF $tag")) {
+        $destinationCreated = $false
         try {
             _MsixDownloadFile -Url $asset.browser_download_url -Destination $zip
             _MsixExpandZip -ArchivePath $zip -DestinationPath $tmp
 
-            New-Item $Destination -ItemType Directory -Force | Out-Null
+            # H1: verify Authenticode signer on every .exe/.dll before we copy
+            # any of them into the toolchain root.
+            _MsixVerifyAuthenticodeFolder -Folder $tmp -ToolName 'PSF'
+
+            if (-not (Test-Path $Destination)) {
+                New-Item $Destination -ItemType Directory -Force | Out-Null
+                $destinationCreated = $true
+            }
             # Copy every file from extracted layout into Destination flatly
             Get-ChildItem $tmp -Recurse -File | Where-Object { $_.FullName -ne $zip } |
                 ForEach-Object { Copy-Item $_.FullName $Destination -Force }
@@ -133,6 +244,12 @@ function Install-MsixPsfBinary {
             Set-Content -Path $marker -Value $tag -Encoding ascii
             Write-MsixLog Info "PSF $tag installed to $Destination"
 
+        } catch {
+            Write-MsixLog Error "PSF install rolled back: $_"
+            if ($destinationCreated) {
+                Remove-Item -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            throw
         } finally {
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -230,10 +347,19 @@ function Install-MsixProcMon {
     $zip = Join-Path $tmp 'ProcessMonitor.zip'
 
     if ($PSCmdlet.ShouldProcess($Destination, 'Install Process Monitor')) {
+        $destinationExisted = Test-Path $Destination
+        # Stage extraction into a temp folder so a bad signature doesn't pollute Destination.
+        $stage = Join-Path $tmp 'extracted'
         try {
             _MsixDownloadFile -Url $script:ProcmonZipUrl -Destination $zip
+            New-Item $stage -ItemType Directory -Force | Out-Null
+            Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
+
+            # H1: verify Authenticode signer before installing into $Destination.
+            _MsixVerifyAuthenticodeFolder -Folder $stage -ToolName 'Procmon'
+
             New-Item $Destination -ItemType Directory -Force | Out-Null
-            Expand-Archive -LiteralPath $zip -DestinationPath $Destination -Force
+            Copy-Item (Join-Path $stage '*') $Destination -Recurse -Force
             (Get-Date -Format o) | Set-Content $marker -Encoding ascii
 
             # Make Resolve-MsixProcMonPath find it via env-var hint
@@ -244,6 +370,12 @@ function Install-MsixProcMon {
             } else {
                 Write-MsixLog Warning "Procmon.exe not found after extraction; check $Destination"
             }
+        } catch {
+            Write-MsixLog Error "Procmon install rolled back: $_"
+            if (-not $destinationExisted) {
+                Remove-Item -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            throw
         } finally {
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -324,10 +456,18 @@ function Install-MsixDebugView {
     $zip = Join-Path $tmp 'DebugView.zip'
 
     if ($PSCmdlet.ShouldProcess($Destination, 'Install DebugView')) {
+        $destinationExisted = Test-Path $Destination
+        $stage = Join-Path $tmp 'extracted'
         try {
             _MsixDownloadFile -Url $script:DebugViewZipUrl -Destination $zip
+            New-Item $stage -ItemType Directory -Force | Out-Null
+            Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
+
+            # H1: verify Authenticode signer before installing into $Destination.
+            _MsixVerifyAuthenticodeFolder -Folder $stage -ToolName 'DebugView'
+
             New-Item $Destination -ItemType Directory -Force | Out-Null
-            Expand-Archive -LiteralPath $zip -DestinationPath $Destination -Force
+            Copy-Item (Join-Path $stage '*') $Destination -Recurse -Force
             (Get-Date -Format o) | Set-Content $marker -Encoding ascii
 
             # Make Resolve-MsixDebugViewPath find it via env-var hint
@@ -339,6 +479,12 @@ function Install-MsixDebugView {
             } else {
                 Write-MsixLog Warning "Dbgview.exe / Dbgview64.exe not found after extraction; check $Destination"
             }
+        } catch {
+            Write-MsixLog Error "DebugView install rolled back: $_"
+            if (-not $destinationExisted) {
+                Remove-Item -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            throw
         } finally {
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -496,6 +642,8 @@ function Install-MsixSdkTool {
     $url   = "https://api.nuget.org/v3-flatcontainer/$($script:SdkToolsNuGet.ToLower())/$Version/$($script:SdkToolsNuGet.ToLower()).$Version.nupkg"
 
     if ($PSCmdlet.ShouldProcess("$Destination\Tools", "Install Microsoft.Windows.SDK.BuildTools $Version ($Architecture)")) {
+        $toolsDir = Join-Path $Destination 'Tools'
+        $toolsDirExisted = Test-Path $toolsDir
         try {
             _MsixDownloadFile -Url $url -Destination $nupkg
 
@@ -513,7 +661,10 @@ function Install-MsixSdkTool {
                 throw "MakeAppx.exe not found inside the NuGet package for architecture '$Architecture'."
             }
 
-            $toolsDir = Join-Path $Destination 'Tools'
+            # H1: verify every .exe/.dll in the SDK arch folder before we copy
+            # them into Tools\ where Get-MsixToolsRoot will surface them.
+            _MsixVerifyAuthenticodeFolder -Folder $archDir -ToolName "SDK BuildTools $Version/$Architecture"
+
             New-Item $toolsDir -ItemType Directory -Force | Out-Null
 
             # Copy the whole arch folder (MakeAppx, signtool, makepri, plus
@@ -526,6 +677,12 @@ function Install-MsixSdkTool {
             # Reset the cached tools root so the next Get-MsixToolsRoot picks this up
             Set-MsixToolsRoot -Path $Destination
 
+        } catch {
+            Write-MsixLog Error "SDK tools install rolled back: $_"
+            if (-not $toolsDirExisted) {
+                Remove-Item -LiteralPath $toolsDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            throw
         } finally {
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }

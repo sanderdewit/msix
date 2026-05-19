@@ -53,25 +53,44 @@ function Get-MsixDebugRecommendation {
     .PARAMETER PackagePath
         Used in the generated commands. Defaults to $Report.PackagePath.
 
-    .PARAMETER Pfx / PfxPassword
-        Substituted into signing parts of the recommended commands.
+    .PARAMETER Pfx
+        Path to a PFX file. Interpolated into signing parts of the recommended
+        commands. When omitted, a placeholder is emitted.
+
+    .PARAMETER PfxPassword
+        SecureString password for the PFX. NEVER interpolated into the output —
+        instead the recommendation tells the operator to pass the same
+        SecureString (or prompts via Read-Host -AsSecureString). The actual
+        password value MUST NOT reach disk via this function.
 
     .OUTPUTS
         [string[]] — one entry per recommendation, formatted for printing
                     or piping into a .ps1 file.
     #>
     [CmdletBinding()]
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', '')]
     [OutputType([object[]])]
     param(
         [Parameter(Mandatory)]
         $Report,
         [string]$PackagePath,
         [string]$Pfx          = '<path-to-cert.pfx>',
-        [string]$PfxPassword  = '<pfx-password>'
+        [SecureString]$PfxPassword
     )
 
     if (-not $PackagePath) { $PackagePath = $Report.PackagePath }
+
+    # Render the -PfxPassword argument as a SecureString-prompting placeholder.
+    # We deliberately never expand the SecureString to plain text — the actual
+    # password value must NEVER appear in the generated script.
+    $passwordPlaceholder = '(Read-Host -AsSecureString -Prompt ''Enter PFX password'')'
+    $passArg = if ($PfxPassword) {
+        # Caller supplied the SecureString; recommendation just references the
+        # placeholder. Operator re-supplies the same SecureString manually.
+        "-PfxPassword $passwordPlaceholder"
+    } else {
+        "-PfxPassword $passwordPlaceholder"
+    }
+
     $lines = New-Object System.Collections.Generic.List[string]
     $i = 0
 
@@ -88,20 +107,20 @@ function Get-MsixDebugRecommendation {
                 $lines.Add("Add-MsixPsfV2 -PackagePath '$PackagePath' ``")
                 $lines.Add("    -Fixups            @() ``")
                 $lines.Add("    -WorkingDirectory '$wd' ``")
-                $lines.Add("    -Pfx '$Pfx' -PfxPassword '$PfxPassword'")
+                $lines.Add("    -Pfx '$Pfx' $passArg")
             }
             'FileRedirectionFixup' {
                 $base = if ($f.Recommendation -match "-Base '([^']+)'") { $matches[1] } else { 'VFS/ProgramFilesX64/<App>/' }
-                $lines.Add("# Manifest alternative (Win11+, no PSF overhead): Set-MsixFileSystemWriteVirtualization -PackagePath '$PackagePath' -Pfx '$Pfx' -PfxPassword '$PfxPassword'")
+                $lines.Add("# Manifest alternative (Win11+, no PSF overhead): Set-MsixFileSystemWriteVirtualization -PackagePath '$PackagePath' -Pfx '$Pfx' $passArg")
                 $lines.Add("Add-MsixPsfV2 -PackagePath '$PackagePath' ``")
                 $lines.Add("    -Fixups @( New-MsixPsfFileRedirectionConfig -Base '$base' -Patterns '.*\.log','.*\.tmp','.*\.cache' ) ``")
-                $lines.Add("    -Pfx '$Pfx' -PfxPassword '$PfxPassword'")
+                $lines.Add("    -Pfx '$Pfx' $passArg")
             }
             'RegLegacyFixups' {
-                $lines.Add("# Manifest alternative (Win11+, no PSF overhead): Set-MsixRegistryWriteVirtualization -PackagePath '$PackagePath' -Pfx '$Pfx' -PfxPassword '$PfxPassword'")
+                $lines.Add("# Manifest alternative (Win11+, no PSF overhead): Set-MsixRegistryWriteVirtualization -PackagePath '$PackagePath' -Pfx '$Pfx' $passArg")
                 $lines.Add("Add-MsixPsfV2 -PackagePath '$PackagePath' ``")
                 $lines.Add("    -Fixups @( New-MsixPsfRegLegacyConfig -Hive HKLM -Access Full2MaxAllowed -Patterns 'SOFTWARE\\<Vendor>\\*' ) ``")
-                $lines.Add("    -Pfx '$Pfx' -PfxPassword '$PfxPassword'")
+                $lines.Add("    -Pfx '$Pfx' $passArg")
             }
             'MultiApp' {
                 $lines.Add("# Multi-app package: ensure every Application id appears in config.json applications[].")
@@ -296,8 +315,16 @@ function Start-MsixDebugSession {
     if ($ProcessName) { Write-MsixLog Info "Target process: $ProcessName" }
 
     # 1) Analysis
-    $report  = Invoke-MsixInvestigation -PackagePath $PackagePath
-    $commands = Get-MsixDebugRecommendation -Report $report -PackagePath $PackagePath
+    #
+    # Pass -Pfx through so the generated recommendation uses the real cert
+    # path. We intentionally do NOT pass the SecureString password — the
+    # recommendation always emits a (Read-Host -AsSecureString) placeholder
+    # so the operator re-enters the secret at run time. The actual password
+    # value must never reach disk.
+    $report   = Invoke-MsixInvestigation -PackagePath $PackagePath
+    $recArgs  = @{ Report = $report; PackagePath = $PackagePath }
+    if ($Pfx) { $recArgs['Pfx'] = $Pfx }
+    $commands = Get-MsixDebugRecommendation @recArgs
 
     # Structured output -- both JSON (programmable) and HTML (human-readable).
     # The old report.txt rendered nested objects as @{Foo=...; Bar=...} which

@@ -45,14 +45,21 @@ Describe 'Get-MsixDebugRecommendation' -Tag 'Recommendations' {
         ($out -join "`n") | Should -Match "-WorkingDirectory 'VFS/ProgramFilesX64/A/'"
     }
 
-    It 'Substitutes -Pfx and -PfxPassword' {
+    It 'Substitutes -Pfx but emits a SecureString placeholder for -PfxPassword' {
         $stub = [pscustomobject]@{
             PackagePath = 'x.msix'
             Findings    = @([pscustomobject]@{ Severity='Warning'; Category='FileRedirectionFixup'; Symptom='x'; AppId='A'; Recommendation="-Base 'a/'"; Evidence='b' })
         }
-        $out = Get-MsixDebugRecommendation -Report $stub -Pfx 'C:\c.pfx' -PfxPassword 'P@s'
-        ($out -join "`n") | Should -Match "C:\\c\.pfx"
-        ($out -join "`n") | Should -Match "P@s"
+        $secret = 'P@s-DoNotLeak-Token'
+        $secure = ConvertTo-SecureString $secret -AsPlainText -Force
+        $out = Get-MsixDebugRecommendation -Report $stub -Pfx 'C:\c.pfx' -PfxPassword $secure
+        $joined = ($out -join "`n")
+        # -Pfx path is interpolated verbatim
+        $joined | Should -Match 'C:\\c\.pfx'
+        # The literal secret must NEVER reach the output
+        $joined | Should -Not -Match ([regex]::Escape($secret))
+        # The placeholder must direct the operator to re-supply via Read-Host
+        $joined | Should -Match 'Read-Host -AsSecureString'
     }
 
     It 'Numbers each recommendation' {

@@ -1,74 +1,313 @@
 ﻿function Invoke-MsixSigning {
     <#
     .SYNOPSIS
-        Signs an MSIX package using signtool.exe.
+        Signs an MSIX package using one of three signer backends: local
+        signtool.exe (default), Azure Trusted Signing, or AzureSignTool
+        (Azure Key Vault HSM).
 
     .DESCRIPTION
-        Uses the bundled signtool.exe. Supports both PFX file signing and
-        automatic certificate selection from the machine certificate store.
-        Always timestamps with SHA-256.
+        Backends:
+
+          SignTool       (default) — local signtool.exe, optional PFX or
+                                       /a auto-store selection. Suitable for
+                                       dev / sandbox / self-signed flows.
+                                       WARNING: when -Pfx + -PfxPassword is
+                                       used, the password is passed on the
+                                       process command line which other
+                                       processes can read via WMI. For
+                                       production secrets use TrustedSigning
+                                       or AzureSignTool.
+
+          TrustedSigning           — signtool /dlib + Azure CodeSigning Dlib
+                                       (Azure Trusted Signing service). Account,
+                                       profile, and endpoint are written to a
+                                       temp JSON metadata file that is deleted
+                                       in a finally block. Recommended for
+                                       production.
+
+          AzureSignTool            — AzureSignTool.exe targeting an Azure Key
+                                       Vault HSM. Service-principal credentials
+                                       are decrypted only at the CLI boundary.
+
+        All backends timestamp with SHA-256.
 
     .PARAMETER PackagePath
         Path to the .msix file to sign.
 
     .PARAMETER Pfx
-        Path to a PFX certificate file. Omit to use automatic store selection (/a).
+        (SignTool only.) Path to a PFX certificate file. Omit to use the
+        machine cert store with /a.
 
     .PARAMETER PfxPassword
-        Password for the PFX file. Required when -Pfx is provided.
+        (SignTool only, required when -Pfx is specified.) SecureString password
+        for the PFX file.
+
+    .PARAMETER TrustedSigningAccount
+        (TrustedSigning only.) The Azure Trusted Signing CodeSigningAccount name.
+
+    .PARAMETER TrustedSigningProfile
+        (TrustedSigning only.) The CertificateProfile name inside the account.
+
+    .PARAMETER TrustedSigningEndpoint
+        (TrustedSigning only.) Regional endpoint URL,
+        e.g. 'https://eus.codesigning.azure.net'.
+
+    .PARAMETER TrustedSigningClientDll
+        (TrustedSigning only.) Path to Azure.CodeSigning.Dlib.dll. When
+        omitted, $ToolsRoot\Tools\TrustedSigning\Azure.CodeSigning.Dlib.dll is
+        tried; a clear install hint is thrown if neither resolves.
+
+    .PARAMETER KeyVaultUrl
+        (AzureSignTool only.) Key Vault URL, e.g. 'https://my-vault.vault.azure.net'.
+
+    .PARAMETER KeyVaultCertificate
+        (AzureSignTool only.) Certificate name inside the Key Vault.
+
+    .PARAMETER KeyVaultTenantId
+        (AzureSignTool only, optional.) Azure AD tenant id for SP auth. When
+        omitted, AzureSignTool falls back to managed identity / interactive.
+
+    .PARAMETER KeyVaultClientId
+        (AzureSignTool only, optional.) Service-principal client id.
+
+    .PARAMETER KeyVaultClientSecret
+        (AzureSignTool only, optional.) SecureString service-principal
+        secret. Decrypted via BSTR/ZeroFreeBSTR only at the signtool CLI
+        boundary.
 
     .PARAMETER TimestampUrl
         RFC 3161 timestamp server URL. Defaults to DigiCert.
 
+    .PARAMETER Signer
+        Which backend to use. See top-level description.
+
     .EXAMPLE
+        # Local PFX (dev / self-signed)
         $pw = Read-Host -AsSecureString
         Invoke-MsixSigning -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw
 
     .EXAMPLE
+        # Machine store (no PFX)
         Invoke-MsixSigning -PackagePath app.msix
+
+    .EXAMPLE
+        # Azure Trusted Signing (production)
+        Invoke-MsixSigning -PackagePath app.msix -Signer TrustedSigning `
+            -TrustedSigningAccount  'MyAccount' `
+            -TrustedSigningProfile  'MyProfile' `
+            -TrustedSigningEndpoint 'https://eus.codesigning.azure.net'
+
+    .EXAMPLE
+        # Azure Key Vault via AzureSignTool (managed identity)
+        Invoke-MsixSigning -PackagePath app.msix -Signer AzureSignTool `
+            -KeyVaultUrl 'https://my-vault.vault.azure.net' `
+            -KeyVaultCertificate 'msix-prod'
     #>
-    [CmdletBinding(SupportsShouldProcess)]
+    [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'SignTool')]
     param(
         [Parameter(Mandatory)]
         [string]$PackagePath,
+
+        # -Signer is shared across all sets. ParameterSetName auto-resolves
+        # when set-unique parameters (-Pfx, -TrustedSigningAccount,
+        # -KeyVaultUrl …) are supplied; otherwise SignTool is the default.
+        [Parameter(ParameterSetName = 'SignTool')]
+        [Parameter(ParameterSetName = 'SignToolPfx')]
+        [Parameter(ParameterSetName = 'TrustedSigning')]
+        [Parameter(ParameterSetName = 'AzureSignTool')]
+        [ValidateSet('SignTool','TrustedSigning','AzureSignTool')]
+        [string]$Signer = 'SignTool',
+
+        # --- PFX (SignTool with PFX) ---
+        [Parameter(ParameterSetName = 'SignToolPfx', Mandatory)]
         [string]$Pfx,
+        [Parameter(ParameterSetName = 'SignToolPfx', Mandatory)]
         [SecureString]$PfxPassword,
+
+        # --- Trusted Signing ---
+        [Parameter(ParameterSetName = 'TrustedSigning', Mandatory)]
+        [string]$TrustedSigningAccount,
+        [Parameter(ParameterSetName = 'TrustedSigning', Mandatory)]
+        [string]$TrustedSigningProfile,
+        [Parameter(ParameterSetName = 'TrustedSigning', Mandatory)]
+        [string]$TrustedSigningEndpoint,
+        [Parameter(ParameterSetName = 'TrustedSigning')]
+        [string]$TrustedSigningClientDll,
+
+        # --- AzureSignTool ---
+        [Parameter(ParameterSetName = 'AzureSignTool', Mandatory)]
+        [string]$KeyVaultUrl,
+        [Parameter(ParameterSetName = 'AzureSignTool', Mandatory)]
+        [string]$KeyVaultCertificate,
+        [Parameter(ParameterSetName = 'AzureSignTool')]
+        [string]$KeyVaultTenantId,
+        [Parameter(ParameterSetName = 'AzureSignTool')]
+        [string]$KeyVaultClientId,
+        [Parameter(ParameterSetName = 'AzureSignTool')]
+        [SecureString]$KeyVaultClientSecret,
+
         [string]$TimestampUrl = 'http://timestamp.digicert.com'
     )
 
-    if ($Pfx -and -not $PfxPassword) {
-        throw 'PfxPassword is required when Pfx is specified.'
+    # ParameterSetName drives the backend; fall back to the explicit -Signer
+    # when caller used the default SignTool set.
+    $effectiveSigner = switch ($PSCmdlet.ParameterSetName) {
+        'SignToolPfx'    { 'SignTool' }
+        'TrustedSigning' { 'TrustedSigning' }
+        'AzureSignTool'  { 'AzureSignTool' }
+        default          { $Signer }
     }
 
     $toolsRoot = Get-MsixToolsRoot
     $signtool  = Join-Path $toolsRoot 'Tools\signtool.exe'
     $fileinfo  = Get-Item $PackagePath
 
-    $sigArgs = if ($Pfx) {
-        $cert   = Get-Item $Pfx
-        # Decrypt SecureString only at the CLI boundary — never stored in a plain variable
-        $bstr   = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PfxPassword)
-        try {
-            $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-            @('sign', '/v', '/tr', $TimestampUrl, '/td', 'sha256', '/fd', 'sha256',
-              '/f', $cert.FullName, '/p', $plain, $fileinfo.FullName)
-        } finally {
-            [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    Write-MsixLog Info "Signing: $($fileinfo.Name) (backend: $effectiveSigner)"
+
+    switch ($effectiveSigner) {
+
+        # =====================================================================
+        # SignTool (local) — current default behaviour
+        # =====================================================================
+        'SignTool' {
+            $sigArgs = if ($Pfx) {
+                # Use the real Warning stream (not Write-MsixLog which goes to Information)
+                # so callers and tests can capture this security-critical notice via -WarningVariable.
+                Write-Warning 'SignTool /p exposes the PFX password on the process command line (visible to other processes via WMI). For mission-critical environments, use -Signer TrustedSigning.'
+
+                $cert = Get-Item $Pfx
+                # Decrypt SecureString only at the CLI boundary — never stored in a plain variable
+                $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PfxPassword)
+                try {
+                    $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+                    @('sign', '/v', '/tr', $TimestampUrl, '/td', 'sha256', '/fd', 'sha256',
+                      '/f', $cert.FullName, '/p', $plain, $fileinfo.FullName)
+                } finally {
+                    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+                }
+            } else {
+                @('sign', '/v', '/tr', $TimestampUrl, '/td', 'sha256', '/fd', 'sha256',
+                  '/a', $fileinfo.FullName)
+            }
+
+            if ($PSCmdlet.ShouldProcess($fileinfo.FullName, 'Sign with signtool')) {
+                $r = Invoke-MsixProcess $signtool -ArgumentList $sigArgs
+                if ($r.ExitCode -ne 0) {
+                    $detail = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
+                    throw "signtool failed (exit $($r.ExitCode)): $detail`nCheck: Microsoft-Windows-AppxPackagingOM event log."
+                } else {
+                    Write-MsixLog Info "Signed successfully: $($fileinfo.Name)"
+                }
+            }
         }
-    } else {
-        @('sign', '/v', '/tr', $TimestampUrl, '/td', 'sha256', '/fd', 'sha256',
-          '/a', $fileinfo.FullName)
-    }
 
-    Write-MsixLog Info "Signing: $($fileinfo.Name)"
+        # =====================================================================
+        # Azure Trusted Signing — signtool /dlib + Azure.CodeSigning.Dlib.dll
+        # =====================================================================
+        'TrustedSigning' {
+            if (-not $TrustedSigningAccount -or -not $TrustedSigningProfile -or -not $TrustedSigningEndpoint) {
+                throw "-Signer TrustedSigning requires -TrustedSigningAccount, -TrustedSigningProfile, and -TrustedSigningEndpoint."
+            }
+            # Resolve the dlib path: explicit param, then bundled fallback.
+            $resolvedDlib = $TrustedSigningClientDll
+            if (-not $resolvedDlib) {
+                $candidate = Join-Path $toolsRoot 'Tools\TrustedSigning\Azure.CodeSigning.Dlib.dll'
+                if (Test-Path -LiteralPath $candidate) { $resolvedDlib = $candidate }
+            }
+            if (-not $resolvedDlib -or -not (Test-Path -LiteralPath $resolvedDlib)) {
+                throw "Azure.CodeSigning.Dlib.dll not found. Pass -TrustedSigningClientDll <path>, or stage it at:`n  $(Join-Path $toolsRoot 'Tools\TrustedSigning\Azure.CodeSigning.Dlib.dll')`nInstall via: dotnet tool install --global TrustedSigning.Client"
+            }
 
-    if ($PSCmdlet.ShouldProcess($fileinfo.FullName, 'Sign with signtool')) {
-        $r = Invoke-MsixProcess $signtool -ArgumentList $sigArgs
-        if ($r.ExitCode -ne 0) {
-            $detail = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
-            throw "signtool failed (exit $($r.ExitCode)): $detail`nCheck: Microsoft-Windows-AppxPackagingOM event log."
-        } else {
-            Write-MsixLog Info "Signed successfully: $($fileinfo.Name)"
+            Write-MsixLog Info "TrustedSigning account=$TrustedSigningAccount profile=$TrustedSigningProfile endpoint=$TrustedSigningEndpoint"
+
+            $metadataPath = Join-Path $env:TEMP "ts-metadata-$([guid]::NewGuid().ToString('N').Substring(0,8)).json"
+            $metadata = @{
+                Endpoint               = $TrustedSigningEndpoint
+                CodeSigningAccountName = $TrustedSigningAccount
+                CertificateProfileName = $TrustedSigningProfile
+            } | ConvertTo-Json -Compress
+
+            try {
+                Set-Content -LiteralPath $metadataPath -Value $metadata -NoNewline -Encoding utf8
+
+                $sigArgs = @('sign', '/v', '/tr', $TimestampUrl, '/td', 'sha256', '/fd', 'sha256',
+                             '/dlib', $resolvedDlib, '/dmdf', $metadataPath, $fileinfo.FullName)
+
+                if ($PSCmdlet.ShouldProcess($fileinfo.FullName, 'Sign with signtool (Trusted Signing)')) {
+                    $r = Invoke-MsixProcess $signtool -ArgumentList $sigArgs
+                    if ($r.ExitCode -ne 0) {
+                        $detail = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
+                        throw "signtool (TrustedSigning) failed (exit $($r.ExitCode)): $detail"
+                    } else {
+                        Write-MsixLog Info "Signed successfully via Trusted Signing: $($fileinfo.Name)"
+                    }
+                }
+            } finally {
+                Remove-Item -LiteralPath $metadataPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        # =====================================================================
+        # AzureSignTool — Azure Key Vault HSM
+        # =====================================================================
+        'AzureSignTool' {
+            if (-not $KeyVaultUrl -or -not $KeyVaultCertificate) {
+                throw "-Signer AzureSignTool requires -KeyVaultUrl and -KeyVaultCertificate."
+            }
+            $azst = $null
+            $cmd  = Get-Command 'AzureSignTool.exe' -ErrorAction SilentlyContinue
+            if ($cmd) { $azst = $cmd.Source }
+            if (-not $azst) {
+                $candidate = Join-Path $toolsRoot 'Tools\AzureSignTool\AzureSignTool.exe'
+                if (Test-Path -LiteralPath $candidate) { $azst = $candidate }
+            }
+            if (-not $azst) {
+                throw "AzureSignTool.exe not found in PATH or at $(Join-Path $toolsRoot 'Tools\AzureSignTool\AzureSignTool.exe').`nInstall via: dotnet tool install --global AzureSignTool"
+            }
+
+            Write-MsixLog Info "AzureSignTool vault=$KeyVaultUrl cert=$KeyVaultCertificate"
+
+            # Build base arguments — omit auth-mode args when not provided so
+            # AzureSignTool falls back to managed identity / interactive auth.
+            $azArgsBase = @(
+                'sign',
+                '--timestamp-rfc3161',  $TimestampUrl,
+                '--timestamp-digest',   'sha256',
+                '--file-digest',        'sha256',
+                '--azure-key-vault-url',         $KeyVaultUrl,
+                '--azure-key-vault-certificate', $KeyVaultCertificate
+            )
+            if ($KeyVaultTenantId) {
+                $azArgsBase += @('--azure-key-vault-tenant-id', $KeyVaultTenantId)
+            }
+            if ($KeyVaultClientId) {
+                $azArgsBase += @('--azure-key-vault-client-id', $KeyVaultClientId)
+            }
+
+            $bstr = [IntPtr]::Zero
+            try {
+                if ($KeyVaultClientSecret) {
+                    # Decrypt SecureString only here, append immediately.
+                    $bstr  = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($KeyVaultClientSecret)
+                    $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+                    $azArgsBase += @('--azure-key-vault-client-secret', $plain)
+                }
+                $azArgsBase += $fileinfo.FullName
+
+                if ($PSCmdlet.ShouldProcess($fileinfo.FullName, 'Sign with AzureSignTool (Key Vault)')) {
+                    $r = Invoke-MsixProcess $azst -ArgumentList $azArgsBase
+                    if ($r.ExitCode -ne 0) {
+                        $detail = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
+                        throw "AzureSignTool failed (exit $($r.ExitCode)): $detail"
+                    } else {
+                        Write-MsixLog Info "Signed successfully via AzureSignTool: $($fileinfo.Name)"
+                    }
+                }
+            } finally {
+                if ($bstr -ne [IntPtr]::Zero) {
+                    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+                }
+            }
         }
     }
 }

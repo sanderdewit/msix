@@ -9,7 +9,7 @@
     }
 
     try {
-        [xml]$xml = Get-Content $Path -Raw -ErrorAction Stop
+        [xml]$xml = _MsixLoadXmlSecure -Path $Path
     } catch {
         throw "Manifest is not valid XML: $_"
     }

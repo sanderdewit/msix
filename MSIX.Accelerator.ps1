@@ -13,18 +13,33 @@
 # Services, etc.) are surfaced as findings for human review.
 # =============================================================================
 
-function Test-MsixAcceleratorParserAvailable {
-    # Use the powershell-yaml module if available; otherwise fall back to a
-    # minimal regex parser sufficient for the FixType: PSF case.
-    return [bool](Get-Module -ListAvailable -Name 'powershell-yaml')
-}
-
-
 function ConvertFrom-MsixYamlAccelerator {
     <#
     .SYNOPSIS
-        Parses an accelerator YAML file. Uses powershell-yaml if present,
-        otherwise a minimal hand-rolled parser sufficient for the documented schema.
+        Parses an accelerator YAML file using an intentionally-restricted
+        scalar parser.
+
+    .DESCRIPTION
+        Reads an accelerator YAML file from -Path and returns a hashtable of
+        the top-level keys. Only flat scalar (key: value) and inline list
+        (key: [a, b, c]) forms are recognised. Quoting with single or double
+        quotes around scalar values is honoured (stripped); everything else
+        is treated as a literal string.
+
+        Nested mappings, anchors/aliases, tags (e.g. !!python/object/apply,
+        !!binary, !!set), multi-document streams, flow mappings, and any
+        other YAML feature that could instantiate a .NET object are NOT
+        supported. By design, hostile constructs degrade to literal text
+        rather than causing object instantiation.
+
+    .NOTES
+        SECURITY: Accelerator YAML is parsed by an intentionally-restricted scalar
+        parser. Only flat key:value and key:[value1,value2] forms are supported. Tags,
+        references, multi-document streams, and any YAML feature that could
+        instantiate .NET objects are NOT supported -- by design. Do not switch to a
+        full third-party YAML library for this input: accelerator files are
+        user-supplied and a full YAML parser would be a code-execution vector on
+        untrusted accelerator authors.
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -35,22 +50,50 @@ function ConvertFrom-MsixYamlAccelerator {
 
     if (-not (Test-Path $Path)) { throw "Accelerator not found: $Path" }
 
-    if (Test-MsixAcceleratorParserAvailable) {
-        Import-Module powershell-yaml -ErrorAction Stop
-        return ConvertFrom-Yaml (Get-Content $Path -Raw)
-    }
-
-    # Minimal fallback: parse only the keys we need.
-    Write-MsixLog Warning "powershell-yaml not installed; using minimal parser. Run 'Install-Module powershell-yaml' for full support."
+    # SECURITY (H5): We deliberately do NOT invoke any external YAML
+    # deserialiser here, even if one is installed. Full YAML parsers honour
+    # YAML type tags such as !!python/object/apply or .NET type tags that
+    # can instantiate arbitrary objects during deserialisation -- a
+    # well-known code-execution vector when the YAML comes from an
+    # untrusted source. Accelerator files ARE untrusted (third-party
+    # authors publish them), so we parse with a tiny purpose-built scalar
+    # parser instead. Do not "improve" this by routing through a real YAML
+    # library.
     $text   = Get-Content $Path -Raw
     $result = @{}
 
-    # Top-level scalar keys (PackageName, PackageVersion, etc.)
-    foreach ($scalar in @('PackageName','PackageVersion','PublisherName','EligibleForConversion',
-                          'ConversionStatus','MinimumPSFVersion','Architecture','MinimumOSVersion',
-                          'MinimumOSBuild','Edition','MSIXConversionToolVersion','AcceleratorVersion')) {
-        if ($text -match "^\s*${scalar}\s*:\s*(.+)$") {
-            $result[$scalar] = ($matches[1] -replace '^["'']|["'']$').Trim()
+    # Match: <indent><key>: <value>   (one line, no nested mappings).
+    # The key is restricted to a conservative identifier set so we never
+    # accidentally capture a tag like "!!python/object/apply:os.system".
+    foreach ($line in ($text -split "`r?`n")) {
+        if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_\-]*)\s*:\s*(.*)$') {
+            $key = $matches[1]
+            $val = $matches[2].Trim()
+
+            # Strip a trailing comment that is clearly outside a quoted string.
+            if ($val -notmatch '^["''].*["'']$' -and $val -match '^(.*?)\s+#') {
+                $val = $matches[1].Trim()
+            }
+
+            if ($val -match '^\[(.*)\]\s*$') {
+                # Inline list:  key: [a, b, c]
+                $items = @()
+                foreach ($item in ($matches[1] -split ',')) {
+                    $t = $item.Trim()
+                    if ($t -match '^"(.*)"$' -or $t -match "^'(.*)'$") { $t = $matches[1] }
+                    $items += $t
+                }
+                $result[$key] = $items
+            }
+            elseif ($val -match '^"(.*)"$' -or $val -match "^'(.*)'$") {
+                $result[$key] = $matches[1]
+            }
+            else {
+                # Everything else -- including hostile YAML tag syntax such as
+                # "!!python/object/apply:os.system [`"whoami`"]" -- is kept as a
+                # literal string. No tag resolution, no object instantiation.
+                $result[$key] = $val
+            }
         }
     }
     return $result

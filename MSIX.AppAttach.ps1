@@ -363,7 +363,7 @@ function Test-MsixAppAttachImage {
                     ForEach-Object {
                         $manifest = Join-Path $_.FullName 'AppxManifest.xml'
                         if (Test-Path $manifest) {
-                            [xml]$x = Get-Content $manifest -Raw
+                            [xml]$x = _MsixLoadXmlSecure -Path $manifest
                             [pscustomobject]@{
                                 Folder      = $_.Name
                                 Name        = $x.Package.Identity.Name

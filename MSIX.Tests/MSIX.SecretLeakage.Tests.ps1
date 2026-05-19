@@ -1,6 +1,7 @@
 ﻿BeforeAll {
     Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
-    function New-TestSecureString {
+    function ConvertTo-TestSecureString {
+        [OutputType([SecureString])]
         param(
             [Parameter(Mandatory)]
             [string] $Value
@@ -23,7 +24,7 @@ Describe 'Secret non-leakage' -Tag 'Security' {
 
     It 'Get-MsixDebugRecommendation does not interpolate the literal PFX password' {
         $secret = 'SuperSecretPassword123!'
-        $secure = New-TestSecureString -Value $secret
+        $secure = ConvertTo-TestSecureString -Value $secret
         $stub = [pscustomobject]@{
             PackagePath = 'C:\nope.msix'
             Findings    = @(
@@ -44,7 +45,7 @@ Describe 'Secret non-leakage' -Tag 'Security' {
     }
 
     It 'Get-MsixDebugRecommendation emits a SecureString prompt placeholder instead of the literal password' {
-        $secure = New-TestSecureString -Value 'irrelevant-but-must-not-leak'
+        $secure = ConvertTo-TestSecureString -Value 'irrelevant-but-must-not-leak'
         $stub = [pscustomobject]@{
             PackagePath = 'C:\nope.msix'
             Findings    = @(
@@ -65,10 +66,13 @@ Describe 'Secret non-leakage' -Tag 'Security' {
     It 'Invoke-MsixSigning -Signer SignTool with PFX warns about cmdline exposure' {
         # Use -WhatIf so we don't actually call signtool
         $warn = $null
-        $secure = ConvertTo-SecureString 'x' -AsPlainText -Force
+        $secure = ConvertTo-TestSecureString -Value 'x'
         try {
             Invoke-MsixSigning -PackagePath 'C:\nope.msix' -Pfx 'C:\nope.pfx' -PfxPassword $secure -Signer SignTool -WarningVariable warn -WarningAction Continue -WhatIf
-        } catch { }
+        }
+        catch {
+            Write-Verbose $_
+        }
         ($warn -join ' ') | Should -Match 'command line'
     }
 }

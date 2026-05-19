@@ -1,5 +1,21 @@
 ﻿BeforeAll {
     Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    function New-TestSecureString {
+        param(
+            [Parameter(Mandatory)]
+            [string] $Value
+        )
+
+        $secure = [System.Security.SecureString]::new()
+
+        foreach ($char in $Value.ToCharArray()) {
+            $secure.AppendChar($char)
+        }
+
+        $secure.MakeReadOnly()
+
+        return $secure
+    }
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
@@ -7,7 +23,7 @@ Describe 'Secret non-leakage' -Tag 'Security' {
 
     It 'Get-MsixDebugRecommendation does not interpolate the literal PFX password' {
         $secret = 'SuperSecretPassword123!'
-        $secure = ConvertTo-SecureString $secret -AsPlainText -Force
+        $secure = New-TestSecureString -Value $secret
         $stub = [pscustomobject]@{
             PackagePath = 'C:\nope.msix'
             Findings    = @(
@@ -28,7 +44,7 @@ Describe 'Secret non-leakage' -Tag 'Security' {
     }
 
     It 'Get-MsixDebugRecommendation emits a SecureString prompt placeholder instead of the literal password' {
-        $secure = ConvertTo-SecureString 'irrelevant-but-must-not-leak' -AsPlainText -Force
+        $secure = New-TestSecureString -Value 'irrelevant-but-must-not-leak'
         $stub = [pscustomobject]@{
             PackagePath = 'C:\nope.msix'
             Findings    = @(

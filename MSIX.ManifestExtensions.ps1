@@ -251,6 +251,9 @@ function Set-MsixFileSystemWriteVirtualization {
             -Pfx cert.pfx -PfxPassword 'P@ss'
     #>
     [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
         [switch]$Enable,
@@ -265,7 +268,6 @@ function Set-MsixFileSystemWriteVirtualization {
 
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Set FileSystemWriteVirtualization')
 
-    $null = $Enable, $ExcludedDirectories  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -UnsignedOutputPath $UnsignedOutputPath `
@@ -366,6 +368,9 @@ function Set-MsixRegistryWriteVirtualization {
         Set-MsixRegistryWriteVirtualization -PackagePath app.msix -Pfx cert.pfx -PfxPassword 'P@ss'
     #>
     [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
         [switch]$Enable,
@@ -380,7 +385,6 @@ function Set-MsixRegistryWriteVirtualization {
 
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Set RegistryWriteVirtualization')
 
-    $null = $Enable, $ExcludedKeys  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -UnsignedOutputPath $UnsignedOutputPath `
@@ -458,7 +462,8 @@ function Set-MsixInstalledLocationVirtualization {
         need explicit control over what happens to user-modified, deleted, and
         added files when the package is updated.
 
-        Requires Windows 10 build 19041+.
+        Min OS: Windows 10 2004 (build 19041+). MaxVersionTested is bumped
+        automatically.
 
     .PARAMETER ModifiedItems / DeletedItems / AddedItems
         Each accepts 'keep' or 'reset'. Defaults match TMEditX:
@@ -469,6 +474,9 @@ function Set-MsixInstalledLocationVirtualization {
             -DeletedItems keep -Pfx cert.pfx -PfxPassword 'P@ss'
     #>
     [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
         [ValidateSet('keep','reset')] [string]$ModifiedItems = 'keep',
@@ -485,7 +493,6 @@ function Set-MsixInstalledLocationVirtualization {
 
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Set InstalledLocationVirtualization')
 
-    $null = $ModifiedItems, $DeletedItems, $AddedItems, $Disable  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -UnsignedOutputPath $UnsignedOutputPath `
@@ -550,8 +557,15 @@ function Add-MsixLoaderSearchPathOverride {
             -Pfx cert.pfx -PfxPassword 'P@ss'
     #>
     [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
+        [ValidatePattern(
+            '^[A-Za-z_][A-Za-z0-9_.-]*$',
+            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+        )]
         [string]$AppId,
         [Parameter(Mandatory)]
         [ValidateCount(1,5)]
@@ -566,7 +580,6 @@ function Add-MsixLoaderSearchPathOverride {
 
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Add LoaderSearchPathOverride')
 
-    $null = $AppId, $Paths  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -UnsignedOutputPath $UnsignedOutputPath `
@@ -662,11 +675,23 @@ function Add-MsixFirewallRule {
             -Executable 'VFS/ProgramFilesX64/App/server.exe' `
             -Direction in -Protocol TCP -LocalPort 5000-5010 `
             -Pfx cert.pfx -PfxPassword 'P@ss'
+
+    .NOTES
+        Min OS: Windows 10 1703 (build 15063+). MaxVersionTested is bumped
+        automatically.
     #>
     [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
-        [Parameter(Mandatory)] [string]$AppId,
+        [Parameter(Mandatory)]
+        [ValidatePattern(
+            '^[A-Za-z_][A-Za-z0-9_.-]*$',
+            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+        )]
+        [string]$AppId,
         [Parameter(Mandatory)] [string]$Executable,
         [Parameter(Mandatory)]
         [ValidateSet('in','out')]
@@ -687,7 +712,6 @@ function Add-MsixFirewallRule {
 
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Add firewall rule for $AppId")
 
-    $null = $Executable, $Direction, $Protocol, $LocalPort, $FwProfile  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -UnsignedOutputPath $UnsignedOutputPath `
@@ -777,10 +801,23 @@ function Add-MsixProtocolHandler {
             -Pfx cert.pfx -PfxPassword 'P@ss'
     #>
     [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
-        [Parameter(Mandatory)] [string]$AppId,
-        [Parameter(Mandatory)] [string]$Name,
+        [Parameter(Mandatory)]
+        [ValidatePattern(
+            '^[A-Za-z_][A-Za-z0-9_.-]*$',
+            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+        )]
+        [string]$AppId,
+        [Parameter(Mandatory)]
+        [ValidatePattern(
+            '^[A-Za-z_][A-Za-z0-9_.-]*$',
+            ErrorMessage = 'Protocol Name must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen (no spaces).'
+        )]
+        [string]$Name,
         [string]$DisplayName,
         [string]$OutputPath,
         [Alias('NoSign')]
@@ -792,7 +829,6 @@ function Add-MsixProtocolHandler {
 
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Add protocol $Name")
 
-    $null = $AppId, $DisplayName  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -UnsignedOutputPath $UnsignedOutputPath `
@@ -851,11 +887,34 @@ function Add-MsixFileTypeAssociation {
             -Pfx cert.pfx -PfxPassword 'P@ss'
     #>
     [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
-        [Parameter(Mandatory)] [string]$AppId,
-        [Parameter(Mandatory)] [string]$Name,
-        [Parameter(Mandatory)] [string[]]$FileTypes,
+        [Parameter(Mandatory)]
+        [ValidatePattern(
+            '^[A-Za-z_][A-Za-z0-9_.-]*$',
+            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+        )]
+        [string]$AppId,
+        [Parameter(Mandatory)]
+        [ValidatePattern(
+            '^[A-Za-z_][A-Za-z0-9_.-]*$',
+            ErrorMessage = 'FTA Name must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+        )]
+        [string]$Name,
+        [Parameter(Mandatory)]
+        [ValidateScript({
+            foreach ($t in $_) {
+                # Allow optional leading dot — function auto-prefixes '.' to bare names.
+                if ($t -notmatch '^\.?[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}$') {
+                    throw "Invalid file type: '$t'. Allowed: '.ext' or 'ext' (alphanumeric/underscore/dot/hyphen, max 32 chars after dot)."
+                }
+            }
+            $true
+        })]
+        [string[]]$FileTypes,
         [string]$DisplayName,
         [string]$OutputPath,
         [Alias('NoSign')]
@@ -867,7 +926,6 @@ function Add-MsixFileTypeAssociation {
 
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Add FTA $Name")
 
-    $null = $AppId, $DisplayName, $FileTypes  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -UnsignedOutputPath $UnsignedOutputPath `
@@ -929,12 +987,29 @@ function Add-MsixStartupTask {
         Add-MsixStartupTask -PackagePath app.msix -AppId App `
             -TaskId ContosoStartup -DisplayName 'Contoso' -Enabled $true `
             -Pfx cert.pfx -PfxPassword 'P@ss'
+
+    .NOTES
+        Min OS: Windows 10 1703 (build 15063+). MaxVersionTested is bumped
+        automatically.
     #>
     [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
-        [Parameter(Mandatory)] [string]$AppId,
-        [Parameter(Mandatory)] [string]$TaskId,
+        [Parameter(Mandatory)]
+        [ValidatePattern(
+            '^[A-Za-z_][A-Za-z0-9_.-]*$',
+            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+        )]
+        [string]$AppId,
+        [Parameter(Mandatory)]
+        [ValidatePattern(
+            '^[A-Za-z_][A-Za-z0-9_.-]*$',
+            ErrorMessage = 'TaskId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+        )]
+        [string]$TaskId,
         [Parameter(Mandatory)] [string]$DisplayName,
         [bool]$Enabled = $true,
         [string]$Executable,
@@ -948,7 +1023,6 @@ function Add-MsixStartupTask {
 
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Add StartupTask $TaskId")
 
-    $null = $AppId, $DisplayName, $Enabled, $Executable  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -UnsignedOutputPath $UnsignedOutputPath `
@@ -1005,8 +1079,14 @@ function Add-MsixFontExtension {
     .EXAMPLE
         $fonts = Get-MsixFontCandidate -PackagePath app.msix | Select-Object -ExpandProperty Path
         Add-MsixFontExtension -PackagePath app.msix -FontPaths $fonts -Pfx cert.pfx -PfxPassword 'P@ss'
+
+    .NOTES
+        Min OS: Windows 10 1607 (build 14393+).
     #>
     [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
         [Parameter(Mandatory)] [string[]]$FontPaths,
@@ -1020,7 +1100,6 @@ function Add-MsixFontExtension {
 
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Add SharedFonts')
 
-    $null = $FontPaths  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -UnsignedOutputPath $UnsignedOutputPath `
@@ -1091,6 +1170,9 @@ function Set-MsixBrandMetadata {
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
         [string]$DisplayName,
@@ -1111,7 +1193,6 @@ function Set-MsixBrandMetadata {
     }
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Set brand metadata')
 
-    $null = $ApplyToApplications  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -UnsignedOutputPath $UnsignedOutputPath `
@@ -1169,6 +1250,9 @@ function Add-MsixShellVerbExtension {
         targets. HKCR\Directory\shell entries have no direct MSIX manifest
         equivalent via FTA; use Add-MsixFileExplorerContextMenu for that case.
 
+        Min OS: Windows 10 1709 (build 16299+). MaxVersionTested is bumped
+        automatically.
+
     .PARAMETER AppId
         Application Id to attach the extension to.
 
@@ -1202,10 +1286,22 @@ function Add-MsixShellVerbExtension {
             -FileTypes '.log','.txt' -Pfx cert.pfx -PfxPassword 'P@ss'
     #>
     [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
-        [Parameter(Mandatory)] [string]$AppId,
+        [Parameter(Mandatory)]
+        [ValidatePattern(
+            '^[A-Za-z_][A-Za-z0-9_.-]*$',
+            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+        )]
+        [string]$AppId,
         [Parameter(Mandatory)] [string]$VerbDisplayName,
+        [ValidatePattern(
+            '^[A-Za-z_][A-Za-z0-9_.-]*$',
+            ErrorMessage = 'VerbId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+        )]
         [string]$VerbId,
         [string]$Parameters = '"%1"',
         [string[]]$FileTypes,
@@ -1229,7 +1325,6 @@ function Add-MsixShellVerbExtension {
 
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Add shell verb '$VerbDisplayName'")
 
-    $null = $AppId, $Parameters, $FileTypes  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
         -UnsignedOutputPath $UnsignedOutputPath `
@@ -1338,10 +1433,32 @@ function Add-MsixComServerExtension {
             ) -Pfx cert.pfx -PfxPassword 'P@ss'
     #>
     [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
+        [ValidatePattern(
+            '^[A-Za-z_][A-Za-z0-9_.-]*$',
+            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+        )]
         [string]$AppId,
-        [Parameter(Mandatory)] [hashtable[]]$Servers,
+        [Parameter(Mandatory)]
+        [ValidateScript({
+            foreach ($srv in $_) {
+                if (-not $srv.Clsid) {
+                    throw "Each -Servers entry must include a 'Clsid' key."
+                }
+                if ($srv.Clsid -notmatch '^(\{)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\})?$') {
+                    throw "Invalid Clsid '$($srv.Clsid)': must be a GUID like 12345678-1234-1234-1234-123456789abc (curly braces optional)."
+                }
+                if (-not $srv.VfsDllPath) {
+                    throw "Each -Servers entry must include a 'VfsDllPath' key."
+                }
+            }
+            $true
+        })]
+        [hashtable[]]$Servers,
         [string]$OutputPath,
         [Alias('NoSign')]
         [switch]$SkipSigning,
@@ -1352,7 +1469,6 @@ function Add-MsixComServerExtension {
 
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Add COM server extension(s)')
 
-    $null = $AppId, $Servers  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
         -UnsignedOutputPath $UnsignedOutputPath `

@@ -5,7 +5,10 @@
 
     .DESCRIPTION
         Supports the COM-based IContextMenu / drag-drop handler pattern used by
-        classic Win32 applications, available on Windows 11 21H2 (build 22000+).
+        classic Win32 applications.
+
+        Min OS: Windows 11 21H2 (build 22000+). MaxVersionTested is bumped
+        automatically.
 
         Adds to AppxManifest.xml inside the Application's Extensions node:
           - com:Extension (windows.comServer) for COM server registration
@@ -57,16 +60,35 @@
             -Pfx cert.pfx -PfxPassword 'P@ss'
     #>
     [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
     param(
         [Parameter(Mandatory)]
         [string]$PackagePath,
+        [ValidatePattern(
+            '^[A-Za-z_][A-Za-z0-9_.-]*$',
+            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+        )]
         [string]$AppId,
         [Parameter(Mandatory)]
         [string]$ShellExtDll,
         [Parameter(Mandatory)]
+        [ValidatePattern(
+            '^(\{)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\})?$',
+            ErrorMessage = 'CLSID must be a GUID like 12345678-1234-1234-1234-123456789abc (curly braces optional).'
+        )]
         [string]$Clsid,
         [Parameter(Mandatory)]
         [string]$DisplayName,
+        [ValidateScript({
+            foreach ($t in $_) {
+                if ($t -notmatch '^(\*|\.[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}|Directory|Drive)$') {
+                    throw "Invalid file type: '$t'. Allowed: '*', '.ext' (alphanumeric/underscore/dot/hyphen, max 32 chars after dot), 'Directory', 'Drive'."
+                }
+            }
+            $true
+        })]
         [string[]]$FileTypes = @('*'),
         [ValidateSet('ContextMenu', 'DragDrop')]
         [string]$MenuType    = 'ContextMenu',
@@ -104,7 +126,6 @@
         }
     }
 
-    $null = $AppId, $DisplayName, $FileTypes, $MenuType  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
         -UnsignedOutputPath $UnsignedOutputPath `
@@ -233,16 +254,39 @@ function Add-MsixFileExplorerContextMenu {
             -FileTypes '.log', '.txt'
     #>
     [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
     param(
         [Parameter(Mandatory)]
         [string]$PackagePath,
         [Parameter(Mandatory)]
+        [ValidatePattern(
+            '^[A-Za-z_][A-Za-z0-9_.-]*$',
+            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+        )]
         [string]$AppId,
         [Parameter(Mandatory)]
+        [ValidatePattern(
+            '^[A-Za-z_][A-Za-z0-9_.-]*$',
+            ErrorMessage = 'VerbId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+        )]
         [string]$VerbId,
         [Parameter(Mandatory)]
+        [ValidatePattern(
+            '^(\{)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\})?$',
+            ErrorMessage = 'CLSID must be a GUID like 12345678-1234-1234-1234-123456789abc (curly braces optional).'
+        )]
         [string]$VerbClsid,
         [Parameter(Mandatory)]
+        [ValidateScript({
+            foreach ($t in $_) {
+                if ($t -notmatch '^(\*|\.[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}|Directory|Drive)$') {
+                    throw "Invalid file type: '$t'. Allowed: '*', '.ext' (alphanumeric/underscore/dot/hyphen, max 32 chars after dot), 'Directory', 'Drive'."
+                }
+            }
+            $true
+        })]
         [string[]]$FileTypes,
         [string]$OutputPath,
         [Alias('NoSign')]
@@ -257,7 +301,6 @@ function Add-MsixFileExplorerContextMenu {
     # desktop4:Verb Clsid also uses bare GUID format (no curly braces)
     $verbClsid = $verbClsid.Trim().Trim('{', '}')
 
-    $null = $AppId, $FileTypes, $VerbId  # referenced in closure
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
         -UnsignedOutputPath $UnsignedOutputPath `

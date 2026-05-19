@@ -68,7 +68,14 @@ function Add-MsixCapability {
 
     .PARAMETER Names
         Capability names. Looked up against the registry — anything unknown
-        is treated as standard.
+        gets a warning and is treated as standard unless -Namespace is set.
+
+    .PARAMETER Namespace
+        Optional namespace override applied to every name in -Names. Use this
+        to declare capabilities the module's known-capabilities table doesn't
+        recognise yet (without editing MSIX.Heuristics.ps1#KnownCapabilities).
+        One of: 'standard', 'uap', 'uap2', 'uap3', 'uap4', 'uap5', 'uap6',
+        'uap7', 'uap8', 'uap10', 'rescap'.
 
     .PARAMETER OutputPath / SkipSigning / Pfx / PfxPassword
         See Add-MsixPsfV2.
@@ -77,6 +84,8 @@ function Add-MsixCapability {
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
         [Parameter(Mandatory)] [string[]]$Names,
+        [ValidateSet('standard','uap','uap2','uap3','uap4','uap5','uap6','uap7','uap8','uap10','rescap')]
+        [string]$Namespace,
         [string]$OutputPath,
         [Alias('NoSign')]
         [switch]$SkipSigning,
@@ -100,12 +109,11 @@ function Add-MsixCapability {
             $null = $manifest.Package.AppendChild($caps)
         }
 
-        $rescapUri = Get-MsixManifestNamespaceUri 'rescap'
-        $uapUri    = Get-MsixManifestNamespaceUri 'uap'
         $changed = $false
 
         foreach ($name in $Names) {
-            $ns = $script:KnownCapabilities[$name]   # 'rescap' | 'uap' | 'standard' | $null
+            # Explicit -Namespace overrides the lookup table; otherwise use it.
+            $ns = if ($Namespace) { $Namespace } else { $script:KnownCapabilities[$name] }
             # Idempotency: match by LocalName + Name attribute regardless of prefix
             $existing = $caps.ChildNodes | Where-Object {
                 ($_.LocalName -eq 'Capability') -and ($_.'Name' -eq $name)
@@ -114,17 +122,14 @@ function Add-MsixCapability {
                 Write-MsixLog Info "Capability already present: $name"
                 continue
             }
-            if ($ns -eq 'rescap') {
-                Add-MsixManifestNamespace $manifest 'rescap'
-                $node = $manifest.CreateElement('rescap:Capability', $rescapUri)
-            } elseif ($ns -eq 'uap') {
-                Add-MsixManifestNamespace $manifest 'uap'
-                $node = $manifest.CreateElement('uap:Capability', $uapUri)
+            if ($ns -and $ns -ne 'standard') {
+                Add-MsixManifestNamespace $manifest $ns
+                $nsUri = Get-MsixManifestNamespaceUri $ns
+                $node  = $manifest.CreateElement("${ns}:Capability", $nsUri)
             } else {
                 # 'standard' or unknown — plain <Capability>; warn if not in the known-good list
-                $validStandard = @('internetClient','internetClientServer','privateNetworkClientServer','allJoyn','codeGeneration')
-                if ($name -notin $validStandard) {
-                    Write-Warning "Capability '$name' is not in the known-capabilities table. Adding as plain <Capability> — this may fail manifest validation. Run Get-MsixKnownCapability to see the supported list."
+                if (-not $ns) {
+                    Write-MsixLog Warning "Capability '$name' is not in the known-capabilities table (MSIX.Heuristics.ps1#KnownCapabilities). Creating a plain <Capability> element (standard namespace). If this is a uap/rescap capability, the install may fail at deployment time — verify against https://learn.microsoft.com/en-us/windows/uwp/packaging/app-capability-declarations and either add it to the lookup table or pass -Namespace explicitly."
                 }
                 $node = $manifest.CreateElement('Capability', $manifest.Package.NamespaceURI)
             }
@@ -957,7 +962,12 @@ function Add-MsixSplashScreen {
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
         [Parameter(Mandatory)] [string]$ImagePath,
-        [Parameter(Mandatory)] [string]$AppId,
+        [Parameter(Mandatory)]
+        [ValidatePattern(
+            '^[A-Za-z_][A-Za-z0-9_.-]*$',
+            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+        )]
+        [string]$AppId,
         [string]$OutputPath,
         [Alias('NoSign')]
         [switch]$SkipSigning,
@@ -1031,6 +1041,10 @@ function Update-MsixPackageVersion {
         [ValidateSet('Major','Minor','Build','Revision')]
         [string]$Component = 'Build',
         [bool]$KeepLastZero,
+        [ValidatePattern(
+            '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$',
+            ErrorMessage = 'Version must be a 4-part dotted-decimal like 1.2.3.4.'
+        )]
         [string]$NewVersion,
         [string]$OutputPath,
         [Alias('NoSign')]
@@ -1152,6 +1166,9 @@ function Invoke-MsixAutoFix {
             -Pfx cert.pfx -PfxPassword 'P@ss'
     #>
     [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the per-stage scriptblocks built up via _Stage.')]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
 
@@ -1172,6 +1189,10 @@ function Invoke-MsixAutoFix {
 
         # Optional stage
         [string]$SplashImagePath,
+        [ValidatePattern(
+            '^[A-Za-z_][A-Za-z0-9_.-]*$',
+            ErrorMessage = 'SplashAppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+        )]
         [string]$SplashAppId,
 
         # Output / signing
@@ -1180,7 +1201,6 @@ function Invoke-MsixAutoFix {
         [string]$Pfx,
         [SecureString]$PfxPassword
     )
-    $null = $PsfWorkingDirectory, $PsfAdditionalFiles  # referenced in closure
 
     $stages = New-Object System.Collections.Generic.List[object]
     function _Stage([string]$Name, [scriptblock]$Action) {

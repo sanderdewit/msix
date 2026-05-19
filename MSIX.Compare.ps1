@@ -19,7 +19,7 @@ function _MsixUnpackForCompare {
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-$Tag"
-    $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+    $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
     Assert-MsixProcessSuccess $r 'MakeAppx unpack'
     return $workspace
 }

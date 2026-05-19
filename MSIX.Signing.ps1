@@ -50,18 +50,20 @@
         $bstr   = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PfxPassword)
         try {
             $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-            "sign /v /tr `"$TimestampUrl`" /td sha256 /fd sha256 /f `"$($cert.FullName)`" /p `"$plain`" `"$($fileinfo.FullName)`""
+            @('sign', '/v', '/tr', $TimestampUrl, '/td', 'sha256', '/fd', 'sha256',
+              '/f', $cert.FullName, '/p', $plain, $fileinfo.FullName)
         } finally {
             [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
         }
     } else {
-        "sign /v /tr `"$TimestampUrl`" /td sha256 /fd sha256 /a `"$($fileinfo.FullName)`""
+        @('sign', '/v', '/tr', $TimestampUrl, '/td', 'sha256', '/fd', 'sha256',
+          '/a', $fileinfo.FullName)
     }
 
     Write-MsixLog Info "Signing: $($fileinfo.Name)"
 
     if ($PSCmdlet.ShouldProcess($fileinfo.FullName, 'Sign with signtool')) {
-        $r = Invoke-MsixProcess $signtool $sigArgs
+        $r = Invoke-MsixProcess $signtool -ArgumentList $sigArgs
         if ($r.ExitCode -ne 0) {
             $detail = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
             throw "signtool failed (exit $($r.ExitCode)): $detail`nCheck: Microsoft-Windows-AppxPackagingOM event log."

@@ -213,7 +213,7 @@ function Get-MsixProcMonFailure {
     $csv = [System.IO.Path]::ChangeExtension($PmlPath, '.csv')
     Write-MsixLog Info "Converting PML -> CSV: $csv"
 
-    $null = Invoke-MsixProcess $procmon "/OpenLog `"$PmlPath`" /SaveAs `"$csv`" /SaveApplyFilter /Quiet /Terminate"
+    $null = Invoke-MsixProcess $procmon -ArgumentList @('/OpenLog', $PmlPath, '/SaveAs', $csv, '/SaveApplyFilter', '/Quiet', '/Terminate')
     if (-not (Test-Path $csv)) {
         throw "Procmon failed to export CSV from $PmlPath"
     }
@@ -257,7 +257,7 @@ function Get-MsixStaticAnalysis {
     $findings  = @()
 
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         $null = Test-MsixManifest "$workspace\AppxManifest.xml"

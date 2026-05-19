@@ -27,7 +27,7 @@ function Get-MsixFontCandidate {
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-fonts"
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
@@ -65,7 +65,7 @@ function Get-MsixDesktopShortcutCandidate {
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-shortcuts"
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         $patterns = @('VFS\\Common Desktop','VFS\\User Desktop','VFS\\Desktop')
@@ -108,7 +108,7 @@ function Remove-MsixDesktopShortcut {
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace $fileinfo.BaseName
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         $patterns = @('VFS\\Common Desktop','VFS\\User Desktop','VFS\\Desktop')
@@ -132,7 +132,7 @@ function Remove-MsixDesktopShortcut {
         Write-MsixLog Info "Removed: $($removed -join ', ')"
 
         $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$target`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $target, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx pack'
 
         if (-not $SkipSigning) {
@@ -173,7 +173,7 @@ function Get-MsixCapabilityHint {
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-caphints"
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         $hits = New-Object System.Collections.Generic.HashSet[string]
@@ -226,7 +226,7 @@ function Get-MsixNestedPackageCandidate {
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-nested"
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |

@@ -151,7 +151,7 @@ function Update-MsixSigner {
 
         try {
             Write-MsixLog Info "Unpacking: $($fileinfo.FullName)"
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
             Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
             [xml]$appinfo = Get-MsixManifest "$workspace\AppxManifest.xml"
@@ -171,7 +171,7 @@ function Update-MsixSigner {
                 Write-MsixLog Info "Publisher unchanged; repacking with same identity"
             }
 
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$outputPath`" /d `"$workspace`" /o"
+            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $outputPath, '/d', $workspace, '/o')
             Assert-MsixProcessSuccess $r 'MakeAppx pack'
 
             Invoke-MsixSigning -PackagePath $outputPath -Pfx $Pfx -PfxPassword $PfxPassword

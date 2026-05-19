@@ -237,17 +237,16 @@ function New-MsixAppAttachImage {
         if (-not (Test-Path $p)) { throw "Package not found: $p" }
     }
 
-    $aclFlag = if ($ApplyAcls) { '-applyacls' } else { '' }
-
     if ($FileType -eq 'cim') {
         # msixmgr CIM mode handles everything in one call per package.
         # For multiple packages, we expand the first one with -create and add the rest.
         $first = $true
         foreach ($p in $PackagePath) {
-            $createFlag = if ($first) { '-create' } else { '' }
-            $msixMgrArgs = "-Unpack -packagePath `"$p`" -destination `"$OutputPath`" -fileType cim $createFlag $aclFlag"
+            $msixMgrArgs = @('-Unpack', '-packagePath', $p, '-destination', $OutputPath, '-fileType', 'cim')
+            if ($first)     { $msixMgrArgs += '-create' }
+            if ($ApplyAcls) { $msixMgrArgs += '-applyacls' }
             if ($PSCmdlet.ShouldProcess($OutputPath, "Add $p to CIM")) {
-                $r = Invoke-MsixProcess $msixmgr $msixMgrArgs
+                $r = Invoke-MsixProcess $msixmgr -ArgumentList $msixMgrArgs
                 Assert-MsixProcessSuccess $r 'msixmgr CIM'
             }
             $first = $false
@@ -284,8 +283,9 @@ function New-MsixAppAttachImage {
             $info  = _MsixGetPackageInfo $p
             $folder = "${drive}\$($info.Name)_$($info.Version)"
             Write-MsixLog Info "Expanding $p -> $folder"
-            $msixMgrArgs = "-Unpack -packagePath `"$p`" -destination `"$folder`" $aclFlag"
-            $r = Invoke-MsixProcess $msixmgr $msixMgrArgs
+            $msixMgrArgs = @('-Unpack', '-packagePath', $p, '-destination', $folder)
+            if ($ApplyAcls) { $msixMgrArgs += '-applyacls' }
+            $r = Invoke-MsixProcess $msixmgr -ArgumentList $msixMgrArgs
             Assert-MsixProcessSuccess $r 'msixmgr unpack-to-vhd'
         }
 

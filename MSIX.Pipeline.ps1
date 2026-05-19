@@ -71,7 +71,7 @@
 
         # ── Unpack into workspace ────────────────────────────────────────
         Write-MsixLog Info 'Stage: Unpack'
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "unpack /p `"$($fileinfo.FullName)`" /d `"$workspace`" /o"
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         # ── Validate ─────────────────────────────────────────────────────
@@ -127,7 +127,7 @@
 
             $scratch = Join-Path $env:TEMP "scratch-$($fileinfo.BaseName)-$([guid]::NewGuid().ToString('N').Substring(0,8)).msix"
 
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$scratch`" /d `"$workspace`" /o"
+            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
             Assert-MsixProcessSuccess $r 'MakeAppx pack (pre-PSF scratch)'
 
             $psfArgs = @{
@@ -145,7 +145,7 @@
         } else {
             # ── Repack only ──────────────────────────────────────────────
             Write-MsixLog Info 'Stage: Repack'
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" "pack /p `"$target`" /d `"$workspace`" /o"
+            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $target, '/d', $workspace, '/o')
             Assert-MsixProcessSuccess $r 'MakeAppx pack'
         }
 

@@ -302,7 +302,7 @@ function Add-MsixAlias {
     )
 
     PROCESS {
-        if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Add AppExecutionAlias')) { return }
+        $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Add AppExecutionAlias')
 
         $targetAll = $All
         $targetAppIds = $AppIds
@@ -310,6 +310,7 @@ function Add-MsixAlias {
         _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
             -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
             -UnsignedOutputPath $UnsignedOutputPath `
+            -WhatIfPreview:$isWhatIf `
             -Activity 'Add AppExecutionAlias' -Mutate {
             param([xml]$manifest)
 
@@ -419,7 +420,7 @@ function Remove-MsixStartMenuEntry {
     )
 
     PROCESS {
-        if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Remove Start menu entry')) { return }
+        $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Remove Start menu entry')
 
         $targetAll = $All
         $targetAppIds = $AppIds
@@ -427,6 +428,7 @@ function Remove-MsixStartMenuEntry {
         _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
             -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
             -UnsignedOutputPath $UnsignedOutputPath `
+            -WhatIfPreview:$isWhatIf `
             -Activity 'Remove Start menu entry' -Mutate {
             param([xml]$manifest)
 
@@ -488,11 +490,12 @@ function Add-MsixStartMenuFolder {
     )
 
     PROCESS {
-        if (-not $PSCmdlet.ShouldProcess($PackagePath, "Set VisualGroup '$FolderName'")) { return }
+        $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Set VisualGroup '$FolderName'")
 
         _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
             -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
             -UnsignedOutputPath $UnsignedOutputPath `
+            -WhatIfPreview:$isWhatIf `
             -Activity "Set VisualGroup '$FolderName'" -Mutate {
             param([xml]$manifest)
 

@@ -67,6 +67,8 @@ Export-ModuleMember -Function @(
     'Get-MsixManifestApplication'
     'Get-MsixManifestNamespaceUri'
     'Set-MsixManifestMaxVersionTested'
+    'Set-MsixManifestPublisher'
+    'Set-MsixManifestIdentity'
     'Invoke-MsixManifestTransform'
     # PSF builders
     'New-MsixPsfFileRedirectionConfig'

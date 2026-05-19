@@ -4,7 +4,7 @@
         [string]$Path
     )
 
-    if (-not (Test-Path $Path)) {
+    if (-not (Test-Path -LiteralPath $Path -ErrorAction Stop)) {
         throw "Manifest not found: $Path"
     }
 
@@ -34,7 +34,7 @@ function Test-MsixPsfConfig {
         [string]$Path
     )
 
-    if (-not (Test-Path $Path)) {
+    if (-not (Test-Path -LiteralPath $Path -ErrorAction Stop)) {
         throw "PSF config not found: $Path"
     }
 
@@ -61,9 +61,15 @@ function Assert-MsixProcessSuccess {
         [pscustomobject]$Result,
         [string]$Operation = 'Process'
     )
-    if ($Result.ExitCode -ne 0) {
-        $detail = $Result.StdErr
-        if (-not $detail) { $detail = $Result.StdOut }
-        throw "$Operation failed (exit $($Result.ExitCode)): $detail"
-    }
+    if ($Result.ExitCode -eq 0) { return }
+
+    # Include BOTH streams in the error message when present. Tools like
+    # MakeAppx and SignTool sometimes split the useful diagnostic across
+    # stderr (one line) and stdout (the full multi-line failure detail);
+    # picking only one drops information the operator needs to act on.
+    $parts = @()
+    if ($Result.StdErr) { $parts += "stderr: $($Result.StdErr.Trim())" }
+    if ($Result.StdOut) { $parts += "stdout: $($Result.StdOut.Trim())" }
+    if ($parts.Count -eq 0) { $parts += '(no output)' }
+    throw "$Operation failed (exit $($Result.ExitCode)). $([string]::Join(' | ', $parts))"
 }

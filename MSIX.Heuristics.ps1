@@ -279,12 +279,14 @@ function Get-MsixUninstallRegistryEntry {
 
         $hiveName = "TempMsixHive_$([guid]::NewGuid().ToString('N').Substring(0,8))"
         $entries  = @()
+        $hiveLoaded = $false
         try {
             $null = & reg.exe load "HKLM\$hiveName" "$datPath" 2>&1
             if ($LASTEXITCODE -ne 0) {
                 Write-MsixLog Warning "reg.exe load failed (exit $LASTEXITCODE)."
                 return @()
             }
+            $hiveLoaded = $true
 
             foreach ($branch in @(
                 "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
@@ -304,8 +306,16 @@ function Get-MsixUninstallRegistryEntry {
                 }
             }
         } finally {
-            [gc]::Collect(); [gc]::WaitForPendingFinalizers()
-            $null = & reg.exe unload "HKLM\$hiveName" 2>&1
+            # Always release the hive — even when an exception interrupted the
+            # walk above. Leaving a TempMsixHive_* loaded leaks an HKLM key and
+            # blocks the on-disk Registry.dat from being deleted.
+            if ($hiveLoaded) {
+                [gc]::Collect(); [gc]::WaitForPendingFinalizers()
+                & reg.exe unload "HKLM\$hiveName" 2>&1 | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-MsixLog Warning "Failed to unload hive 'HKLM\$hiveName' (exit $LASTEXITCODE) — may need manual: reg.exe unload HKLM\$hiveName"
+                }
+            }
         }
         return $entries
     } finally {
@@ -974,7 +984,7 @@ function Add-MsixSplashScreen {
         Copy-Item $ImagePath $cfgDir -Force
 
         # Patch config.json
-        $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+        $cfg = Get-Content $cfgPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
         foreach ($app in @($cfg.applications)) {
             if ($app.id -ne $AppId) { continue }
             if (-not $app.startScript) {

@@ -67,12 +67,22 @@
     )
 
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
     $workspace = New-MsixWorkspace $fileinfo.BaseName
     $target    = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
 
+    # Compute WhatIf semantics once. In WhatIf mode the unpack + edit + pack
+    # stages still run (so the user can preview the modified package), but the
+    # destructive signing + final Move-Item to $target are skipped. If
+    # Config.Signing.UnsignedOutputPath is set, the scratch package is copied
+    # there so the user can inspect what would have been produced.
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Run MSIX pipeline')
+
     try {
         Write-MsixLog Info "=== MSIX Pipeline: $($fileinfo.Name) -> $target ==="
+        if ($isWhatIf) {
+            Write-MsixLog Info '[WhatIf] Preview mode: unpack/edit/pack will run; signing and final replacement will be skipped.'
+        }
 
         # ── Unpack into workspace ────────────────────────────────────────
         Write-MsixLog Info 'Stage: Unpack'
@@ -156,6 +166,15 @@
             }
             $packSucceeded = $true
 
+            if ($isWhatIf) {
+                Write-MsixLog Info "[WhatIf] Would replace '$target' with pipeline output. Signing and Move-Item skipped."
+                if ($Config.Signing -and $Config.Signing.UnsignedOutputPath) {
+                    Copy-Item -LiteralPath $scratch -Destination $Config.Signing.UnsignedOutputPath -Force -ErrorAction Stop
+                    Write-MsixLog Info "[WhatIf] Preview package copied to: $($Config.Signing.UnsignedOutputPath)"
+                }
+                return $null
+            }
+
             # ── Sign (once, at the end, AT THE SCRATCH PATH) ──────────────
             $skipSign = $Config.Signing -and $Config.Signing.Skip
             if ($Config.Signing -and -not $skipSign) {
@@ -179,7 +198,7 @@
             # ── Atomic move: only NOW does the target change ─────────────
             Move-Item -LiteralPath $scratch -Destination $target -Force
             Write-MsixLog Info "=== Pipeline complete: $target ==="
-            return Get-Item -LiteralPath $target
+            return Get-Item -LiteralPath $target -ErrorAction Stop
 
         } catch {
             if ($packSucceeded -and -not $signSucceeded -and `

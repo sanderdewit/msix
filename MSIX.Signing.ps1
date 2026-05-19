@@ -446,6 +446,10 @@ function New-MsixSelfSignedCertificate {
     $cerPath  = Join-Path $OutputFolder 'debug-cert.cer'
     $pwdPlain = [guid]::NewGuid().ToString('N')    # random per-run password
     $pwdSec   = ConvertTo-SecureString $pwdPlain -AsPlainText -Force
+    # Drop the plaintext reference immediately. The SecureString is what we
+    # keep; the GUID-derived plaintext is low-value (ephemeral, throw-away
+    # cert) but the hygiene principle is identical regardless of value.
+    $pwdPlain = $null
 
     Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $pwdSec | Out-Null
     Export-Certificate    -Cert $cert -FilePath $cerPath                    | Out-Null

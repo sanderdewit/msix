@@ -78,7 +78,7 @@
         [string]$UnsignedOutputPath
     )
 
-    if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Add Legacy Context Menu')) { return }
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Add Legacy Context Menu')
 
     # Both com:Class Id and desktop9:ExtensionHandler Clsid use bare GUID format
     # (no curly braces): xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
@@ -108,6 +108,7 @@
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
         -UnsignedOutputPath $UnsignedOutputPath `
+        -WhatIfPreview:$isWhatIf `
         -Activity 'Add Legacy Context Menu' -Mutate {
         param([xml]$manifest)
 
@@ -251,7 +252,7 @@ function Add-MsixFileExplorerContextMenu {
         [string]$UnsignedOutputPath
     )
 
-    if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Add File Explorer Context Menu')) { return }
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Add File Explorer Context Menu')
 
     # desktop4:Verb Clsid also uses bare GUID format (no curly braces)
     $verbClsid = $verbClsid.Trim().Trim('{', '}')
@@ -260,6 +261,7 @@ function Add-MsixFileExplorerContextMenu {
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
         -UnsignedOutputPath $UnsignedOutputPath `
+        -WhatIfPreview:$isWhatIf `
         -Activity 'Add File Explorer Context Menu' -Mutate {
         param([xml]$manifest)
 

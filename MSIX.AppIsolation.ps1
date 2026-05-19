@@ -110,10 +110,11 @@ function Add-MsixAppIsolation {
         }
     }
 
-    if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Add App Isolation capabilities')) { return }
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Add App Isolation capabilities')
 
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+        -WhatIfPreview:$isWhatIf `
         -Activity 'Add App Isolation capabilities' -Mutate {
         param([xml]$manifest)
 
@@ -185,10 +186,11 @@ function Remove-MsixAppIsolation {
             return
         }
 
-        if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Remove App Isolation capabilities')) { return }
+        $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Remove App Isolation capabilities')
 
         _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
             -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+            -WhatIfPreview:$isWhatIf `
             -Activity 'Remove App Isolation capabilities' -Mutate {
             param([xml]$manifest)
             $capsNode = $manifest.Package.Capabilities

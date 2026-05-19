@@ -37,7 +37,6 @@
 #   update-MsixSigner, new-MsixPsfJson, add-MsixAlias,
 #   remove-MsixStartMenuEntry, add-MsixStartMenuFolder
 Set-Alias -Name add-MsixPsf                  -Value Add-MsixPsfV2
-Set-Alias -Name Get-PublisherIdFromPublisher -Value Get-MsixPublisherId
 #endregion
 
 
@@ -64,9 +63,11 @@ Export-ModuleMember -Function @(
     'Select-MsixManifestNodes'
     'Save-MsixManifest'
     'Add-MsixManifestNamespace'
+    'Get-MsixManifestApplications'
     'Get-MsixManifestApplication'
     'Get-MsixManifestNamespaceUri'
     'Set-MsixManifestMaxVersionTested'
+    'Invoke-MsixManifestTransform'
     # PSF builders
     'New-MsixPsfFileRedirectionConfig'
     'New-MsixPsfRegLegacyConfig'
@@ -215,6 +216,34 @@ Export-ModuleMember -Function @(
     'start-MsixCmd'
     'add-MsixPsf'
     'Get-PublisherIdFromPublisher'
+    'Get-MsixDebugRecommendations'
+    'Get-MsixFontCandidates'
+    'Get-MsixDesktopShortcutCandidates'
+    'Remove-MsixDesktopShortcuts'
+    'Get-MsixCapabilityHints'
+    'Get-MsixNestedPackageCandidates'
+    'Get-MsixKnownCapabilities'
+    'Get-MsixUninstallerCandidates'
+    'Get-MsixUninstallRegistryEntries'
+    'Remove-MsixUninstallerArtifacts'
+    'Get-MsixRunKeyEntries'
+    'Get-MsixShellContextMenuEntries'
+    'Get-MsixComServerEntries'
+    'Get-MsixAliasCandidates'
+    'Get-MsixHeuristicFindings'
+    'Get-MsixProcMonFailures'
+    'Get-MsixLimitations'
+    'Test-MsixAgainstLimitations'
+    'Get-MsixMfrKnownFolders'
+    'New-MsixPsfArguments'
+    'Install-MsixPsfBinaries'
+    'Update-MsixPsfBinaries'
+    'Install-MsixSdkTools'
+    'Update-MsixSdkTools'
+    'Get-MsixStandardScripts'
+    'Get-MsixTraceFailures'
+    'ConvertFrom-MsixTraceToFindings'
+    'Get-MsixVcRuntimeReferences'
+    'Get-MsixIsolationCapabilities'
 )
 #endregion
-

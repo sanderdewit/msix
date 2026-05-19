@@ -143,14 +143,22 @@ function Invoke-MsixProcMonCapture {
         [int]$DurationSeconds = 30,
         [string]$ProcessName
     )
-    $null = $ProcessName  # referenced in closure
-
     $procmon = Resolve-MsixProcMonPath
     if (-not $procmon) {
         throw 'Process Monitor (procmon.exe) not found. Set $env:MSIX_PROCMON_PATH or place it on PATH.'
     }
 
     Write-MsixLog Info "Starting Process Monitor capture: $OutputPml"
+
+    # Pre-configure filter rules in registry before launch (best-effort)
+    if ($ProcessName) {
+        $filtered = Set-MsixProcMonFilterRule -ProcessNames @($ProcessName)
+        if ($filtered) {
+            Write-MsixLog Info "Procmon filter set: Process Name is '$ProcessName'"
+        } else {
+            Write-MsixLog Warning "Could not pre-set Procmon filter; set manually: Process Name is '$ProcessName'"
+        }
+    }
 
     # Procmon CLI: /AcceptEula /Quiet /Minimized /BackingFile <pml> /Runtime <sec>
     $procmonArgs = @('/AcceptEula', '/Quiet', '/Minimized', '/BackingFile', "`"$OutputPml`"")

@@ -17,6 +17,20 @@ BeforeAll {
   </Applications>
 </Package>
 '@
+
+    $script:MultiAppManifest = @'
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
+  <Identity Name="Contoso.Multi" Publisher="CN=Contoso, O=Contoso, C=NL" Version="1.0.0.0" />
+  <Properties><DisplayName>Contoso</DisplayName><PublisherDisplayName>Contoso</PublisherDisplayName><Logo>l.png</Logo></Properties>
+  <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" /></Dependencies>
+  <Resources><Resource Language="en-us" /></Resources>
+  <Applications>
+    <Application Id="AppA" Executable="A.exe" EntryPoint="Windows.FullTrustApplication" />
+    <Application Id="AppB" Executable="B.exe" EntryPoint="Windows.FullTrustApplication" />
+  </Applications>
+</Package>
+'@
 }
 
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
@@ -59,13 +73,30 @@ Describe 'Manifest helpers' -Tag 'Manifest' {
         }
     }
 
-    Context 'Get-MsixManifestApplication' {
-        It 'Returns Application elements as an array' {
+    Context 'Get-MsixManifestApplications' {
+        It 'Returns all Application elements as an array' {
             [xml]$x = $script:SampleManifest
-            $apps = Get-MsixManifestApplication -Manifest $x
+            $apps = Get-MsixManifestApplications -Manifest $x
             ,$apps -is [array]   | Should -BeTrue
             @($apps).Count       | Should -Be 1
             @($apps)[0].Id       | Should -Be 'App'
+        }
+
+        It 'Preserves multi-application manifests' {
+            $m = New-MsixManifestDocument -XmlText $script:MultiAppManifest
+            $apps = @(Get-MsixManifestApplications -Manifest $m)
+
+            $apps.Count | Should -Be 2
+            ($apps | ForEach-Object { $_.GetAttribute('Id') }) | Should -Be @('AppA', 'AppB')
+        }
+    }
+
+    Context 'Get-MsixManifestApplication' {
+        It 'Returns one Application by Id' {
+            $m = New-MsixManifestDocument -XmlText $script:MultiAppManifest
+            $app = Get-MsixManifestApplication -Manifest $m -AppId 'AppB'
+
+            $app.GetAttribute('Executable') | Should -Be 'B.exe'
         }
     }
 

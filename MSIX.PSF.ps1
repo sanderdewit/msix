@@ -496,14 +496,69 @@ function Add-MsixPsfV2 {
 
         # --- config.json (placed alongside the app executable) ---
         $configPath = Join-Path $appFolder 'config.json'
-        $psfJson    = New-MsixPsfConfig -Manifest $manifest `
-                                        -Fixups $Fixups `
-                                        -WorkingDirectory $WorkingDirectory `
-                                        -AppOptions $AppOptions
 
-        if ($PSCmdlet.ShouldProcess($configPath, 'Write PSF config.json')) {
-            $psfJson | Out-File $configPath -Encoding utf8 -Force
-            Write-MsixLog Info "PSF config written: $configPath"
+        # Detect re-injection: manifest already points to a PsfLauncher, which means
+        # a previous Add-MsixPsfV2 run already set up the launcher → real executable
+        # mapping. Re-generating config from the manifest would make applications[] and
+        # processes[] reference PsfLauncher instead of the original exe. Merge instead.
+        $psfLauncherRx = [regex]'[/\\]PsfLauncher\d+(?:_\d+)?\.exe$'
+        $isPsfPresent  = $apps | Where-Object { $psfLauncherRx.IsMatch($_.GetAttribute('Executable')) } |
+                         Select-Object -First 1
+
+        if ($isPsfPresent -and (Test-Path $configPath)) {
+            # Merge mode: read existing config, append new fixups to each process entry
+            $existingCfg  = Get-Content $configPath -Raw | ConvertFrom-Json
+            $existingApps = @($existingCfg.applications)
+
+            # Build a map of process entries keyed by executable name
+            $procMap = [ordered]@{}
+            foreach ($p in @($existingCfg.processes)) {
+                $procFixups = [System.Collections.Generic.List[object]]::new()
+                foreach ($fixup in @($p.fixups)) {
+                    $procFixups.Add($fixup)
+                }
+                $procMap[$p.executable] = $procFixups
+            }
+
+            # For each application in the existing config, ensure a process entry exists
+            # and append any new fixups that are not already present (deduplicate by dll name)
+            foreach ($appEntry in $existingApps) {
+                $exeName = ($appEntry.executable -split '[/\\]')[-1] -replace '\.exe$', ''
+                if (-not $procMap.ContainsKey($exeName)) {
+                    $procMap[$exeName] = [System.Collections.Generic.List[object]]::new()
+                }
+                $existingDlls = @($procMap[$exeName] | ForEach-Object { $_.dll })
+                foreach ($fixup in $Fixups) {
+                    if ($fixup.dll -notin $existingDlls) {
+                        $procMap[$exeName].Add($fixup)
+                    }
+                }
+            }
+
+            $mergedProcs = @($procMap.GetEnumerator() | ForEach-Object {
+                [ordered]@{ executable = $_.Key; fixups = [array]$_.Value }
+            })
+
+            $mergedJson = [ordered]@{
+                applications = $existingApps
+                processes    = $mergedProcs
+            } | ConvertTo-Json -Depth 15
+
+            if ($PSCmdlet.ShouldProcess($configPath, 'Merge PSF config.json')) {
+                $mergedJson | Out-File $configPath -Encoding utf8 -Force
+                Write-MsixLog Info "PSF config merged (fixup(s) added to existing config): $configPath"
+            }
+        } else {
+            # Fresh injection: generate config.json from manifest
+            $psfJson = New-MsixPsfConfig -Manifest $manifest `
+                                          -Fixups $Fixups `
+                                          -WorkingDirectory $WorkingDirectory `
+                                          -AppOptions $AppOptions
+
+            if ($PSCmdlet.ShouldProcess($configPath, 'Write PSF config.json')) {
+                $psfJson | Out-File $configPath -Encoding utf8 -Force
+                Write-MsixLog Info "PSF config written: $configPath"
+            }
         }
 
         Test-MsixPsfConfig $configPath
@@ -573,34 +628,39 @@ function Add-MsixPsfV2 {
         }
 
         # --- Update manifest: point each Application at PsfLauncher ---
-        $i = 0
-        foreach ($app in $apps) {
-            $i++
-            # App 1 → PsfLauncher64.exe, App 2+ → PsfLauncher64_2.exe, etc.
-            if ($i -eq 1) {
-                $launcherName = "PsfLauncher$bitSuffix.exe"
-            } else {
-                $launcherName = "PsfLauncher${bitSuffix}_$i.exe"
-                Copy-Item (Join-Path $PsfSourcePath "PsfLauncher$bitSuffix.exe") `
-                          (Join-Path $appFolder $launcherName) -Force
+        # Skip when PSF is already present — launcher is already wired in the manifest.
+        if ($isPsfPresent) {
+            Write-MsixLog Info 'PSF already present; skipping manifest launcher update.'
+        } else {
+            $i = 0
+            foreach ($app in $apps) {
+                $i++
+                # App 1 → PsfLauncher64.exe, App 2+ → PsfLauncher64_2.exe, etc.
+                if ($i -eq 1) {
+                    $launcherName = "PsfLauncher$bitSuffix.exe"
+                } else {
+                    $launcherName = "PsfLauncher${bitSuffix}_$i.exe"
+                    Copy-Item (Join-Path $PsfSourcePath "PsfLauncher$bitSuffix.exe") `
+                              (Join-Path $appFolder $launcherName) -Force
+                }
+
+                $oldExe  = $app.GetAttribute('Executable')
+                $oldLeaf = $oldExe.Split('\')[-1]
+                $newExe  = $oldExe -replace [regex]::Escape($oldLeaf), $launcherName
+                $app.SetAttribute('Executable', $newExe)
+
+                # Keep AppExecutionAlias in sync if present
+                $aliasExt = $app.Extensions.Extension |
+                            Where-Object { $_.Category -eq 'windows.appExecutionAlias' }
+                if ($aliasExt) {
+                    $aliasExt.SetAttribute('Executable', $newExe)
+                    Write-MsixLog Debug "AppExecutionAlias updated for $($app.Id)"
+                }
             }
 
-            $oldExe  = $app.GetAttribute('Executable')
-            $oldLeaf = $oldExe.Split('\')[-1]
-            $newExe  = $oldExe -replace [regex]::Escape($oldLeaf), $launcherName
-            $app.SetAttribute('Executable', $newExe)
-
-            # Keep AppExecutionAlias in sync if present
-            $aliasExt = $app.Extensions.Extension |
-                        Where-Object { $_.Category -eq 'windows.appExecutionAlias' }
-            if ($aliasExt) {
-                $aliasExt.SetAttribute('Executable', $newExe)
-                Write-MsixLog Debug "AppExecutionAlias updated for $($app.Id)"
+            if ($PSCmdlet.ShouldProcess("$workspace\AppxManifest.xml", 'Save updated manifest')) {
+                Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
             }
-        }
-
-        if ($PSCmdlet.ShouldProcess("$workspace\AppxManifest.xml", 'Save updated manifest')) {
-            Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
         }
 
         # --- Repack ---

@@ -843,7 +843,6 @@ function Get-MsixShellContextMenuEntry {
                         }
                     }
                 }
-            }
         } finally {
             if ($hiveLoaded) {
                 [gc]::Collect(); [gc]::WaitForPendingFinalizers()
@@ -967,7 +966,6 @@ function Get-MsixComServerEntry {
                         }
                     }
                 }
-            }
         } finally {
             if ($hiveLoaded) {
                 [gc]::Collect(); [gc]::WaitForPendingFinalizers()

@@ -288,16 +288,14 @@ function Get-MsixUninstallRegistryEntry {
         equivalent, captures DisplayName / DisplayVersion / Publisher /
         UninstallString for each, and unloads.
 
-        Without admin rights the function falls back to a string scan of
-        Registry.dat, returning best-effort KeyName entries (no value
-        details). For full DisplayName/DisplayVersion/Publisher/UninstallString
-        extraction, run elevated so reg.exe can load the hive.
+        Works without elevation: the hive is mounted temporarily under HKCU
+        (not HKLM), which does not require admin rights.
 
     .PARAMETER PackagePath
         .msix file (read-only).
 
     .EXAMPLE
-        # Surface leftover uninstall registry entries (run elevated for full detail)
+        # Surface leftover uninstall registry entries (no elevation required)
         Get-MsixUninstallRegistryEntry -PackagePath app.msix |
             Select-Object DisplayName, Publisher, UninstallString
 
@@ -314,40 +312,8 @@ function Get-MsixUninstallRegistryEntry {
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-uninreg"
 
-    if (-not (_MsixIsAdmin)) {
-        Write-MsixLog Warning 'Get-MsixUninstallRegistryEntry: not elevated — string scan only (no value details).'
-        try {
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-            Assert-MsixProcessSuccess $r 'MakeAppx unpack'
-            $datPath = Join-Path $workspace 'Registry.dat'
-            if (-not (Test-Path $datPath)) { return @() }
-            $bytes = [IO.File]::ReadAllBytes($datPath)
-            $textU = [System.Text.Encoding]::Unicode.GetString($bytes)
-            $textA = [System.Text.Encoding]::ASCII.GetString($bytes)
-            $uninstSuffix = 'CurrentVersion\Uninstall\'
-            $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-            $results = @()
-            foreach ($encoding in @($textU, $textA)) {
-                $m = [regex]::Matches($encoding, [regex]::Escape($uninstSuffix) + '([^\x00\x01\x02\\]+)', 'IgnoreCase')
-                foreach ($mm in $m) {
-                    $keyName = $mm.Groups[1].Value.Trim()
-                    if ($keyName.Length -gt 1 -and $keyName.Length -lt 200 -and $seen.Add($keyName)) {
-                        $results += [pscustomobject]@{
-                            KeyName         = $keyName
-                            DisplayName     = $keyName
-                            DisplayVersion  = $null
-                            Publisher       = $null
-                            UninstallString = $null
-                            FullPath        = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$keyName"
-                        }
-                    }
-                }
-            }
-            return $results
-        } finally {
-            Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
+    # Registry.dat is a static file inside the package — no elevation required.
+    # Mount under HKCU (not HKLM) so reg.exe load works for any user.
     try {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
@@ -358,11 +324,13 @@ function Get-MsixUninstallRegistryEntry {
             return @()
         }
 
-        $hiveName = "TempMsixHive_$([guid]::NewGuid().ToString('N').Substring(0,8))"
-        $entries  = @()
+        $hiveName   = "TempMsixHive_$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        $hiveRoot   = "HKCU\$hiveName"
+        $hiveRootPS = "HKCU:\$hiveName"
+        $entries    = @()
         $hiveLoaded = $false
         try {
-            $null = & reg.exe load "HKLM\$hiveName" "$datPath" 2>&1
+            $null = & reg.exe load $hiveRoot "$datPath" 2>&1
             if ($LASTEXITCODE -ne 0) {
                 Write-MsixLog Warning "reg.exe load failed (exit $LASTEXITCODE)."
                 return @()
@@ -370,8 +338,8 @@ function Get-MsixUninstallRegistryEntry {
             $hiveLoaded = $true
 
             foreach ($branch in @(
-                "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-                "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+                "$hiveRootPS\REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                "$hiveRootPS\REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
             )) {
                 if (-not (Test-Path $branch)) { continue }
                 Get-ChildItem $branch -ErrorAction SilentlyContinue | ForEach-Object {
@@ -382,19 +350,16 @@ function Get-MsixUninstallRegistryEntry {
                         DisplayVersion  = $values.DisplayVersion
                         Publisher       = $values.Publisher
                         UninstallString = $values.UninstallString
-                        FullPath        = $_.PSPath -replace [regex]::Escape("HKLM:\$hiveName\REGISTRY\MACHINE\"), 'HKLM:\'
+                        FullPath        = $_.PSPath -replace [regex]::Escape("$hiveRootPS\REGISTRY\MACHINE\"), 'HKLM:\'
                     }
                 }
             }
         } finally {
-            # Always release the hive — even when an exception interrupted the
-            # walk above. Leaving a TempMsixHive_* loaded leaks an HKLM key and
-            # blocks the on-disk Registry.dat from being deleted.
             if ($hiveLoaded) {
                 [gc]::Collect(); [gc]::WaitForPendingFinalizers()
-                & reg.exe unload "HKLM\$hiveName" 2>&1 | Out-Null
+                & reg.exe unload $hiveRoot 2>&1 | Out-Null
                 if ($LASTEXITCODE -ne 0) {
-                    Write-MsixLog Warning "Failed to unload hive 'HKLM\$hiveName' (exit $LASTEXITCODE) — may need manual: reg.exe unload HKLM\$hiveName"
+                    Write-MsixLog Warning "Failed to unload hive '$hiveRoot' (exit $LASTEXITCODE) — may need manual: reg.exe unload $hiveRoot"
                 }
             }
         }
@@ -519,36 +484,39 @@ function Remove-MsixUninstallerArtifact {
         $removedKeys = @()
         $datPath = Join-Path $workspace 'Registry.dat'
         if (-not $KeepRegistry -and (Test-Path $datPath)) {
-            if (-not (_MsixIsAdmin)) {
-                Write-MsixLog Warning 'Skipping Registry.dat cleanup (not elevated). Re-run as admin or pass -KeepRegistry.'
-            } else {
-                $hiveName = "TempMsixHive_$([guid]::NewGuid().ToString('N').Substring(0,8))"
-                try {
-                    $null = & reg.exe load "HKLM\$hiveName" "$datPath" 2>&1
-                    if ($LASTEXITCODE -ne 0) {
-                        Write-MsixLog Warning "reg.exe load failed (exit $LASTEXITCODE); skipping registry cleanup."
-                    } else {
-                        foreach ($branch in @(
-                            "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-                            "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
-                        )) {
-                            if (-not (Test-Path $branch)) { continue }
-                            Get-ChildItem $branch -ErrorAction SilentlyContinue | ForEach-Object {
-                                $vals = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
-                                $name = $vals.DisplayName
-                                if (-not $name -or ($name -match $UninstallKeyFilter)) {
-                                    if ($PSCmdlet.ShouldProcess($_.PSPath, "Remove Uninstall key '$name'")) {
-                                        Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
-                                        $removedKeys += $name
-                                    }
+            # Mount under HKCU — no elevation required for hive load/unload.
+            $hiveName   = "TempMsixHive_$([guid]::NewGuid().ToString('N').Substring(0,8))"
+            $hiveRoot   = "HKCU\$hiveName"
+            $hiveRootPS = "HKCU:\$hiveName"
+            $hiveLoaded = $false
+            try {
+                $null = & reg.exe load $hiveRoot "$datPath" 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    Write-MsixLog Warning "reg.exe load failed (exit $LASTEXITCODE); skipping registry cleanup."
+                } else {
+                    $hiveLoaded = $true
+                    foreach ($branch in @(
+                        "$hiveRootPS\REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                        "$hiveRootPS\REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+                    )) {
+                        if (-not (Test-Path $branch)) { continue }
+                        Get-ChildItem $branch -ErrorAction SilentlyContinue | ForEach-Object {
+                            $vals = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+                            $name = $vals.DisplayName
+                            if (-not $name -or ($name -match $UninstallKeyFilter)) {
+                                if ($PSCmdlet.ShouldProcess($_.PSPath, "Remove Uninstall key '$name'")) {
+                                    Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+                                    $removedKeys += $name
                                 }
                             }
                         }
                     }
-                } finally {
+                }
+            } finally {
+                if ($hiveLoaded) {
                     [gc]::Collect(); [gc]::WaitForPendingFinalizers()
                     Start-Sleep -Milliseconds 500
-                    $null = & reg.exe unload "HKLM\$hiveName" 2>&1
+                    $null = & reg.exe unload $hiveRoot 2>&1
                     if ($LASTEXITCODE -ne 0) {
                         Write-MsixLog Warning "reg.exe unload failed; the in-package Registry.dat may have leaked handles."
                     }
@@ -719,10 +687,9 @@ function Get-MsixShellContextMenuEntry {
         invisible in File Explorer when outside the MSIX container.
 
     .DESCRIPTION
-        When elevated, loads the hive via reg.exe and extracts full key paths,
-        CLSIDs, absolute DLL paths, and package-relative VFS paths.
-        Without elevation, falls back to a Unicode string scan (names only;
-        no CLSIDs or command values).
+        Loads Registry.dat via reg.exe into a temporary HKCU hive (no
+        elevation required) and extracts full key paths, CLSIDs, absolute
+        DLL paths, and package-relative VFS paths.
 
         Returned objects have these properties:
           Type         'ShellVerb' or 'ShellExt'
@@ -742,7 +709,7 @@ function Get-MsixShellContextMenuEntry {
         .msix file to inspect.
 
     .EXAMPLE
-        # Surface all shell verbs and shellex handlers (run elevated for full detail)
+        # Surface all shell verbs and shellex handlers (no elevation required)
         Get-MsixShellContextMenuEntry -PackagePath app.msix |
             Format-Table Type, Target, VerbName, HandlerName, Clsid, VfsDllPath
 
@@ -766,20 +733,25 @@ function Get-MsixShellContextMenuEntry {
 
         $results = [System.Collections.Generic.List[object]]::new()
 
-        if (_MsixIsAdmin) {
-            $hiveName = "TempMsixHive_$([guid]::NewGuid().ToString('N').Substring(0,8))"
-            try {
-                $null = & reg.exe load "HKLM\$hiveName" "$datPath" 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                    foreach ($target in @('\*', 'Directory', 'Directory\Background', 'AllFilesystemObjects')) {
-                        $tgtClean = $target.TrimStart('\')
+        # Registry.dat is a static file inside the package — no elevation required.
+        # Mount under HKCU (not HKLM) so reg.exe load works for any user.
+        $hiveName   = "TempMsixHive_$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        $hiveRoot   = "HKCU\$hiveName"
+        $hiveRootPS = "HKCU:\$hiveName"
+        $hiveLoaded = $false
+        try {
+            $null = & reg.exe load $hiveRoot "$datPath" 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                $hiveLoaded = $true
+                foreach ($target in @('\*', 'Directory', 'Directory\Background', 'AllFilesystemObjects')) {
+                    $tgtClean = $target.TrimStart('\')
 
-                        # Simple shell verbs.
-                        # IMPORTANT: Use -LiteralPath everywhere — the target may be '*' which
-                        # PowerShell's registry provider treats as a wildcard without -LiteralPath,
-                        # causing Get-ChildItem to return the 'shell' key objects themselves
-                        # (PSChildName='shell') instead of their verb children.
-                        $shellPath = "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\Classes\$target\shell"
+                    # Simple shell verbs.
+                    # IMPORTANT: Use -LiteralPath everywhere — the target may be '*' which
+                    # PowerShell's registry provider treats as a wildcard without -LiteralPath,
+                    # causing Get-ChildItem to return the 'shell' key objects themselves
+                    # (PSChildName='shell') instead of their verb children.
+                    $shellPath = "$hiveRootPS\REGISTRY\MACHINE\SOFTWARE\Classes\$target\shell"
                         if (Test-Path -LiteralPath $shellPath) {
                             foreach ($verbKey in Get-ChildItem -LiteralPath $shellPath -ErrorAction SilentlyContinue) {
                                 # A verb key that carries ExplorerCommandHandler is a COM-delegating verb
@@ -794,8 +766,8 @@ function Get-MsixShellContextMenuEntry {
                                     $vfsDll = $null
                                     if ($ech -match '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$') {
                                         foreach ($clsidBranch in @(
-                                            "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\Classes\CLSID\$ech\InProcServer32",
-                                            "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Classes\CLSID\$ech\InProcServer32"
+                                            "$hiveRootPS\REGISTRY\MACHINE\SOFTWARE\Classes\CLSID\$ech\InProcServer32",
+                                            "$hiveRootPS\REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Classes\CLSID\$ech\InProcServer32"
                                         )) {
                                             if (Test-Path -LiteralPath $clsidBranch) {
                                                 $dll = (Get-ItemProperty -LiteralPath $clsidBranch -ErrorAction SilentlyContinue).'(default)'
@@ -835,7 +807,7 @@ function Get-MsixShellContextMenuEntry {
                         }
 
                         # shellex COM context-menu handlers
-                        $shPath = "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\Classes\$target\shellex\ContextMenuHandlers"
+                        $shPath = "$hiveRootPS\REGISTRY\MACHINE\SOFTWARE\Classes\$target\shellex\ContextMenuHandlers"
                         if (Test-Path -LiteralPath $shPath) {
                             foreach ($hKey in Get-ChildItem -LiteralPath $shPath -ErrorAction SilentlyContinue) {
                                 $clsid = (Get-ItemProperty -LiteralPath $hKey.PSPath -ErrorAction SilentlyContinue).'(default)'
@@ -843,13 +815,13 @@ function Get-MsixShellContextMenuEntry {
                                 $dll    = $null
                                 $vfsDll = $null
                                 if ($clsid -match '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$') {
-                                    $ipPath = "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\Classes\CLSID\$clsid\InProcServer32"
+                                    $ipPath = "$hiveRootPS\REGISTRY\MACHINE\SOFTWARE\Classes\CLSID\$clsid\InProcServer32"
                                     if (Test-Path -LiteralPath $ipPath) {
                                         $dll = (Get-ItemProperty -LiteralPath $ipPath -ErrorAction SilentlyContinue).'(default)'
                                     }
                                     # Also check 32-bit CLSID branch
                                     if (-not $dll) {
-                                        $ip32 = "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Classes\CLSID\$clsid\InProcServer32"
+                                        $ip32 = "$hiveRootPS\REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Classes\CLSID\$clsid\InProcServer32"
                                         if (Test-Path -LiteralPath $ip32) {
                                             $dll = (Get-ItemProperty -LiteralPath $ip32 -ErrorAction SilentlyContinue).'(default)'
                                         }
@@ -871,39 +843,15 @@ function Get-MsixShellContextMenuEntry {
                         }
                     }
                 }
-            } finally {
-                [gc]::Collect(); [gc]::WaitForPendingFinalizers()
-                $null = & reg.exe unload "HKLM\$hiveName" 2>&1
             }
-        } else {
-            Write-MsixLog Warning 'Get-MsixShellContextMenuEntry: not elevated — shellex handler names detected via string scan; shell verb detection skipped (run as administrator for full results including verb names and CLSIDs).'
-            $bytes = [IO.File]::ReadAllBytes($datPath)
-            $text  = [System.Text.Encoding]::Unicode.GetString($bytes)
-
-            # shellex\ContextMenuHandlers\<name>  — reliable enough without elevation
-            # (the handler key name directly follows the fixed path ContextMenuHandlers\)
-            foreach ($m in [regex]::Matches($text, 'Classes\\(\*|Directory(?:\\Background)?|AllFilesystemObjects)\\shellex\\ContextMenuHandlers\\([^\x00\\]{2,64})', 'IgnoreCase')) {
-                $tgt  = $m.Groups[1].Value.Trim("`0")
-                $name = $m.Groups[2].Value.Trim("`0")
-                if ($tgt -and $name) {
-                    $results.Add([pscustomobject]@{
-                        Type        = 'ShellExt'
-                        Target      = $tgt
-                        HandlerName = $name
-                        Command     = $null
-                        Clsid       = $null
-                        DllPath     = $null
-                        VfsDllPath  = $null
-                    })
+        } finally {
+            if ($hiveLoaded) {
+                [gc]::Collect(); [gc]::WaitForPendingFinalizers()
+                $null = & reg.exe unload $hiveRoot 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    Write-MsixLog Warning "Failed to unload hive '$hiveRoot' (exit $LASTEXITCODE) — may need manual: reg.exe unload $hiveRoot"
                 }
             }
-
-            # Shell verb detection is intentionally skipped in non-elevated mode.
-            # Registry.dat uses the REGF binary format where key names are stored
-            # as individual NK records — not as contiguous full-path strings.
-            # A naive regex scan matches the intermediate 'shell' key name itself,
-            # producing a false-positive entry with VerbName='shell'.
-            # Run as administrator to get accurate verb names via reg.exe hive load.
         }
 
         # Deduplicate
@@ -930,7 +878,7 @@ function Get-MsixComServerEntry {
     .DESCRIPTION
         When elevated, loads the hive via reg.exe for full extraction: CLSIDs,
         server type, DLL path, VFS-relative path (if the DLL lives in the package),
-        and ThreadingModel. Non-elevated: Unicode string scan (CLSIDs only).
+        and ThreadingModel. Works without elevation: hive is mounted under HKCU.
 
         Returned objects:
           Clsid          '{XXXXXXXX-...}'
@@ -971,15 +919,20 @@ function Get-MsixComServerEntry {
 
         $results = [System.Collections.Generic.List[object]]::new()
 
-        if (_MsixIsAdmin) {
-            $hiveName = "TempMsixHive_$([guid]::NewGuid().ToString('N').Substring(0,8))"
-            try {
-                $null = & reg.exe load "HKLM\$hiveName" "$datPath" 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                    foreach ($branch in @(
-                        "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\Classes\CLSID",
-                        "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Classes\CLSID"
-                    )) {
+        # Registry.dat is a static file inside the package — no elevation required.
+        # Mount under HKCU (not HKLM) so reg.exe load works for any user.
+        $hiveName   = "TempMsixHive_$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        $hiveRoot   = "HKCU\$hiveName"
+        $hiveRootPS = "HKCU:\$hiveName"
+        $hiveLoaded = $false
+        try {
+            $null = & reg.exe load $hiveRoot "$datPath" 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                $hiveLoaded = $true
+                foreach ($branch in @(
+                    "$hiveRootPS\REGISTRY\MACHINE\SOFTWARE\Classes\CLSID",
+                    "$hiveRootPS\REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Classes\CLSID"
+                )) {
                         if (-not (Test-Path $branch)) { continue }
                         foreach ($clsidKey in Get-ChildItem $branch -ErrorAction SilentlyContinue) {
                             $clsid = $clsidKey.PSChildName
@@ -1014,22 +967,14 @@ function Get-MsixComServerEntry {
                         }
                     }
                 }
-            } finally {
-                [gc]::Collect(); [gc]::WaitForPendingFinalizers()
-                $null = & reg.exe unload "HKLM\$hiveName" 2>&1
             }
-        } else {
-            Write-MsixLog Warning 'Get-MsixComServerEntry: not elevated — CLSID string scan only (no DLL paths or threading model).'
-            $bytes = [IO.File]::ReadAllBytes($datPath)
-            $text  = [System.Text.Encoding]::Unicode.GetString($bytes)
-            foreach ($m in [regex]::Matches($text, '\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}')) {
-                $results.Add([pscustomobject]@{
-                    Clsid          = $m.Value
-                    ServerType     = 'Unknown'
-                    DllPath        = $null
-                    VfsDllPath     = $null
-                    ThreadingModel = $null
-                })
+        } finally {
+            if ($hiveLoaded) {
+                [gc]::Collect(); [gc]::WaitForPendingFinalizers()
+                $null = & reg.exe unload $hiveRoot 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    Write-MsixLog Warning "Failed to unload hive '$hiveRoot' (exit $LASTEXITCODE) — may need manual: reg.exe unload $hiveRoot"
+                }
             }
         }
 

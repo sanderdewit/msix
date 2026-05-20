@@ -167,8 +167,10 @@
         -Activity 'Add Legacy Context Menu' -Mutate {
         param([xml]$manifest)
 
-        # Required namespaces
-        Add-MsixManifestNamespace $manifest 'com'
+        # Required namespaces. We need com4 (v10/4) — not the bare 'com' —
+        # because Package-level windows.comServer extensions must declare
+        # the v4 schema (see _MsixGetOrCreatePackageExtensions block below).
+        Add-MsixManifestNamespace $manifest 'com4'
         Add-MsixManifestNamespace $manifest 'desktop9'
 
         # desktop9 requires MaxVersionTested >= 10.0.22000.0 (Windows 11 21H2)
@@ -201,16 +203,23 @@
         $pkgExt = _MsixGetOrCreatePackageExtensions $manifest
 
         # ── COM server registration ───────────────────────────────────────
-        $comUri    = Get-MsixManifestNamespaceUri 'com'
+        # Package-level windows.comServer requires the com4 namespace (v10/4)
+        # per MakeAppx schema validation:
+        #   "Extension 'windows.comServer' must be
+        #    'http://schemas.microsoft.com/appx/manifest/com/windows10/4'
+        #    or newer on package level."
+        # The original 'com' namespace (v10) is only valid at Application level.
+        Add-MsixManifestNamespace $manifest 'com4'
+        $comUri    = Get-MsixManifestNamespaceUri 'com4'
 
-        $comExt    = $manifest.CreateElement('com:Extension',       $comUri)
+        $comExt    = $manifest.CreateElement('com4:Extension',       $comUri)
         $comExt.SetAttribute('Category', 'windows.comServer')
 
-        $comServer = $manifest.CreateElement('com:ComServer',       $comUri)
-        $surrogate = $manifest.CreateElement('com:SurrogateServer', $comUri)
+        $comServer = $manifest.CreateElement('com4:ComServer',       $comUri)
+        $surrogate = $manifest.CreateElement('com4:SurrogateServer', $comUri)
         $surrogate.SetAttribute('DisplayName', $DisplayName)
 
-        $class = $manifest.CreateElement('com:Class', $comUri)
+        $class = $manifest.CreateElement('com4:Class', $comUri)
         $class.SetAttribute('Id',             $ClsidBare)   # ST_GUID — no braces
         $class.SetAttribute('Path',           $ShellExtDll)
         $class.SetAttribute('ThreadingModel', 'STA')

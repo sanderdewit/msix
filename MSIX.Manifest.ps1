@@ -59,6 +59,9 @@ $script:KnownNamespaces = [ordered]@{
     desktop6 = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/6' # File/Registry write virtualization
     desktop9 = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/9'
     com      = 'http://schemas.microsoft.com/appx/manifest/com/windows10'
+    com2     = 'http://schemas.microsoft.com/appx/manifest/com/windows10/2'
+    com3     = 'http://schemas.microsoft.com/appx/manifest/com/windows10/3'
+    com4     = 'http://schemas.microsoft.com/appx/manifest/com/windows10/4'
     rescap         = 'http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities'
     virtualization = 'http://schemas.microsoft.com/appx/manifest/virtualization/windows10'
 }

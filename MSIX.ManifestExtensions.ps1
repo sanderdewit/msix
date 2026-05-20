@@ -1475,10 +1475,15 @@ function Add-MsixComServerExtension {
         -WhatIfPreview:$isWhatIf `
         -Activity 'Add COM server extension(s)' -Mutate {
         param([xml]$M)
-        Add-MsixManifestNamespace $M 'com'
+        # Package-level windows.comServer requires the com4 schema (v10/4) —
+        # MakeAppx hard-errors on the bare 'com' namespace at package scope:
+        #   "Extension 'windows.comServer' must be
+        #    'http://schemas.microsoft.com/appx/manifest/com/windows10/4'
+        #    or newer on package level."
+        Add-MsixManifestNamespace $M 'com4'
         Add-MsixManifestNamespace $M 'rescap'
 
-        $comUri = Get-MsixManifestNamespaceUri 'com'
+        $comUri = Get-MsixManifestNamespaceUri 'com4'
 
         # AppId is retained for backward compat / sanity check only.
         # com:Extension/windows.comServer declares a CLSID for system-wide
@@ -1492,10 +1497,10 @@ function Add-MsixComServerExtension {
         }
         $appExt = _MsixGetOrCreatePackageExtensions $M
 
-        # One com:Extension wrapping all servers
-        $comExt    = $M.CreateElement('com:Extension', $comUri)
+        # One com4:Extension wrapping all servers
+        $comExt    = $M.CreateElement('com4:Extension', $comUri)
         $comExt.SetAttribute('Category', 'windows.comServer')
-        $comServer = $M.CreateElement('com:ComServer', $comUri)
+        $comServer = $M.CreateElement('com4:ComServer', $comUri)
         $added     = 0
 
         foreach ($srv in $Servers) {
@@ -1510,10 +1515,10 @@ function Add-MsixComServerExtension {
                 continue
             }
 
-            $ips   = $M.CreateElement('com:InProcessServer', $comUri)
-            $path  = $M.CreateElement('com:Path', $comUri)
+            $ips   = $M.CreateElement('com4:InProcessServer', $comUri)
+            $path  = $M.CreateElement('com4:Path', $comUri)
             $path.InnerText = $vfsDll
-            $class = $M.CreateElement('com:Class', $comUri)
+            $class = $M.CreateElement('com4:Class', $comUri)
             $class.SetAttribute('Id', $clsid)             # ST_GUID — no braces
             $class.SetAttribute('ThreadingModel', $threading)
 

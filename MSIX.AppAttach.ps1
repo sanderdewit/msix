@@ -25,6 +25,13 @@ function Install-MsixMgr {
         msixmgrSetup.zip), unpacks under "$ToolsRoot\msixmgr", and exports
         $env:MSIX_MSIXMGR_PATH so subsequent calls find it.
 
+        SECURITY: the archive is first extracted into a temp staging folder and
+        every .exe / .dll inside is Authenticode-verified against the trusted-
+        publisher allowlist ($script:MsixTrustedPublishers — msixmgr is signed
+        by 'CN=Microsoft Corporation,') BEFORE anything is copied into
+        $Destination. A failed verification rolls the install back (the
+        destination folder is removed if this cmdlet created it).
+
     .PARAMETER Destination
         Where to extract. Defaults to "(Get-MsixToolsRoot)\msixmgr".
 
@@ -61,6 +68,9 @@ function Install-MsixMgr {
     $zip = Join-Path $tmp 'msixmgrSetup.zip'
 
     if ($PSCmdlet.ShouldProcess($Destination, 'Install msixmgr')) {
+        $destinationExisted = Test-Path $Destination
+        # Stage extraction into a temp folder so a bad signature doesn't pollute Destination.
+        $stage = Join-Path $tmp 'extracted'
         try {
             Write-MsixLog Info "Downloading $script:MsixMgrZipUrl"
             $oldPref = $ProgressPreference
@@ -71,8 +81,14 @@ function Install-MsixMgr {
                 $ProgressPreference = $oldPref
             }
 
+            New-Item $stage -ItemType Directory -Force | Out-Null
+            Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
+
+            # H1: verify Authenticode signer before installing into $Destination.
+            _MsixVerifyAuthenticodeFolder -Folder $stage -ToolName 'msixmgr'
+
             New-Item $Destination -ItemType Directory -Force | Out-Null
-            Expand-Archive -LiteralPath $zip -DestinationPath $Destination -Force
+            Copy-Item (Join-Path $stage '*') $Destination -Recurse -Force
             (Get-Date -Format o) | Set-Content $marker -Encoding ascii
 
             $exe = Get-ChildItem $Destination -Recurse -Filter 'msixmgr.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -82,6 +98,12 @@ function Install-MsixMgr {
             } else {
                 Write-MsixLog Warning "msixmgr.exe not found after extraction; check $Destination"
             }
+        } catch {
+            Write-MsixLog Error "msixmgr install rolled back: $_"
+            if (-not $destinationExisted) {
+                Remove-Item -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            throw
         } finally {
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -357,9 +379,12 @@ function New-MsixAppAttachImage {
         Write-MsixLog Info "Auto-sized VHDX: ${SizeGB} GB"
     }
 
-    if ($PSCmdlet.ShouldProcess($OutputPath, "Create VHDX (${SizeGB} GB)")) {
-        New-VHD -Path $OutputPath -SizeBytes ([int64]$SizeGB * 1GB) -Dynamic | Out-Null
+    if (-not $PSCmdlet.ShouldProcess($OutputPath, "Create VHDX (${SizeGB} GB) and unpack packages")) {
+        Write-MsixLog Info "[WhatIf] Would create ${SizeGB} GB VHDX at '$OutputPath' and unpack $($PackagePath.Count) package(s). No changes made."
+        return $null
     }
+
+    New-VHD -Path $OutputPath -SizeBytes ([int64]$SizeGB * 1GB) -Dynamic | Out-Null
 
     $disk = Mount-DiskImage -ImagePath $OutputPath -PassThru | Get-DiskImage
     $diskNum = (Get-Disk -Number $disk.Number).Number

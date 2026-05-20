@@ -1,5 +1,22 @@
 BeforeAll {
     Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    function ConvertTo-TestSecureString {
+        [OutputType([SecureString])]
+        param(
+            [Parameter(Mandatory)]
+            [string] $Value
+        )
+    
+        $secure = [System.Security.SecureString]::new()
+    
+        foreach ($char in $Value.ToCharArray()) {
+            $secure.AppendChar($char)
+        }
+    
+        $secure.MakeReadOnly()
+    
+        return $secure
+    }
 }
 
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
@@ -51,7 +68,7 @@ Describe 'Get-MsixDebugRecommendation' -Tag 'Recommendations' {
             Findings    = @([pscustomobject]@{ Severity='Warning'; Category='FileRedirectionFixup'; Symptom='x'; AppId='A'; Recommendation="-Base 'a/'"; Evidence='b' })
         }
         $secret = 'P@s-DoNotLeak-Token'
-        $secure = ConvertTo-SecureString $secret -AsPlainText -Force
+        $secure = ConvertTo-TestSecureString -Value $secret
         $out = Get-MsixDebugRecommendation -Report $stub -Pfx 'C:\c.pfx' -PfxPassword $secure
         $joined = ($out -join "`n")
         # -Pfx path is interpolated verbatim

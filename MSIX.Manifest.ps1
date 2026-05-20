@@ -445,11 +445,11 @@ function Get-MsixManifestApplication {
     if ($node) { return $node }
 
     # Fallback: namespace-agnostic search for non-standard manifests
-    $allNodes = @($manifestDocument.Document.SelectNodes('//*[local-name()="Application"]'))
+    $applicationNodes = @($manifestDocument.Document.SelectNodes('//*[local-name()="Application"]'))
     if ($AppId) {
-        return $allNodes | Where-Object { $_.GetAttribute('Id') -eq $AppId } | Select-Object -First 1
+        return $applicationNodes | Where-Object { $_.GetAttribute('Id') -eq $AppId } | Select-Object -First 1
     }
-    return $allNodes | Select-Object -First 1
+    return $applicationNodes | Select-Object -First 1
 }
 
 function Get-MsixManifestApplications {

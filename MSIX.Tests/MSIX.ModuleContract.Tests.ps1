@@ -8,8 +8,8 @@ Describe 'Module contract' -Tag 'ModuleContract' {
     It 'Imports through the manifest with command versions' {
         $module = Get-Module MSIX
 
-        $module.Version.ToString() | Should -Be '0.14.0'
-        (Get-Command Add-MsixFirewallRule -Module MSIX).Version.ToString() | Should -Be '0.14.0'
+        $module.Version.ToString() | Should -Be '0.70.0'
+        (Get-Command Add-MsixFirewallRule -Module MSIX).Version.ToString() | Should -Be '0.70.0'
     }
 
     It 'Exports compatibility aliases from the packaged module' {

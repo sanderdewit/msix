@@ -21,6 +21,7 @@
 . "$PSScriptRoot\MSIX.VcRuntime.ps1"
 . "$PSScriptRoot\MSIX.Detection.ps1"
 . "$PSScriptRoot\MSIX.ManifestExtensions.ps1"
+. "$PSScriptRoot\MSIX.OfflineRegistry.ps1"
 . "$PSScriptRoot\MSIX.Heuristics.ps1"
 . "$PSScriptRoot\MSIX.Compare.ps1"
 . "$PSScriptRoot\MSIX.Functions.ps1"

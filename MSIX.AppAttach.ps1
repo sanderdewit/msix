@@ -85,6 +85,14 @@ function Install-MsixMgr {
             Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
 
             # H1: verify Authenticode signer before installing into $Destination.
+            # NOTE: As of 2026-05-20 the msixmgr ZIP from aka.ms/msixmgr contains
+            # unsigned binaries (msixmgr.exe, msix.dll) and test-signed DLLs
+            # (ApplyACLs.dll, CreateCIM.dll, WVDUtilities.dll signed by
+            # "Microsoft Testing PCA 2010" — not a trusted production CA).
+            # This causes the verification below to throw in high-assurance environments.
+            # Tracked upstream: https://github.com/microsoft/msix-packaging/issues/710
+            # When that issue is resolved and Microsoft ships production-signed binaries,
+            # remove this comment. Until then the verification intentionally blocks use.
             _MsixVerifyAuthenticodeFolder -Folder $stage -ToolName 'msixmgr'
 
             New-Item $Destination -ItemType Directory -Force | Out-Null

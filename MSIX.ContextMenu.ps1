@@ -190,12 +190,15 @@
             return
         }
 
-        # ── Application-level Extensions node ────────────────────────────
-        $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
-        if (-not $appExt) {
-            $appExt = $manifest.CreateElement('Extensions', $manifest.Package.NamespaceURI)
-            $null   = $app.AppendChild($appExt)
-        }
+        # ── Package-level Extensions node ────────────────────────────────
+        # Shell-integration extensions (com:Extension/windows.comServer for a
+        # SurrogateServer, desktop9:Extension/windows.fileExplorerClassicContextMenuHandler)
+        # are NOT tied to any single Application — they register system-wide
+        # COM classes that Explorer activates cross-process via the surrogate.
+        # They MUST live at Package/Extensions, not Applications/Application/Extensions,
+        # for the shell to register them on package activation. Microsoft's
+        # context-menu sample places them at Package level.
+        $pkgExt = _MsixGetOrCreatePackageExtensions $manifest
 
         # ── COM server registration ───────────────────────────────────────
         $comUri    = Get-MsixManifestNamespaceUri 'com'
@@ -215,7 +218,7 @@
         $null = $surrogate.AppendChild($class)
         $null = $comServer.AppendChild($surrogate)
         $null = $comExt.AppendChild($comServer)
-        $null = $appExt.AppendChild($comExt)
+        $null = $pkgExt.AppendChild($comExt)
 
         # ── Shell extension handler ───────────────────────────────────────
         $d9Uri = Get-MsixManifestNamespaceUri 'desktop9'
@@ -242,7 +245,7 @@
             $null = $handler.AppendChild($extHandler)
         }
         $null = $d9Ext.AppendChild($handler)
-        $null = $appExt.AppendChild($d9Ext)
+        $null = $pkgExt.AppendChild($d9Ext)
     }
 }
 
@@ -369,16 +372,17 @@ function Add-MsixFileExplorerContextMenu {
         Add-MsixManifestNamespace $manifest 'desktop4'
         Set-MsixManifestMaxVersionTested $manifest -MinBuild 17134
 
-        $app = Get-MsixManifestApplication -Manifest $manifest -AppId $AppId
+        # AppId is kept for backward compat and as a sanity check, but
+        # windows.fileExplorerContextMenus is a Package-level shell registration
+        # (it's not tied to launching a specific Application).
+        $null = Get-MsixManifestApplication -Manifest $manifest -AppId $AppId
 
         $d4Uri = Get-MsixManifestNamespaceUri 'desktop4'
 
-        # Ensure Application/Extensions exists
-        $extNode = $app.SelectSingleNode('*[local-name()="Extensions"]')
-        if (-not $extNode) {
-            $extNode = $manifest.CreateElement('Extensions', $manifest.Package.NamespaceURI)
-            $null    = $app.AppendChild($extNode)
-        }
+        # Package-level Extensions — shell context menus register system-wide,
+        # not against any specific Application. See Add-MsixLegacyContextMenu
+        # comment block for the full rationale.
+        $extNode = _MsixGetOrCreatePackageExtensions $manifest
 
         $d4Ext = $manifest.CreateElement('desktop4:Extension', $d4Uri)
         $d4Ext.SetAttribute('Category', 'windows.fileExplorerContextMenus')

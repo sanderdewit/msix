@@ -1479,8 +1479,18 @@ function Add-MsixComServerExtension {
         Add-MsixManifestNamespace $M 'rescap'
 
         $comUri = Get-MsixManifestNamespaceUri 'com'
-        $app    = _MsixGetOrCreateApplicationExtensions $M $AppId
-        $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
+
+        # AppId is retained for backward compat / sanity check only.
+        # com:Extension/windows.comServer declares a CLSID for system-wide
+        # COM activation. The shell and other consumers look it up at the
+        # PACKAGE level, never inside Applications/Application/Extensions.
+        # Installing into Application/Extensions used to silently work for
+        # MakeAppx but the OS never registered the shell handler at runtime
+        # (root cause of the "legacy context menu doesn't appear" bug).
+        if ($AppId) {
+            $null = Get-MsixManifestApplication -Manifest $M -AppId $AppId
+        }
+        $appExt = _MsixGetOrCreatePackageExtensions $M
 
         # One com:Extension wrapping all servers
         $comExt    = $M.CreateElement('com:Extension', $comUri)

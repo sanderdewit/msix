@@ -29,7 +29,7 @@ jobs:
 
       - name: Validate module manifest
         shell: pwsh
-        run: Test-ModuleManifest -Path msix.psd1
+        run: Test-ModuleManifest -Path MSIX.psd1
 
   test:
     name: Pester Tests
@@ -45,11 +45,14 @@ jobs:
       - name: Run Pester tests
         shell: pwsh
         run: |
-          if (Test-Path ./tests -PathType Container) {
+          $testPath = if (Test-Path ./MSIX.Tests -PathType Container) { './MSIX.Tests' }
+                      elseif (Test-Path ./tests -PathType Container) { './tests' }
+                      else { $null }
+          if ($testPath) {
             $cfg = New-PesterConfiguration
-            $cfg.Run.Path = './tests'
+            $cfg.Run.Path = $testPath
             $cfg.Run.Exit = $true
             Invoke-Pester -Configuration $cfg
           } else {
-            Write-Host "No tests/ directory found — skipping."
+            throw "No test directory found (expected MSIX.Tests/ or tests/)."
           }

@@ -176,10 +176,22 @@ function Install-MsixPsfBinary {
         This function uses the GitHub API to find the latest release, downloads
         the asset that contains the binaries (.zip), extracts everything into
         $ToolsRoot\psf, and writes a `psf.version` marker so subsequent calls
-        know what's installed.
+        know what's installed. The install is idempotent: re-running with the
+        same latest tag is a no-op unless -Force is supplied.
+
+        SECURITY: every .exe / .dll in the extracted archive is verified to
+        have a valid Authenticode signature from a trusted publisher BEFORE
+        anything is copied into the toolchain folder. A failed verification
+        rolls back the install (the destination folder is removed if this
+        cmdlet created it). See $script:MsixTrustedPublishers for the
+        allowlist.
+
+        Related: Update-MsixPsfBinary (re-installs only when GitHub publishes a
+        newer tag), Get-MsixPsfBinariesVersion (queries what's currently
+        installed), Add-MsixPsfV2 (the consumer that uses the binaries).
 
     .PARAMETER Destination
-        Where to extract. Defaults to "$Get-MsixToolsRoot\psf".
+        Where to extract. Defaults to "(Get-MsixToolsRoot)\psf".
 
     .PARAMETER Force
         Reinstall even if the latest version is already present.
@@ -187,10 +199,20 @@ function Install-MsixPsfBinary {
     .PARAMETER AssetPattern
         Regex matched against asset names. Defaults to '\.zip$' so any zip works.
 
+    .OUTPUTS
+        [pscustomobject] with Path, Version, Updated, and Source (download URL).
+
     .EXAMPLE
+        # Install the latest PSF binaries into the default tools root.
         Install-MsixPsfBinary
+
     .EXAMPLE
+        # Force reinstall (useful after deleting binaries by hand).
         Install-MsixPsfBinary -Force
+
+    .EXAMPLE
+        # Install into a custom location.
+        Install-MsixPsfBinary -Destination 'D:\msix-tools\psf'
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -269,6 +291,22 @@ function Get-MsixPsfBinariesVersion {
     .SYNOPSIS
         Reports the version of PSF binaries currently installed under the
         tools root (or the path you provide).
+
+    .DESCRIPTION
+        Reads the `psf.version` marker that Install-MsixPsfBinary writes into
+        the destination folder and reports whether PsfLauncher32.exe is also
+        present (sanity check that the install wasn't partially deleted).
+
+    .PARAMETER Path
+        Folder to inspect. Defaults to "(Get-MsixToolsRoot)\psf".
+
+    .OUTPUTS
+        [pscustomobject] with Path, Installed (bool), Version (GitHub tag),
+        and HasLauncher (bool).
+
+    .EXAMPLE
+        # Print the cached PSF version on the current machine.
+        Get-MsixPsfBinariesVersion
     #>
     [CmdletBinding()]
     param(
@@ -290,6 +328,23 @@ function Update-MsixPsfBinary {
     .SYNOPSIS
         Convenience wrapper: re-runs Install-MsixPsfBinary only when the GitHub
         latest tag differs from what's installed.
+
+    .DESCRIPTION
+        Idempotent updater suitable for scheduled / CI use. If no PSF is cached
+        locally, runs a fresh install. Otherwise queries the TMurgent GitHub
+        releases API and compares against the local `psf.version` marker;
+        re-downloads (with Authenticode verification) only when the tag has
+        changed.
+
+    .PARAMETER Destination
+        Folder containing PSF. Defaults to "(Get-MsixToolsRoot)\psf".
+
+    .OUTPUTS
+        [pscustomobject] from Install-MsixPsfBinary or Get-MsixPsfBinariesVersion.
+
+    .EXAMPLE
+        # Refresh PSF if a newer release has appeared upstream.
+        Update-MsixPsfBinary
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param([string]$Destination)
@@ -317,16 +372,35 @@ function Install-MsixProcMon {
         Downloads and extracts Sysinternals Process Monitor under the tools root
         (or to a path you specify), ready for Invoke-MsixProcMonCapture.
 
+    .DESCRIPTION
+        Downloads https://download.sysinternals.com/files/ProcessMonitor.zip,
+        Authenticode-verifies every .exe/.dll against the Microsoft / Microsoft
+        Windows Publisher trusted-publisher allowlist BEFORE copying anything
+        into $Destination, and sets $env:MSIX_PROCMON_PATH so
+        Resolve-MsixProcMonPath / Invoke-MsixProcMonCapture pick it up
+        immediately. Idempotent: existing installs are skipped unless -Force.
+
     .PARAMETER Destination
-        Where to extract. Defaults to "$Get-MsixToolsRoot\procmon".
+        Where to extract. Defaults to "(Get-MsixToolsRoot)\procmon".
 
     .PARAMETER Force
         Re-download even if procmon is already present.
+
+    .OUTPUTS
+        [pscustomobject] with Path, Updated, and (on fresh install) Source URL.
 
     .NOTES
         Sysinternals doesn't expose a versioned download URL — the zip is always
         the latest. This function therefore stamps the install date as the
         "version" so Update-MsixProcMon knows when to refresh.
+
+    .EXAMPLE
+        # Install Process Monitor into the default location.
+        Install-MsixProcMon
+
+    .EXAMPLE
+        # Force re-download (e.g. after an accidental delete).
+        Install-MsixProcMon -Force
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -394,6 +468,28 @@ function Update-MsixProcMon {
     .SYNOPSIS
         Refreshes Process Monitor if the local copy is older than -MaxAgeDays
         (default 30). Sysinternals updates infrequently so a slow cadence is fine.
+
+    .DESCRIPTION
+        Age-based updater. Re-runs Install-MsixProcMon -Force only when the
+        install marker is older than -MaxAgeDays. If nothing is installed yet,
+        falls back to a fresh Install-MsixProcMon.
+
+    .PARAMETER Destination
+        Folder containing Procmon. Defaults to "(Get-MsixToolsRoot)\procmon".
+
+    .PARAMETER MaxAgeDays
+        Refresh threshold in days. Default 30.
+
+    .OUTPUTS
+        [pscustomobject] from Install-MsixProcMon or a no-op summary.
+
+    .EXAMPLE
+        # Refresh Procmon if its cached copy is over a month old.
+        Update-MsixProcMon
+
+    .EXAMPLE
+        # Tighter cadence for kiosk-style refresh.
+        Update-MsixProcMon -MaxAgeDays 7
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -431,11 +527,24 @@ function Install-MsixDebugView {
         printing "DebugView not found" if the operator had only run
         Initialize-MsixToolchain; this cmdlet closes that gap.
 
+        Every .exe / .dll in the extracted archive is Authenticode-verified
+        against the trusted-publisher allowlist BEFORE anything is copied into
+        $Destination. A failed verification rolls the install back. The
+        environment variable $env:MSIX_DEBUGVIEW_PATH is set to the resolved
+        Dbgview64.exe so subsequent calls find it without further setup.
+
     .PARAMETER Destination
-        Where to extract. Defaults to "$Get-MsixToolsRoot\debugview".
+        Where to extract. Defaults to "(Get-MsixToolsRoot)\debugview".
 
     .PARAMETER Force
         Re-download even if already present.
+
+    .OUTPUTS
+        [pscustomobject] with Path, Updated, and (on fresh install) Source URL.
+
+    .EXAMPLE
+        # Cache DebugView so PSF TraceFixup output can be captured.
+        Install-MsixDebugView
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -502,6 +611,24 @@ function Update-MsixDebugView {
     <#
     .SYNOPSIS
         Refreshes DebugView if older than -MaxAgeDays (default 30).
+
+    .DESCRIPTION
+        Age-based updater. Re-runs Install-MsixDebugView -Force only when the
+        cached install marker is older than -MaxAgeDays. Mirrors
+        Update-MsixProcMon semantics.
+
+    .PARAMETER Destination
+        Folder containing DebugView. Defaults to "(Get-MsixToolsRoot)\debugview".
+
+    .PARAMETER MaxAgeDays
+        Refresh threshold in days. Default 30.
+
+    .OUTPUTS
+        [pscustomobject] from Install-MsixDebugView or a no-op summary.
+
+    .EXAMPLE
+        # Keep DebugView fresh-ish on a CI agent.
+        Update-MsixDebugView
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -530,6 +657,21 @@ function Get-MsixDebugViewVersion {
     <#
     .SYNOPSIS
         Reports the cached DebugView install timestamp and resolved Dbgview path.
+
+    .DESCRIPTION
+        Reads the `debugview.installed` marker that Install-MsixDebugView wrote
+        and resolves Dbgview64.exe / Dbgview.exe under the folder.
+
+    .PARAMETER Path
+        Folder to inspect. Defaults to "(Get-MsixToolsRoot)\debugview".
+
+    .OUTPUTS
+        [pscustomobject] with Path, Installed, InstalledOn ([datetime]), and
+        Executable (resolved Dbgview path).
+
+    .EXAMPLE
+        # See how stale the cached DebugView is.
+        Get-MsixDebugViewVersion
     #>
     [CmdletBinding()]
     param([string]$Path)
@@ -570,6 +712,10 @@ function Install-MsixSdkTool {
         "$ToolsRoot\Tools\", and writes a `sdk.version` marker so
         Update-MsixSdkTool knows what's installed.
 
+        SECURITY: every .exe / .dll inside the chosen arch folder is
+        Authenticode-verified against the Microsoft trusted-publisher
+        allowlist BEFORE anything is copied to "$Destination\Tools".
+
     .PARAMETER Destination
         Where to land the binaries. Default: the module folder. After install,
         Get-MsixToolsRoot returns this path automatically.
@@ -584,13 +730,20 @@ function Install-MsixSdkTool {
     .PARAMETER Force
         Reinstall even if the version is already present.
 
+    .OUTPUTS
+        [pscustomobject] with Path, Version, Architecture, Updated, and (on
+        fresh install) Source URL.
+
     .EXAMPLE
+        # Install latest x64 SDK tools into the module folder.
         Install-MsixSdkTool
 
     .EXAMPLE
+        # 32-bit signtool, forced reinstall.
         Install-MsixSdkTool -Architecture x86 -Force
 
     .EXAMPLE
+        # Pin a specific NuGet version for reproducible CI builds.
         Install-MsixSdkTool -Version '10.0.26100.1742'
     #>
     [CmdletBinding(SupportsShouldProcess)]
@@ -703,6 +856,26 @@ function Update-MsixSdkTool {
     .SYNOPSIS
         Refreshes the bundled SDK tools to the latest NuGet version, but only
         when a new one exists.
+
+    .DESCRIPTION
+        Idempotent updater. Queries the NuGet flat-container index for the
+        highest non-prerelease version of Microsoft.Windows.SDK.BuildTools and
+        re-runs Install-MsixSdkTool only if the local `sdk.version` marker
+        doesn't already match "<version>|<architecture>".
+
+    .PARAMETER Destination
+        Where SDK tools are installed. Defaults to the module folder
+        ($PSScriptRoot).
+
+    .PARAMETER Architecture
+        x64 (default) or x86.
+
+    .OUTPUTS
+        [pscustomobject] from Install-MsixSdkTool or a no-op summary.
+
+    .EXAMPLE
+        # Refresh the SDK tools (no-op if already on the latest tag).
+        Update-MsixSdkTool
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -739,6 +912,21 @@ function Get-MsixSdkToolsVersion {
     .SYNOPSIS
         Reports the version + architecture of MakeAppx.exe / signtool.exe
         currently installed under the module's tools root.
+
+    .DESCRIPTION
+        Parses the `sdk.version` marker that Install-MsixSdkTool writes
+        ("<version>|<architecture>"). Returns Installed=$false when the marker
+        is missing.
+
+    .PARAMETER Destination
+        Module / install folder. Defaults to $PSScriptRoot.
+
+    .OUTPUTS
+        [pscustomobject] with Path, Installed, Version, Architecture.
+
+    .EXAMPLE
+        # Verify which signtool / MakeAppx version is bundled.
+        Get-MsixSdkToolsVersion
     #>
     [CmdletBinding()]
     param([string]$Destination)
@@ -829,11 +1017,16 @@ function Install-MsixAppRuntime {
     .PARAMETER Force
         Re-download even if cached.
 
+    .OUTPUTS
+        [pscustomobject] with Path, Updated, Channels (string[]),
+        DesktopAppInstaller (path), and WindowsAppRuntimeExes (string[]).
+
     .EXAMPLE
+        # Cache the default 1.4 / 1.5 / 1.6 / 1.7 / 1.8 channels + DesktopAppInstaller.
         Install-MsixAppRuntime
 
     .EXAMPLE
-        # Cache only what one specific package actually needs
+        # Cache only what one specific package actually needs.
         $req = Get-MsixRequiredAppRuntimeChannel -PackagePath app.msix
         Install-MsixAppRuntime -Channels $req
     #>
@@ -912,7 +1105,11 @@ function Get-MsixRequiredAppRuntimeChannel {
     .PARAMETER PackagePath
         Path to the .msix / .appx / folder containing AppxManifest.xml.
 
+    .OUTPUTS
+        [string[]] — sorted, unique list of channel strings, or an empty array.
+
     .EXAMPLE
+        # Inspect what runtime a single package needs.
         Get-MsixRequiredAppRuntimeChannel -PackagePath app.msix
         # => @('1.4')
     #>
@@ -940,6 +1137,24 @@ function Update-MsixAppRuntime {
     .SYNOPSIS
         Refreshes the cached Windows App Runtime + DesktopAppInstaller if the
         local copy is older than -MaxAgeDays (default 45).
+
+    .DESCRIPTION
+        Age-based updater. Re-runs Install-MsixAppRuntime -Force only when the
+        cached marker is older than -MaxAgeDays; otherwise reports the existing
+        cache. If nothing is cached yet, performs a fresh install.
+
+    .PARAMETER Destination
+        Cache folder. Defaults to "(Get-MsixToolsRoot)\runtime".
+
+    .PARAMETER MaxAgeDays
+        Refresh threshold. Default 45.
+
+    .OUTPUTS
+        [pscustomobject] from Install-MsixAppRuntime or a no-op summary.
+
+    .EXAMPLE
+        # Refresh AppRuntime cache if older than ~6 weeks.
+        Update-MsixAppRuntime
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -968,6 +1183,22 @@ function Get-MsixAppRuntimeVersion {
     <#
     .SYNOPSIS
         Reports the cached AppRuntime install timestamp and resolved paths.
+
+    .DESCRIPTION
+        Inspects the `runtime.installed` marker plus the bundle and runtime exe
+        on disk and returns a summary object that Update-MsixAppRuntime /
+        Initialize-MsixToolchain consume.
+
+    .PARAMETER Path
+        Cache folder. Defaults to "(Get-MsixToolsRoot)\runtime".
+
+    .OUTPUTS
+        [pscustomobject] with Path, Installed, InstalledOn,
+        DesktopAppInstaller (bundle path or $null), WindowsAppRuntimeExe.
+
+    .EXAMPLE
+        # Check whether the sandbox runtime cache is ready.
+        Get-MsixAppRuntimeVersion
     #>
     [CmdletBinding()]
     param([string]$Path)
@@ -996,10 +1227,37 @@ function Initialize-MsixToolchain {
         DesktopAppInstaller (for sandbox/MSIX install support) are present
         and up to date under the tools root.
 
+    .DESCRIPTION
+        Runs the Update-* cmdlet for each toolchain component in dependency
+        order (SDK first, since MakeAppx is needed by almost every other
+        operation), respecting -Skip. Every component is downloaded only if
+        missing or stale; all downloaded binaries are Authenticode-verified
+        against the trusted-publisher allowlist before they land in the
+        toolchain root. Safe to run repeatedly — idempotent across components.
+
+        This is what you should call from a fresh CI agent / VM / sandbox
+        before doing anything else with this module.
+
+    .PARAMETER Skip
+        One or more component names to skip:
+          Sdk, Psf, Procmon, DebugView, MsixMgr, Runtime.
+
+    .OUTPUTS
+        [pscustomobject] with one property per component (Sdk, Psf, Procmon,
+        DebugView, MsixMgr, Runtime). Each holds the return value of its
+        corresponding Update-* call or $null when skipped.
+
     .EXAMPLE
-        Initialize-MsixToolchain                              # everything
-        Initialize-MsixToolchain -Skip Procmon                # skip Procmon
-        Initialize-MsixToolchain -Skip Procmon,MsixMgr,Runtime # PSF + SDK + DebugView only
+        # Default: install / refresh everything the module needs.
+        Initialize-MsixToolchain
+
+    .EXAMPLE
+        # Skip Procmon (e.g. on a server you don't want UI tools on).
+        Initialize-MsixToolchain -Skip Procmon
+
+    .EXAMPLE
+        # Minimal: only the SDK tools (signtool, MakeAppx) and PSF.
+        Initialize-MsixToolchain -Skip Procmon,DebugView,MsixMgr,Runtime
     #>
     [CmdletBinding()]
     param(

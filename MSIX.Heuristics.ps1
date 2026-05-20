@@ -48,6 +48,18 @@ function Get-MsixKnownCapability {
     .SYNOPSIS
         Returns the capability table this module knows about, with the
         namespace prefix each one belongs in.
+
+    .DESCRIPTION
+        Read-only enumeration of the capabilities Add-MsixCapability can
+        resolve to a namespace without an explicit -Namespace override.
+        Pipe to Where-Object Namespace -eq 'rescap' to filter by class.
+
+    .EXAMPLE
+        # Show all rescap capabilities the module recognises
+        Get-MsixKnownCapability | Where-Object Namespace -eq 'rescap'
+
+    .OUTPUTS
+        [pscustomobject] one per known capability: Name, Namespace.
     #>
     foreach ($k in $script:KnownCapabilities.Keys) {
         [pscustomobject]@{
@@ -63,6 +75,21 @@ function Add-MsixCapability {
         Adds one or more capabilities (standard or rescap) to a package's
         AppxManifest.xml. Idempotent. Repacks + signs unless -SkipSigning.
 
+    .DESCRIPTION
+        For each name in -Names, the namespace is resolved against the
+        module's known-capabilities table (Get-MsixKnownCapability) and the
+        appropriate `<Capability>` / `<uap:Capability>` / `<rescap:Capability>`
+        element is added under `<Package><Capabilities>`. Adds the namespace
+        declaration when needed.
+
+        Idempotency: existing entries with the same Name attribute are skipped
+        regardless of prefix, so chained autofix stages don't duplicate them.
+
+        Unknown capability names emit a warning and are written as plain
+        `<Capability>` (standard namespace). To declare capabilities the
+        lookup table doesn't recognise yet, supply -Namespace explicitly so
+        the correct prefix is used.
+
     .PARAMETER PackagePath
         .msix to modify.
 
@@ -77,8 +104,33 @@ function Add-MsixCapability {
         One of: 'standard', 'uap', 'uap2', 'uap3', 'uap4', 'uap5', 'uap6',
         'uap7', 'uap8', 'uap10', 'rescap'.
 
-    .PARAMETER OutputPath / SkipSigning / Pfx / PfxPassword
-        See Add-MsixPsfV2.
+    .PARAMETER OutputPath
+        If set, write the repacked package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the signing pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .EXAMPLE
+        # Add runFullTrust and internetClient (idempotent — safe to re-run)
+        Add-MsixCapability -PackagePath app.msix `
+            -Names runFullTrust,internetClient -SkipSigning
+
+    .EXAMPLE
+        # Declare a capability the lookup table doesn't know yet
+        Add-MsixCapability -PackagePath app.msix `
+            -Names 'previewStore' -Namespace uap8 -SkipSigning
+
+    .EXAMPLE
+        # Typical Invoke-MsixAutoFix integration: chained via -Capabilities
+        Invoke-MsixAutoFix -PackagePath app.msix `
+            -Capabilities runFullTrust,internetClient `
+            -Pfx cert.pfx -PfxPassword $pw
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -173,8 +225,20 @@ function Get-MsixUninstallerCandidate {
         (uninst*.exe, unins*.exe, setup.exe, install.exe, autorun.inf,
         InstallShield/MSI scratch files).
 
+        Detection-only — pair with Remove-MsixUninstallerArtifact to strip
+        the matched files and the matching Uninstall\* registry leftovers.
+        Feeds the `UninstallerArtifact` finding in Get-MsixHeuristicFinding.
+
     .PARAMETER PackagePath
         .msix to scan (read-only).
+
+    .EXAMPLE
+        # List uninstaller leftovers, then remove them in a follow-up call
+        Get-MsixUninstallerCandidate -PackagePath app.msix
+        Remove-MsixUninstallerArtifact -PackagePath app.msix -SkipSigning
+
+    .OUTPUTS
+        [pscustomobject] one per match: Name, Path (package-relative), SizeBytes.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$PackagePath)
@@ -224,11 +288,23 @@ function Get-MsixUninstallRegistryEntry {
         equivalent, captures DisplayName / DisplayVersion / Publisher /
         UninstallString for each, and unloads.
 
-        Requires admin rights (reg.exe load). Returns $null and logs a warning
-        if not elevated.
+        Without admin rights the function falls back to a string scan of
+        Registry.dat, returning best-effort KeyName entries (no value
+        details). For full DisplayName/DisplayVersion/Publisher/UninstallString
+        extraction, run elevated so reg.exe can load the hive.
 
     .PARAMETER PackagePath
         .msix file (read-only).
+
+    .EXAMPLE
+        # Surface leftover uninstall registry entries (run elevated for full detail)
+        Get-MsixUninstallRegistryEntry -PackagePath app.msix |
+            Select-Object DisplayName, Publisher, UninstallString
+
+    .OUTPUTS
+        [pscustomobject[]] each with KeyName, DisplayName, DisplayVersion,
+        Publisher, UninstallString, FullPath. Returns an empty array when
+        Registry.dat has no Uninstall\* subkeys.
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -343,6 +419,25 @@ function Remove-MsixUninstallerArtifact {
         their Uninstall\<key> registry entries from Registry.dat (the package's
         virtualized HKLM hive). Repacks + re-signs unless -SkipSigning / -NoSign.
 
+    .DESCRIPTION
+        Mutator counterpart to Get-MsixUninstallerCandidate /
+        Get-MsixUninstallRegistryEntry. Two-step cleanup:
+
+          1. Remove files inside the package matching -PathPatterns.
+          2. Load Registry.dat (when elevated and -KeepRegistry not set) and
+             delete Uninstall\<key> subkeys whose DisplayName matches
+             -UninstallKeyFilter.
+
+        Repacks and re-signs at the end. Idempotent — a second run on a clean
+        package logs "No uninstaller artefacts found." and returns without
+        repacking.
+
+        Used by both Invoke-MsixAutoFix (via -RemoveUninstallers) and
+        Invoke-MsixAutoFixFromAnalysis (RemoveUninstallers stage).
+
+    .PARAMETER PackagePath
+        .msix file to mutate.
+
     .PARAMETER PathPatterns
         Filename regex patterns. Defaults to a sensible uninstaller list.
 
@@ -354,8 +449,31 @@ function Remove-MsixUninstallerArtifact {
     .PARAMETER KeepRegistry
         Skip the Registry.dat cleanup; only strip the .exe files.
 
-    .PARAMETER SkipSigning / NoSign
-        Don't sign the repacked .msix. -NoSign is an alias for -SkipSigning.
+    .PARAMETER OutputPath
+        Write the repacked package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Don't sign the repacked .msix. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .EXAMPLE
+        # Full cleanup: strip files + registry, then sign (idempotent)
+        Remove-MsixUninstallerArtifact -PackagePath app.msix `
+            -Pfx cert.pfx -PfxPassword $pw
+
+    .EXAMPLE
+        # Strip files only, no registry edit, no signing (test/dev)
+        Remove-MsixUninstallerArtifact -PackagePath app.msix `
+            -KeepRegistry -SkipSigning
+
+    .OUTPUTS
+        [pscustomobject] with FilesRemoved (string[]), KeysRemoved (string[]),
+        and Output (final package path). Returns nothing when nothing matched.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -471,9 +589,25 @@ function Get-MsixRunKeyEntry {
         Lists the HKLM/HKCU \…\Run\* entries declared by the package — usually
         baked in by the original installer. These don't fire under MSIX and
         admins typically remove them or replace with a startScript.
+
     .DESCRIPTION
         Inspects User.dat and Registry.dat hives shipped in VFS\… for
-        Software\Microsoft\Windows\CurrentVersion\Run\* values.
+        Software\Microsoft\Windows\CurrentVersion\Run\* values via a Unicode
+        string scan (best effort — works without elevation). Feeds the
+        `RunKey` finding in Get-MsixHeuristicFinding, which in turn drives the
+        `ManifestFix:StartupTask` recommendation when the package has no
+        windows.startupTask extension declared.
+
+    .PARAMETER PackagePath
+        .msix to scan (read-only).
+
+    .EXAMPLE
+        # Find Run-key autostart leftovers
+        Get-MsixRunKeyEntry -PackagePath app.msix
+
+    .OUTPUTS
+        [pscustomobject[]] each with Hive ('Registry.dat' or 'User.dat') and
+        Match (the matched Run-key path).
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$PackagePath)
@@ -600,8 +734,21 @@ function Get-MsixShellContextMenuEntry {
           DllPath      (ShellExt)  absolute InProcServer32 path if elevated
           VfsDllPath   (ShellExt)  package-relative VFS path if DLL found in pkg
 
+        Surfaces `ShellVerb` and `ShellExt` findings via Get-MsixHeuristicFinding;
+        ShellExt entries with a resolved Clsid + VfsDllPath are auto-fixable
+        through the `AddLegacyContextMenu` stage of Invoke-MsixAutoFixFromAnalysis.
+
     .PARAMETER PackagePath
         .msix file to inspect.
+
+    .EXAMPLE
+        # Surface all shell verbs and shellex handlers (run elevated for full detail)
+        Get-MsixShellContextMenuEntry -PackagePath app.msix |
+            Format-Table Type, Target, VerbName, HandlerName, Clsid, VfsDllPath
+
+    .OUTPUTS
+        [pscustomobject[]] with Type, Target, VerbName/HandlerName, Command,
+        Clsid, DllPath, VfsDllPath as documented above.
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -791,6 +938,22 @@ function Get-MsixComServerEntry {
           DllPath        absolute InProcServer32 / LocalServer32 path (elevated)
           VfsDllPath     package-relative VFS path if the DLL is in the package
           ThreadingModel e.g. 'Apartment' (InProc, elevated only)
+
+        Surfaces the `ComServer` finding in Get-MsixHeuristicFinding. Entries
+        with a resolved VfsDllPath feed the `AddComServer` stage of
+        Invoke-MsixAutoFixFromAnalysis, which calls Add-MsixComServerExtension.
+
+    .PARAMETER PackagePath
+        .msix file to inspect.
+
+    .EXAMPLE
+        # Find COM servers registered in the package's Registry.dat
+        Get-MsixComServerEntry -PackagePath app.msix |
+            Where-Object ServerType -eq 'InProc'
+
+    .OUTPUTS
+        [pscustomobject[]] with Clsid, ServerType, DllPath, VfsDllPath,
+        ThreadingModel as documented above.
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -894,6 +1057,23 @@ function Get-MsixAliasCandidate {
         Heuristic:
           - .exe under VFS\ProgramFiles* with a manifest entry pointing at it
           - skip msvcr*, vcredist*, setup*, install*, uninst*
+
+        Feeds the `AppExecutionAlias` finding in Get-MsixHeuristicFinding.
+        Pass the AppId values to Add-MsixAlias to register the suggestions.
+
+    .PARAMETER PackagePath
+        .msix to scan (read-only).
+
+    .EXAMPLE
+        # Surface alias candidates and add the first one with Add-MsixAlias
+        $cands = Get-MsixAliasCandidate -PackagePath app.msix |
+            Where-Object { -not $_.AlreadyHasAlias }
+        Add-MsixAlias -PackagePath app.msix `
+            -AppIds $cands.AppId -SkipSigning
+
+    .OUTPUTS
+        [pscustomobject[]] each with AppId, Executable, SuggestAlias,
+        AlreadyHasAlias.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$PackagePath)
@@ -946,17 +1126,49 @@ function Add-MsixSplashScreen {
         feedback while a slow startScript runs. Requires PSF already to be
         injected (Add-MsixPsfV2 first).
 
+    .DESCRIPTION
+        Copies -ImagePath next to the existing config.json (the one created by
+        Add-MsixPsfV2) and patches the targeted application's startScript
+        section to reference it. Repacks + re-signs unless -SkipSigning.
+
+        Idempotent: re-running with the same -ImagePath / -AppId overwrites
+        the splashImage entry to match.
+
+        Integrates with Invoke-MsixAutoFix via -SplashImagePath / -SplashAppId.
+
     .PARAMETER PackagePath
         .msix to modify (must already use PsfLauncher).
 
     .PARAMETER ImagePath
-        PNG/JPG to display. Copied into the package folder.
+        PNG/JPG to display. Copied into the package folder next to config.json.
 
     .PARAMETER AppId
         Application id whose config.json gets the splash entry.
 
-    .PARAMETER OutputPath / SkipSigning / Pfx / PfxPassword
-        See Add-MsixPsfV2.
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the signing pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .EXAMPLE
+        # Standalone use after Add-MsixPsfV2 has injected PSF
+        Add-MsixSplashScreen -PackagePath app.msix `
+            -ImagePath .\splash.png -AppId App `
+            -Pfx cert.pfx -PfxPassword $pw
+
+    .EXAMPLE
+        # As part of an Invoke-MsixAutoFix run (sign-once pattern)
+        Invoke-MsixAutoFix -PackagePath app.msix `
+            -PsfFixups @(New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log') `
+            -SplashImagePath .\splash.png -SplashAppId App `
+            -Pfx cert.pfx -PfxPassword $pw
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(

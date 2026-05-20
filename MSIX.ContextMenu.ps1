@@ -48,16 +48,50 @@
     .PARAMETER SkipSigning
         Do not sign the resulting package.
 
-    .PARAMETER Pfx / PfxPassword
-        Signing certificate. Omit to use automatic store selection.
+    .PARAMETER Pfx
+        Signing certificate file. Omit to use automatic store selection.
+
+    .PARAMETER PfxPassword
+        SecureString password for -Pfx.
+
+    .PARAMETER UnsignedOutputPath
+        When signing fails, copy the unsigned repacked package here so the
+        operator can manually re-sign. The original is never overwritten on
+        a failed sign.
 
     .EXAMPLE
+        # LEGACY IContextMenu (desktop9) — pick THIS cmdlet when shipping an
+        # existing COM IContextMenu/IDropTarget DLL. Min OS: Win11 21H2.
+        $pw = Read-Host -AsSecureString
         Add-MsixLegacyContextMenu -PackagePath app.msix `
             -ShellExtDll 'VFS\ProgramFilesX64\App\ShellExt.dll' `
-            -Clsid '{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}' `
+            -Clsid '{D7E6F1A2-3B4C-4D5E-9F00-112233445566}' `
             -DisplayName 'My Context Menu' `
             -FileTypes '*', '.log', 'Directory' `
-            -Pfx cert.pfx -PfxPassword 'P@ss'
+            -Pfx cert.pfx -PfxPassword $pw
+
+    .EXAMPLE
+        # Drag-and-drop handler variant (also legacy / desktop9)
+        Add-MsixLegacyContextMenu -PackagePath app.msix `
+            -ShellExtDll '[{ProgramFilesX64}]\App\ShellExt.dll' `
+            -Clsid 'D7E6F1A2-3B4C-4D5E-9F00-112233445566' `
+            -DisplayName 'Drop Handler' `
+            -MenuType DragDrop `
+            -FileTypes 'Directory'
+
+    .EXAMPLE
+        # Preview only: WhatIf still runs unpack/edit/pack so you can inspect
+        # the result; signing and target replacement are skipped.
+        Add-MsixLegacyContextMenu -WhatIf -PackagePath app.msix `
+            -ShellExtDll 'VFS\ProgramFilesX64\App\ShellExt.dll' `
+            -Clsid '{D7E6F1A2-3B4C-4D5E-9F00-112233445566}' `
+            -DisplayName 'Preview' `
+            -UnsignedOutputPath 'C:\drop\app-preview.msix'
+
+    .NOTES
+        For NEW shell extensions implementing IExplorerCommand, prefer the
+        modern Add-MsixFileExplorerContextMenu which uses desktop4 and
+        works on Win10 1803+.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
@@ -248,10 +282,34 @@ function Add-MsixFileExplorerContextMenu {
     .PARAMETER SkipSigning
         Do not sign the resulting package.
 
+    .PARAMETER Pfx
+        Signing certificate file. Omit to use automatic store selection.
+
+    .PARAMETER PfxPassword
+        SecureString password for -Pfx.
+
+    .PARAMETER UnsignedOutputPath
+        When signing fails, copy the unsigned repacked package here so the
+        operator can manually re-sign.
+
     .EXAMPLE
+        # MODERN IExplorerCommand (desktop4) — pick THIS cmdlet for new
+        # shell extensions. Works on Win10 1803 (build 17134) and above.
+        $pw = Read-Host -AsSecureString
         Add-MsixFileExplorerContextMenu -PackagePath app.msix -AppId 'App' `
-            -VerbId 'open' -VerbClsid '{XXXXXXXX-...}' `
-            -FileTypes '.log', '.txt'
+            -VerbId 'open' -VerbClsid '{A1B2C3D4-E5F6-4789-ABCD-EF0123456789}' `
+            -FileTypes '.log', '.txt' `
+            -Pfx cert.pfx -PfxPassword $pw
+
+    .EXAMPLE
+        # Multiple verbs in one package: call once per verb
+        Add-MsixFileExplorerContextMenu -PackagePath app.msix -AppId 'App' `
+            -VerbId 'convert' -VerbClsid 'A1B2C3D4-E5F6-4789-ABCD-EF0123456789' `
+            -FileTypes 'Directory' -SkipSigning
+
+    .NOTES
+        For LEGACY IContextMenu COM servers (Win32 shell extensions), see
+        Add-MsixLegacyContextMenu (desktop9, requires Win11 21H2+).
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(

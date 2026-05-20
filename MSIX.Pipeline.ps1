@@ -16,7 +16,8 @@
         per-stage resign that wasted time and risked publisher drift.
 
     .PARAMETER PackagePath
-        Path to the .msix file.
+        Path to the .msix file. Overwritten in place unless -OutputPath is
+        also supplied.
 
     .PARAMETER OutputPath
         Optional output path. Defaults to overwriting -PackagePath.
@@ -47,15 +48,44 @@
                                                 The original target is never
                                                 overwritten when signing fails.
 
+    .OUTPUTS
+        [System.IO.FileInfo] for the final signed package, or $null in
+        WhatIf preview mode.
+
     .EXAMPLE
+        # Publisher rename only — minimal config
         Invoke-MsixPipeline -PackagePath app.msix -Config @{
             Publisher = 'CN=Contoso, O=Contoso, C=NL'
-            PSF = @{ Fixups = @( New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log' ) }
-            Signing = @{ Pfx = 'cert.pfx'; PfxPassword = 'P@ss' }
+            Signing   = @{ Pfx = 'cert.pfx'; PfxPassword = $pw }
         }
+
     .EXAMPLE
-        # Dry-run: produce an alternative file
-        Invoke-MsixPipeline -PackagePath app.msix -OutputPath app-fixed.msix -Config $cfg
+        # PSF injection only (file redirection)
+        $fixup = New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log'
+        Invoke-MsixPipeline -PackagePath app.msix -Config @{
+            PSF     = @{ Fixups = @($fixup) }
+            Signing = @{ Pfx = 'cert.pfx'; PfxPassword = $pw }
+        }
+
+    .EXAMPLE
+        # Full pipeline: Publisher rename + PSF + Signing + UnsignedOutputPath
+        # (preserves the unsigned package if signing fails)
+        $fixup = New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log'
+        Invoke-MsixPipeline -PackagePath app.msix -OutputPath app-fixed.msix `
+            -Config @{
+                Publisher = 'CN=Contoso, O=Contoso, C=NL'
+                PSF       = @{ Fixups = @($fixup) }
+                Signing   = @{
+                    Pfx                = 'cert.pfx'
+                    PfxPassword        = $pw
+                    UnsignedOutputPath = 'C:\drop\app-unsigned.msix'
+                }
+            }
+
+    .EXAMPLE
+        # Preview mode: -WhatIf still runs unpack/edit/pack so you can inspect
+        # the would-be result; signing and the final Move-Item are skipped.
+        Invoke-MsixPipeline -WhatIf -PackagePath app.msix -Config $cfg
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(

@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # Public package-operation functions
 # -----------------------------------------------------------------------------
 # Originally embedded in MSIX.psm1. Extracted in v0.13 so the root .psm1 only
@@ -14,14 +14,35 @@ function Get-MsixInfo {
         Returns identity, publisher, signing, and (optionally) application details
         for an MSIX package without fully unpacking it.
 
+    .DESCRIPTION
+        Extracts AppxManifest.xml in memory and combines it with the
+        Authenticode signature info. Use this for quick triage / inventory
+        scenarios — it does not unzip the entire package.
+
+        For full unpacking and analysis use Get-MsixCompatibilityReport or
+        Invoke-MsixInvestigation.
+
     .PARAMETER PackagePath
-        Path to the .msix / .appx file.
+        Path to the .msix / .appx file. Accepts pipeline input.
 
     .PARAMETER Detailed
-        Also returns the raw Application XML elements.
+        Also returns the raw Application XML elements via
+        Get-MsixManifestApplications, attached as an `Applications` note property.
 
     .EXAMPLE
+        # Quick summary of one package
         Get-MsixInfo -PackagePath app.msix
+
+    .EXAMPLE
+        # Inventory a folder of packages
+        Get-ChildItem 'C:\packages\*.msix' | Get-MsixInfo |
+            Select-Object Name, Version, Publisher, Signed
+
+    .OUTPUTS
+        [pscustomobject] with Name, DisplayName, Publisher, PublisherDisplayName,
+        Version, ProcessorArchitecture, Description, Signed (status),
+        SignedBy, Thumbprint, TimestampCertificate. With -Detailed,
+        also includes an Applications collection.
     #>
     [CmdletBinding()]
     param(
@@ -68,19 +89,38 @@ function Invoke-MsixCommand {
     .SYNOPSIS
         Launches a command inside the MSIX container of an installed package.
 
+    .DESCRIPTION
+        Thin wrapper around Invoke-CommandInDesktopPackage that resolves the
+        PackageFamilyName + AppId from a partial package name. Useful for
+        interactive debugging — you can run cmd.exe, powershell.exe or any
+        diagnostic tool with the package's VFS / virtual registry mappings
+        active.
+
+        Throws when the name matches zero or more than one installed package.
+        Pass -PackageName as the full PackageFullName to disambiguate.
+
     .PARAMETER PackageName
-        Full or partial package name (wildcards accepted).
+        Full or partial package name (wildcards accepted). Matched first with
+        Get-AppxPackage -Name; falls back to a substring search.
 
     .PARAMETER Command
         Command to run inside the container. Defaults to cmd.exe.
 
     .PARAMETER AppId
-        Application Id to use. If omitted, the first app in the manifest is used.
+        Application Id to use. If omitted, the first app in the manifest is
+        used; a warning is emitted when the package declares multiple apps.
 
     .EXAMPLE
+        # Open a cmd shell inside the Notepad++ package
+        Invoke-MsixCommand -PackageName 'Notepad++'
+
+    .EXAMPLE
+        # Launch PowerShell inside the container — handy for inspecting
+        # virtualized registry/file paths
         Invoke-MsixCommand -PackageName 'Notepad++' -Command 'powershell.exe'
 
     .EXAMPLE
+        # Pin to a specific Application when the package declares multiple
         Invoke-MsixCommand -PackageName 'Contoso' -AppId 'App2' -Command 'regedit.exe'
     #>
     [CmdletBinding(SupportsShouldProcess)]
@@ -128,12 +168,45 @@ function Update-MsixSigner {
         Re-signs an MSIX package, optionally updating the Publisher identity.
 
     .DESCRIPTION
-        If -Publisher is different from the current value, the manifest is updated,
-        the package filename is adjusted to reflect the new Publisher ID, and then
-        re-signed. If the publisher already matches, only re-signing happens.
+        If -Publisher differs from the current Identity/Publisher, the manifest
+        is updated, the package filename is rewritten to reflect the new
+        publisher hash, and then re-signed. If the publisher already matches,
+        only re-signing happens (the file is left in place).
+
+        Idempotent: re-running with the same -Publisher is a no-op for the
+        manifest portion (only the signing step runs again).
+
+        For pure key rotation (publisher stays the same), call
+        Invoke-MsixSigning directly instead — it skips the unpack/repack cycle.
+
+    .PARAMETER PackagePath
+        Path to the .msix / .appx file to re-sign. Accepts pipeline input.
+
+    .PARAMETER Publisher
+        New Identity/Publisher distinguished name, e.g. 'CN=Contoso, O=Contoso, C=US'.
+        Must match the Subject of the signing certificate. Omit to keep the
+        existing value.
+
+    .PARAMETER Pfx
+        Path to the signing certificate (.pfx).
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
 
     .EXAMPLE
-        Update-MsixSigner -PackagePath app.msix -Publisher 'CN=Contoso' -Pfx cert.pfx -PfxPassword 'P@ss'
+        # Change publisher and sign with a dev cert
+        $pw = Read-Host -AsSecureString
+        Update-MsixSigner -PackagePath app.msix `
+            -Publisher 'CN=Contoso, O=Contoso, C=US' `
+            -Pfx cert.pfx -PfxPassword $pw
+
+    .EXAMPLE
+        # Just re-sign (publisher unchanged)
+        Update-MsixSigner -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw
+
+    .OUTPUTS
+        None. Writes the (possibly renamed) signed package to disk and logs
+        the final path via Write-MsixLog.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -192,6 +265,44 @@ function New-MsixPsfJson {
     <#
     .SYNOPSIS
         Generates PSF config.json content from an AppxManifest and fixup parameters.
+
+    .DESCRIPTION
+        Legacy helper that emits a flat config.json string for a single fixup
+        type. Produces incorrect output for multi-application packages — kept
+        only for compatibility with first-generation scripts.
+
+        For new code, build the config with the typed helpers
+        (New-MsixPsfFileRedirectionConfig, New-MsixPsfRegLegacyConfig, etc.)
+        and pass them to Add-MsixPsfV2 -Fixups.
+
+    .PARAMETER AppxManifest
+        Path to the AppxManifest.xml that describes the applications.
+
+    .PARAMETER Fixup
+        Which fixup to emit. One of: FileRedirectionFixup, TraceFixup,
+        WaitForDebuggerFixup, DynamicLibraryFixup, EnvVarFixup,
+        KernelTraceControl, RegLegacyFixups.
+
+    .PARAMETER Patterns
+        Pattern strings — interpretation depends on -Fixup.
+
+    .PARAMETER Hive
+        HKCU or HKLM. Only meaningful for RegLegacyFixups.
+
+    .PARAMETER Access
+        Access level for RegLegacyFixups (FULL2RW, FULL2R, Full2MaxAllowed,
+        RW2R, RW2MaxAllowed).
+
+    .PARAMETER Base
+        Base path for FileRedirectionFixup.
+
+    .EXAMPLE
+        # Legacy: emit a FileRedirection config.json for the first app
+        New-MsixPsfJson -AppxManifest .\AppxManifest.xml `
+            -Fixup FileRedirectionFixup -Base 'logs' -Patterns '.*\.log'
+
+    .OUTPUTS
+        [string] JSON document. Emits a deprecation warning on every call.
 
     .NOTES
         Prefer the typed helpers (New-MsixPsfFileRedirectionConfig, etc.) combined
@@ -262,8 +373,12 @@ function Add-MsixAlias {
 
     .DESCRIPTION
         Adds a windows.appExecutionAlias extension for each targeted application.
-        The alias name matches the application's executable leaf name. Idempotent:
-        skips apps that already have an alias declared.
+        The alias name matches the application's executable leaf name (or, when
+        the executable is a PsfLauncher, the app Id with a `.exe` suffix).
+        Idempotent: skips apps that already have an alias declared.
+
+        Suggestions come from Get-MsixAliasCandidate, which also feeds the
+        `AppExecutionAlias` finding in Get-MsixHeuristicFinding.
 
     .PARAMETER PackagePath
         Path to the .msix file to modify.
@@ -279,13 +394,28 @@ function Add-MsixAlias {
         If set, write the modified package here instead of overwriting -PackagePath.
 
     .PARAMETER SkipSigning
-        Do not sign the resulting package.
+        Do not sign the resulting package. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path. Ignored when -SkipSigning is set.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        When signing fails, copy the unsigned scratch package here so the
+        caller can inspect or hand-sign it. The original target is left
+        intact regardless.
 
     .EXAMPLE
-        Add-MsixAlias -PackagePath app.msix -All -Pfx cert.pfx -PfxPassword 'P@ss'
+        # Add aliases to every app and sign in one shot (idempotent)
+        Add-MsixAlias -PackagePath app.msix -All `
+            -Pfx cert.pfx -PfxPassword $pw
 
     .EXAMPLE
-        Add-MsixAlias -PackagePath app.msix -AppIds 'App','App2' -NoSign -OutputPath app-alias.msix
+        # Test/dev: add aliases for two specific apps, no signing
+        Add-MsixAlias -PackagePath app.msix `
+            -AppIds 'App','App2' -SkipSigning -OutputPath app-alias.msix
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -384,6 +514,11 @@ function Remove-MsixStartMenuEntry {
         Sets AppListEntry=none on selected (or all) applications, hiding them
         from the Start menu.
 
+    .DESCRIPTION
+        Useful for helper / background-only apps that should not appear in the
+        user's Start menu. Idempotent: re-running on apps already hidden logs
+        an info line and leaves the manifest unchanged.
+
     .PARAMETER PackagePath
         Path to the .msix file.
 
@@ -397,13 +532,27 @@ function Remove-MsixStartMenuEntry {
         Write the modified package here instead of overwriting -PackagePath.
 
     .PARAMETER SkipSigning
-        Do not sign the resulting package.
+        Do not sign the resulting package. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        When signing fails, copy the unsigned scratch package here so the
+        caller can inspect or hand-sign it. The original target is left intact.
 
     .EXAMPLE
-        Remove-MsixStartMenuEntry -PackagePath app.msix -All -Pfx cert.pfx -PfxPassword 'P@ss'
+        # Hide every app from Start and re-sign (idempotent)
+        Remove-MsixStartMenuEntry -PackagePath app.msix -All `
+            -Pfx cert.pfx -PfxPassword $pw
 
     .EXAMPLE
-        Remove-MsixStartMenuEntry -PackagePath app.msix -AppIds 'Helper' -NoSign
+        # Hide just the Helper app, skip signing for now
+        Remove-MsixStartMenuEntry -PackagePath app.msix `
+            -AppIds 'Helper' -SkipSigning
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -457,6 +606,12 @@ function Add-MsixStartMenuFolder {
     .SYNOPSIS
         Sets a VisualGroup (Start menu folder) on all applications in a package.
 
+    .DESCRIPTION
+        Sets the VisualGroup attribute on every Application/VisualElements
+        node. All apps in the package will be grouped under the supplied
+        folder name in the Start menu. Idempotent — re-running with the
+        same FolderName produces the same manifest.
+
     .PARAMETER PackagePath
         Path to the .msix file.
 
@@ -467,13 +622,27 @@ function Add-MsixStartMenuFolder {
         Write the modified package here instead of overwriting -PackagePath.
 
     .PARAMETER SkipSigning
-        Do not sign the resulting package.
+        Do not sign the resulting package. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        When signing fails, copy the unsigned scratch package here so the
+        caller can inspect or hand-sign it.
 
     .EXAMPLE
-        Add-MsixStartMenuFolder -PackagePath app.msix -FolderName 'Contoso Apps' -Pfx cert.pfx -PfxPassword 'P@ss'
+        # Group all apps under 'Contoso Apps' and sign (idempotent)
+        Add-MsixStartMenuFolder -PackagePath app.msix `
+            -FolderName 'Contoso Apps' -Pfx cert.pfx -PfxPassword $pw
 
     .EXAMPLE
-        Add-MsixStartMenuFolder -PackagePath app.msix -FolderName 'Tools' -NoSign
+        # Dev: change folder, skip signing
+        Add-MsixStartMenuFolder -PackagePath app.msix `
+            -FolderName 'Tools' -SkipSigning
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(

@@ -59,6 +59,28 @@ function Get-MsixStandardScript {
     <#
     .SYNOPSIS
         Lists the standard-script templates this module ships with.
+
+    .DESCRIPTION
+        Returns one entry per template in the module's templates\ folder. The
+        catalogue is used as input to New-MsixStandardScript and
+        Add-MsixStandardScript and lists the placeholder parameters that
+        each template needs (RequiredParams) and the ones it accepts
+        optionally (OptionalParams, with defaults).
+
+        The module currently ships five PSADT-flavoured templates:
+        CreateShortcut, CopyIconToAppData, CleanupOldUserData,
+        RegisterFileAssociation, CustomerSettingsBootstrap.
+
+    .OUTPUTS
+        [pscustomobject] one per template, with Name, Description,
+        RequiredParams, OptionalParams, Template (full path on disk).
+
+    .EXAMPLE
+        Get-MsixStandardScript | Format-Table Name, Description
+
+    .EXAMPLE
+        # Inspect the placeholders for a specific template
+        Get-MsixStandardScript | Where-Object Name -eq 'CreateShortcut'
     #>
     [CmdletBinding()]
     param()
@@ -124,17 +146,30 @@ function New-MsixStandardScript {
     .PARAMETER OutputPath
         Where to write the generated .ps1.
 
-    .PARAMETER Pfx / PfxPassword
-        Sign the output with this PFX. Omit to leave unsigned.
+    .PARAMETER Pfx
+        Path to a code-signing PFX. If supplied, the rendered script is signed
+        via Set-MsixScriptSignature. Omit to leave the script unsigned.
+
+    .PARAMETER PfxPassword
+        SecureString password for the PFX. Required when -Pfx is supplied.
 
     .PARAMETER TimestampUrl
-        RFC 3161 timestamp server. Default: DigiCert.
+        RFC 3161 timestamp server. Default: http://timestamp.digicert.com.
+
+    .OUTPUTS
+        [System.IO.FileInfo] for the generated .ps1.
 
     .EXAMPLE
         New-MsixStandardScript -Name CreateShortcut `
             -Parameters @{ DisplayName='Contoso Expenses'; Target='contosoexpenses.exe' } `
             -OutputPath C:\src\createshortcut.ps1 `
-            -Pfx cert.pfx -PfxPassword 'P@ss'
+            -Pfx cert.pfx -PfxPassword (Read-Host -AsSecureString)
+
+    .EXAMPLE
+        # Render unsigned, for local testing
+        New-MsixStandardScript -Name CleanupOldUserData `
+            -Parameters @{ Paths='%AppData%\Contoso\v1'; OnlyOlderThanDays='30' } `
+            -OutputPath .\cleanup.ps1
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -192,14 +227,22 @@ function Set-MsixScriptSignature {
     .PARAMETER ScriptPath
         .ps1 (or .psm1) file to sign.
 
-    .PARAMETER Pfx / PfxPassword
-        PFX certificate. Required.
+    .PARAMETER Pfx
+        Path to the PFX certificate. Required.
+
+    .PARAMETER PfxPassword
+        SecureString password for the PFX. Required.
 
     .PARAMETER TimestampUrl
-        RFC 3161 server. Default: DigiCert.
+        RFC 3161 server. Default: http://timestamp.digicert.com.
+
+    .OUTPUTS
+        [System.Management.Automation.Signature] returned by
+        Set-AuthenticodeSignature.
 
     .EXAMPLE
-        Set-MsixScriptSignature -ScriptPath createshortcut.ps1 -Pfx cert.pfx -PfxPassword 'P@ss'
+        Set-MsixScriptSignature -ScriptPath .\createshortcut.ps1 `
+            -Pfx .\cert.pfx -PfxPassword (Read-Host -AsSecureString)
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
@@ -256,21 +299,59 @@ function Add-MsixStandardScript {
     .PARAMETER ScriptFileName
         Name of the .ps1 inside the package (default: <Name>.ps1).
 
-    .PARAMETER RunOnce / WaitForScriptToFinish / ShowWindow / RunInVirtualEnvironment / StopOnScriptError / Timeout / EndScript
-        Forwarded to New-MsixPsfStartScriptConfig.
+    .PARAMETER RunOnce
+        Forwarded to New-MsixPsfStartScriptConfig. Run the script only on the
+        first launch of the app.
 
-    .PARAMETER Pfx / PfxPassword
-        Signing certificate (used for both the script and the repacked .msix).
+    .PARAMETER WaitForScriptToFinish
+        Forwarded to New-MsixPsfStartScriptConfig. Block app launch until the
+        startScript exits.
 
-    .PARAMETER OutputPath / SkipSigning
-        Forwarded to Add-MsixPsfV2.
+    .PARAMETER ShowWindow
+        Forwarded to New-MsixPsfStartScriptConfig. Show the script's console
+        window (otherwise hidden).
+
+    .PARAMETER RunInVirtualEnvironment
+        Forwarded to New-MsixPsfStartScriptConfig. Run the script inside the
+        package's virtual environment.
+
+    .PARAMETER StopOnScriptError
+        Forwarded to New-MsixPsfStartScriptConfig. Abort app launch if the
+        script returns a non-zero exit code.
+
+    .PARAMETER Timeout
+        Forwarded to New-MsixPsfStartScriptConfig. Timeout in seconds. 0 = no
+        timeout (default).
+
+    .PARAMETER EndScript
+        Forwarded to New-MsixPsfStartScriptConfig. Treat the script as an
+        endScript instead of a startScript.
+
+    .PARAMETER Pfx
+        Path to the code-signing PFX. Used for BOTH the rendered .ps1 and
+        the repacked .msix.
+
+    .PARAMETER PfxPassword
+        SecureString password for -Pfx.
+
+    .PARAMETER OutputPath
+        Forwarded to Add-MsixPsfV2. Where to write the repacked .msix.
+        Defaults to overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Forwarded to Add-MsixPsfV2. Skip signing of both the script and the
+        package. Alias: -NoSign.
+
+    .OUTPUTS
+        [pscustomobject] returned by Add-MsixPsfV2 (PackagePath, fixups list,
+        etc.).
 
     .EXAMPLE
-        Add-MsixStandardScript -PackagePath app.msix -AppId 'App' `
+        Add-MsixStandardScript -PackagePath .\app.msix -AppId 'App' `
             -Name CreateShortcut `
             -Parameters @{ DisplayName='Contoso'; Target='contoso.exe' } `
             -RunOnce -WaitForScriptToFinish `
-            -Pfx cert.pfx -PfxPassword 'P@ss'
+            -Pfx .\cert.pfx -PfxPassword (Read-Host -AsSecureString)
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(

@@ -76,9 +76,26 @@ function New-MsixManifestDocument {
         so tests and transform helpers can use consistent XPath without package
         unpack/repack IO.
 
+    .PARAMETER Path
+        Filesystem path to an XML file (typically an AppxManifest.xml).
+
+    .PARAMETER XmlText
+        Raw XML as a string.
+
+    .PARAMETER Document
+        Pre-parsed [xml] document. Use this when you already have a manifest
+        loaded (e.g. from Get-MsixManifest).
+
+    .OUTPUTS
+        [pscustomobject] with PSTypeName MSIX.ManifestDocument, exposing
+        Document, NamespaceManager, and Package properties.
+
     .EXAMPLE
         $m = New-MsixManifestDocument -XmlText $sampleManifest
         Get-MsixManifestApplication -Manifest $m -AppId App
+
+    .EXAMPLE
+        $m = New-MsixManifestDocument -Path 'C:\workspace\AppxManifest.xml'
     #>
     [CmdletBinding(DefaultParameterSetName = 'Path')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
@@ -115,6 +132,26 @@ function Select-MsixManifestNode {
     <#
     .SYNOPSIS
         Selects the first manifest node matching a namespace-aware XPath.
+
+    .DESCRIPTION
+        Uses the namespace manager attached to MSIX.ManifestDocument so XPath
+        like '//uap10:Folder' resolves correctly without callers having to
+        wire up prefixes themselves. Returns $null if no node matches. For
+        every-match queries use Select-MsixManifestNodes.
+
+    .PARAMETER Manifest
+        Either an [xml] document or an MSIX.ManifestDocument wrapper.
+
+    .PARAMETER XPath
+        Namespace-aware XPath expression. The 'f:' prefix is bound to the
+        foundation namespace; uap/uap10/desktop9/com/rescap etc. are also
+        pre-registered.
+
+    .OUTPUTS
+        [System.Xml.XmlNode] or $null.
+
+    .EXAMPLE
+        Select-MsixManifestNode -Manifest $m -XPath '//f:Identity'
     #>
     [CmdletBinding()]
     [OutputType([System.Xml.XmlNode])]
@@ -138,6 +175,23 @@ function Select-MsixManifestNodes {
     <#
     .SYNOPSIS
         Selects all manifest nodes matching a namespace-aware XPath.
+
+    .DESCRIPTION
+        Plural counterpart to Select-MsixManifestNode. Always returns an
+        array (possibly empty) so callers can pipe without null checks.
+
+    .PARAMETER Manifest
+        Either an [xml] document or an MSIX.ManifestDocument wrapper.
+
+    .PARAMETER XPath
+        Namespace-aware XPath expression.
+
+    .OUTPUTS
+        [System.Xml.XmlNode[]] (array, possibly empty).
+
+    .EXAMPLE
+        Select-MsixManifestNodes -Manifest $m -XPath '//f:Capability' |
+            ForEach-Object { $_.GetAttribute('Name') }
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '')]
@@ -226,6 +280,27 @@ function Get-MsixManifest {
 }
 
 function Save-MsixManifest {
+    <#
+    .SYNOPSIS
+        Writes an [xml] manifest document back to disk.
+
+    .DESCRIPTION
+        Thin wrapper around [System.Xml.XmlDocument]::Save with a debug log
+        line. Used after Set-MsixManifestPublisher / Set-MsixManifestIdentity
+        / Add-MsixManifestNamespace mutations to persist the result for the
+        repack stage.
+
+    .PARAMETER Manifest
+        The manifest [xml] document, normally returned by Get-MsixManifest.
+
+    .PARAMETER Path
+        Destination file. Overwrites silently.
+
+    .EXAMPLE
+        [xml]$m = Get-MsixManifest "$workspace\AppxManifest.xml"
+        Set-MsixManifestPublisher -Manifest $m -Publisher 'CN=Contoso, O=Contoso, C=NL'
+        Save-MsixManifest -Manifest $m -Path "$workspace\AppxManifest.xml"
+    #>
     param(
         [Parameter(Mandatory)]
         [xml]$Manifest,
@@ -241,6 +316,23 @@ function Add-MsixManifestNamespace {
     .SYNOPSIS
         Idempotently adds an xmlns prefix and URI to the Package element,
         and appends the prefix to IgnorableNamespaces if not already present.
+
+    .DESCRIPTION
+        Knows the standard MSIX prefixes (uap, uap2..uap10, desktop,
+        desktop2/4/6/9, com, rescap, virtualization). Resolves the URI from
+        the module's internal namespace table; throws on unknown prefixes
+        with the list of supported values. Re-running with the same prefix
+        is a no-op.
+
+    .PARAMETER Manifest
+        Manifest [xml] document being mutated in place.
+
+    .PARAMETER Prefix
+        One of the known short prefixes (e.g. 'desktop9', 'rescap', 'uap10').
+
+    .EXAMPLE
+        Add-MsixManifestNamespace -Manifest $m -Prefix 'desktop9'
+        # Idempotent: safe to call again.
     #>
     param(
         [Parameter(Mandatory)]
@@ -282,6 +374,34 @@ function Get-MsixManifestApplication {
           First (default) — returns the first Application element.
           ById            — returns the single Application matching -AppId.
           All             — returns every Application as an array.
+
+        Accepts either an [xml] document (typical from Get-MsixManifest) or
+        an MSIX.ManifestDocument wrapper (from New-MsixManifestDocument).
+
+    .PARAMETER Manifest
+        The manifest [xml] document or MSIX.ManifestDocument wrapper.
+
+    .PARAMETER AppId
+        (ById set only.) The Id attribute of the Application to return.
+
+    .PARAMETER All
+        (All set only.) Switch to return every Application as an array.
+
+    .OUTPUTS
+        [System.Xml.XmlNode] for First/ById, [System.Xml.XmlNode[]] for All.
+
+    .EXAMPLE
+        # First set (default) — get the primary entry-point application
+        $app = Get-MsixManifestApplication -Manifest $m
+
+    .EXAMPLE
+        # ById set — fetch a specific Application by its Id attribute
+        $tool = Get-MsixManifestApplication -Manifest $m -AppId 'ContosoTool'
+
+    .EXAMPLE
+        # All set — iterate every Application in the package
+        Get-MsixManifestApplication -Manifest $m -All |
+            ForEach-Object { $_.GetAttribute('Id') }
     #>
     [CmdletBinding(DefaultParameterSetName = 'First')]
     param(
@@ -358,12 +478,30 @@ function Set-MsixManifestPublisher {
     <#
     .SYNOPSIS
         Pure in-memory transform: updates Identity.Publisher on the manifest.
+
     .DESCRIPTION
         Testable without unpacking a package — accepts an [xml] document and
         mutates it in place. Returns the same document for pipeline use.
+
+        Idempotent: writing the same Publisher twice is a no-op. To change
+        Name and Version at the same time use Set-MsixManifestIdentity. For a
+        higher-level recipe-driven transform (rename + capabilities + version
+        bump in one pass) see Get-Help Invoke-MsixManifestTransform.
+
+    .PARAMETER Manifest
+        Manifest [xml] document (caller-owned; mutated in place).
+
+    .PARAMETER Publisher
+        New Distinguished Name. Must match the signing certificate's Subject
+        exactly or MSIX install fails with 0x8007000B.
+
+    .OUTPUTS
+        [System.Xml.XmlDocument] — the same instance, returned for chaining.
+
     .EXAMPLE
-        [xml]$m = $manifestXml
+        [xml]$m = Get-MsixManifest "$ws\AppxManifest.xml"
         Set-MsixManifestPublisher -Manifest $m -Publisher 'CN=Contoso, O=Contoso, C=NL'
+        Save-MsixManifest -Manifest $m -Path "$ws\AppxManifest.xml"
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
         Justification = 'Pure in-memory transform on a caller-owned XmlDocument; no IO, no side effects outside the input object.')]
@@ -383,9 +521,36 @@ function Set-MsixManifestIdentity {
         Pure in-memory transform: updates one or more Identity attributes
         (Name, Publisher, Version) on the manifest. Only the parameters you
         supply are changed.
+
+    .DESCRIPTION
+        Companion to Set-MsixManifestPublisher when you also need to rename
+        the package or bump the version in a single mutation. Idempotent
+        per-attribute. For multi-step transforms (capabilities + identity +
+        MaxVersionTested) wrapped in one call see Get-Help
+        Invoke-MsixManifestTransform.
+
+    .PARAMETER Manifest
+        Manifest [xml] document (caller-owned; mutated in place).
+
+    .PARAMETER Name
+        Optional new Identity.Name.
+
+    .PARAMETER Publisher
+        Optional new Identity.Publisher (Distinguished Name).
+
+    .PARAMETER Version
+        Optional new Identity.Version. Validated against the
+        ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ pattern.
+
+    .OUTPUTS
+        [System.Xml.XmlDocument] — the same instance, returned for chaining.
+
     .EXAMPLE
+        # Bump the version only
         Set-MsixManifestIdentity -Manifest $m -Version '2.0.0.0'
+
     .EXAMPLE
+        # Rename + repub + version bump in one call
         Set-MsixManifestIdentity -Manifest $m -Name 'Contoso.App' `
             -Publisher 'CN=Contoso, O=Contoso, C=NL' -Version '1.2.3.4'
     #>
@@ -408,6 +573,27 @@ function Set-MsixManifestIdentity {
 }
 
 function Get-MsixManifestNamespaceUri {
+    <#
+    .SYNOPSIS
+        Returns the full XML namespace URI for a known MSIX prefix.
+
+    .DESCRIPTION
+        Looks up the prefix in the module's namespace table (uap, uap2..uap10,
+        desktop, desktop2/4/6/9, com, rescap, virtualization). Returns $null
+        for unknown prefixes. Pair with Add-MsixManifestNamespace and
+        XmlDocument.CreateElement when crafting prefixed elements.
+
+    .PARAMETER Prefix
+        Short MSIX namespace prefix (e.g. 'desktop9').
+
+    .OUTPUTS
+        [string] or $null when the prefix is unknown.
+
+    .EXAMPLE
+        $uri = Get-MsixManifestNamespaceUri 'desktop9'
+        $el  = $manifest.CreateElement('desktop9:Extension', $uri)
+    #>
+    [OutputType([string])]
     param([string]$Prefix)
     return $script:KnownNamespaces[$Prefix]
 }
@@ -417,6 +603,26 @@ function Set-MsixManifestMaxVersionTested {
     .SYNOPSIS
         Ensures MaxVersionTested is at least the specified build number.
         Pass -MinBuild with the feature's required build (e.g. 19041, 22000).
+
+    .DESCRIPTION
+        Many manifest extensions only activate when MaxVersionTested on the
+        TargetDeviceFamily element is at or above a specific build:
+          17134 — desktop4 modern context menus (1803)
+          19041 — desktop6 file/registry virtualization (2004)
+          22000 — desktop9 legacy IContextMenu handlers (Win11 21H2)
+          26100 — Win32 App Isolation rescap capabilities
+
+        The function is idempotent: bumps only when the current value is
+        lower than -MinBuild. Mutates in place.
+
+    .PARAMETER Manifest
+        Manifest [xml] document.
+
+    .PARAMETER MinBuild
+        Minimum Windows build number to advertise. Default 19041.
+
+    .EXAMPLE
+        Set-MsixManifestMaxVersionTested -Manifest $m -MinBuild 22000
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(

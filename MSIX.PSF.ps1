@@ -18,8 +18,32 @@ function New-MsixPsfFileRedirectionConfig {
     <#
     .SYNOPSIS
         Builds a FileRedirectionFixup config hashtable for use with Add-MsixPsfV2.
+
+    .DESCRIPTION
+        Redirects file I/O matching one or more regex patterns under -Base
+        into a writable, per-user location at runtime. Use this when an app
+        writes log files, temp data, or settings to a folder that MSIX
+        containerises as read-only.
+
+    .PARAMETER Base
+        Folder (relative to the chosen path type) whose contents are subject
+        to redirection. Use 'logs' for VFS\ProgramFilesX64\<App>\logs etc.
+
+    .PARAMETER Patterns
+        One or more regex strings matched against filenames in -Base.
+
+    .PARAMETER PathType
+        How -Base is anchored: packageRelative (default), packageDriveRelative,
+        or knownFolderRelative.
+
+    .OUTPUTS
+        [hashtable] suitable for Add-MsixPsfV2 -Fixups.
+
     .EXAMPLE
-        New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log','.*\.tmp'
+        # Chain into Add-MsixPsfV2
+        $fixup = New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log','.*\.tmp'
+        Add-MsixPsfV2 -PackagePath app.msix -Fixups @($fixup) `
+            -Pfx cert.pfx -PfxPassword $pw
     #>
     [OutputType([hashtable])]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
@@ -52,6 +76,24 @@ function New-MsixPsfRegLegacyConfig {
           - DeletionMarker    suppress reads of explicitly-deleted keys
           - Hklm2Hkcu         redirect HKLM writes to HKCU (per-user)
 
+    .PARAMETER Hive
+        Registry hive the rule applies to: HKCU or HKLM.
+
+    .PARAMETER Patterns
+        Key-path regex patterns (relative to -Hive) the rule matches.
+
+    .PARAMETER Type
+        Behaviour: ModifyKeyAccess (default), FakeDelete, DeletionMarker,
+        or Hklm2Hkcu.
+
+    .PARAMETER Access
+        Required when -Type is ModifyKeyAccess. Downgrade mapping like
+        Full2MaxAllowed, Full2RW, Full2R, RW2R, RW2MaxAllowed, or
+        NotAllowed.
+
+    .OUTPUTS
+        [hashtable] suitable for Add-MsixPsfV2 -Fixups.
+
     .EXAMPLE
         # Modify access mask
         New-MsixPsfRegLegacyConfig -Type ModifyKeyAccess -Hive HKCU `
@@ -63,8 +105,11 @@ function New-MsixPsfRegLegacyConfig {
             -Patterns 'SOFTWARE\App\Uninstall'
 
     .EXAMPLE
-        # Send legacy HKLM writes to HKCU instead
-        New-MsixPsfRegLegacyConfig -Type Hklm2Hkcu -Hive HKLM -Patterns 'SOFTWARE\App\*'
+        # Send legacy HKLM writes to HKCU instead, then chain into Add-MsixPsfV2
+        $fixup = New-MsixPsfRegLegacyConfig -Type Hklm2Hkcu -Hive HKLM `
+            -Patterns 'SOFTWARE\App\*'
+        Add-MsixPsfV2 -PackagePath app.msix -Fixups @($fixup) `
+            -Pfx cert.pfx -PfxPassword $pw
     #>
     [OutputType([hashtable])]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
@@ -106,8 +151,22 @@ function New-MsixPsfEnvVarConfig {
     <#
     .SYNOPSIS
         Builds an EnvVarFixup config hashtable for use with Add-MsixPsfV2.
+
+    .DESCRIPTION
+        Injects environment variables into the target process at startup
+        without modifying the user or machine environment. Use for apps that
+        need a configuration var set inside the package container only.
+
+    .PARAMETER Variables
+        Hashtable of name/value pairs to set for the target process.
+
+    .OUTPUTS
+        [hashtable] suitable for Add-MsixPsfV2 -Fixups.
+
     .EXAMPLE
-        New-MsixPsfEnvVarConfig -Variables @{ MY_VAR = 'value'; ANOTHER = 'val2' }
+        $env = New-MsixPsfEnvVarConfig -Variables @{ MY_VAR = 'value'; ANOTHER = 'val2' }
+        Add-MsixPsfV2 -PackagePath app.msix -Fixups @($env) `
+            -Pfx cert.pfx -PfxPassword $pw
     #>
     [OutputType([hashtable])]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
@@ -210,8 +269,25 @@ function New-MsixPsfArgument {
 
         Maps to the top-level `applications[].arguments` field documented at
         https://learn.microsoft.com/en-us/windows/msix/psf/psf-launch-apps-with-parameters
+
+    .PARAMETER AppId
+        Application Id (as in AppxManifest.xml) the arguments apply to.
+
+    .PARAMETER Arguments
+        Command-line argument string passed to the application.
+
+    .PARAMETER WorkingDirectory
+        Optional package-relative working directory.
+
+    .OUTPUTS
+        [hashtable] suitable for Add-MsixPsfV2 -AppOptions.
+
     .EXAMPLE
-        New-MsixPsfArgument -AppId 'App' -Arguments '/bootfromsettingshortcut'
+        # Pass through to Add-MsixPsfV2 via -AppOptions
+        $opt   = New-MsixPsfArgument -AppId 'App' -Arguments '/bootfromsettingshortcut'
+        $fixup = New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log'
+        Add-MsixPsfV2 -PackagePath app.msix -Fixups @($fixup) `
+            -AppOptions @($opt) -Pfx cert.pfx -PfxPassword $pw
     #>
     [OutputType([hashtable])]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
@@ -269,8 +345,22 @@ function New-MsixPsfStartScriptConfig {
     .PARAMETER EndScript
         If specified, returned as endScript instead of startScript.
 
+    .OUTPUTS
+        [hashtable] suitable for Add-MsixPsfV2 -AppOptions.
+
     .EXAMPLE
-        New-MsixPsfStartScriptConfig -AppId 'App' -ScriptPath 'createshortcut.ps1' -RunOnce -WaitForScriptToFinish
+        # Pre-launch shortcut creation, blocking until finished
+        $opt = New-MsixPsfStartScriptConfig -AppId 'App' `
+            -ScriptPath 'createshortcut.ps1' -RunOnce -WaitForScriptToFinish
+        Add-MsixPsfV2 -PackagePath app.msix `
+            -Fixups @( New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log' ) `
+            -AppOptions @($opt) `
+            -AdditionalFiles @('C:\src\createshortcut.ps1') `
+            -Pfx cert.pfx -PfxPassword $pw
+
+    .EXAMPLE
+        # Post-exit cleanup
+        New-MsixPsfStartScriptConfig -AppId 'App' -ScriptPath 'cleanup.ps1' -EndScript
     #>
     [OutputType([hashtable])]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
@@ -310,8 +400,27 @@ function New-MsixPsfTraceConfig {
     <#
     .SYNOPSIS
         Builds a TraceFixup config hashtable for use with Add-MsixPsfV2.
+
+    .DESCRIPTION
+        TraceFixup logs filesystem and registry calls made by the target
+        process, classified by failure mode. Pair with DebugView (or
+        equivalent) to capture the trace stream while reproducing an issue.
+
+    .PARAMETER FilesystemLevel
+        How much filesystem activity to log: allFailures,
+        unexpectedFailures (default), or ignore.
+
+    .PARAMETER RegistryLevel
+        How much registry activity to log: allFailures, unexpectedFailures,
+        or ignore (default).
+
+    .OUTPUTS
+        [hashtable] suitable for Add-MsixPsfV2 -Fixups.
+
     .EXAMPLE
-        New-MsixPsfTraceConfig -FilesystemLevel allFailures
+        $trace = New-MsixPsfTraceConfig -FilesystemLevel allFailures
+        Add-MsixPsfV2 -PackagePath app.msix -Fixups @($trace) `
+            -Pfx cert.pfx -PfxPassword $pw
     #>
     [OutputType([hashtable])]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
@@ -431,15 +540,65 @@ function Add-MsixPsfV2 {
     .PARAMETER WorkingDirectory
         Optional package-relative working directory written to config.json.
 
+    .PARAMETER AppOptions
+        Hashtables produced by New-MsixPsfArgument or
+        New-MsixPsfStartScriptConfig. Merged into the matching application
+        entry in config.json by AppId.
+
+    .PARAMETER AdditionalFiles
+        Extra files to copy into the package's app folder before repack
+        (e.g. a .ps1 referenced by a startScript, a .lnk, icon files).
+
+    .PARAMETER OutputPath
+        Write the repacked package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the final signing step. Use when chaining multiple PSF /
+        manifest mutations and signing only at the very end with
+        Invoke-MsixSigning. Alias: -NoSign.
+
     .PARAMETER Pfx
         Path to PFX certificate for signing. Omit to use the machine store.
 
     .PARAMETER PfxPassword
-        Password for the PFX file (required when -Pfx is specified).
+        SecureString password for the PFX file (required when -Pfx is
+        specified).
 
     .EXAMPLE
-        $fix = New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log'
-        Add-MsixPsfV2 -PackagePath app.msix -Fixups $fix -Pfx cert.pfx -PfxPassword 'P@ss'
+        # File-redirection fixup: redirect log writes to a package-relative folder
+        $fixup = New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log'
+        Add-MsixPsfV2 -PackagePath app.msix -Fixups @($fixup) `
+            -Pfx cert.pfx -PfxPassword $pw
+
+    .EXAMPLE
+        # Chain multiple typed builders, stack fixups, sign once at the end
+        $fr   = New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log'
+        $env  = New-MsixPsfEnvVarConfig -Variables @{ MY_VAR = 'value' }
+        $wait = New-MsixPsfWaitForDebuggerConfig
+        Add-MsixPsfV2 -PackagePath app.msix -Fixups @($fr, $env, $wait) `
+            -Pfx cert.pfx -PfxPassword $pw
+
+    .EXAMPLE
+        # Start-script flow: copy the script in via -AdditionalFiles and
+        # bind it through New-MsixPsfStartScriptConfig
+        $script = New-MsixPsfStartScriptConfig -AppId 'App' `
+            -ScriptPath 'createshortcut.ps1' -RunOnce -WaitForScriptToFinish
+        $fixup  = New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log'
+        Add-MsixPsfV2 -PackagePath app.msix -Fixups @($fixup) `
+            -AppOptions @($script) `
+            -AdditionalFiles @('C:\src\createshortcut.ps1') `
+            -Pfx cert.pfx -PfxPassword $pw
+
+    .EXAMPLE
+        # Stage 1 of a chained mutation: skip signing now, sign at the end
+        Add-MsixPsfV2 -PackagePath app.msix -Fixups @($fixup) -SkipSigning
+        # ... more manifest edits ...
+        Invoke-MsixSigning -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw
+
+    .NOTES
+        Idempotent: re-running with the same fixup set merges new fixups
+        into the existing config.json by DLL name rather than rewriting
+        applications[] to reference PsfLauncher recursively.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(

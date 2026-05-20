@@ -46,11 +46,29 @@ function Get-MsixVcRuntimeReference {
           - Missing      References that are NOT present in the package
 
     .DESCRIPTION
-        Static check, nothing is mutated. Use Add-MsixVcRuntimeBundle to bring
-        the missing DLLs into the package.
+        Static check, nothing is mutated. The package is unpacked into a
+        temporary workspace, all PE files (.exe/.dll) are scanned for
+        references to known VC runtime DLLs via a best-effort string scan
+        (no dumpbin dependency), and the result is reported alongside what
+        the package already bundles.
+
+        Use Add-MsixVcRuntimeBundle to bring the missing DLLs into the
+        package.
 
     .PARAMETER PackagePath
         .msix file (will be unpacked into a workspace, then cleaned up).
+
+    .OUTPUTS
+        [pscustomobject] with:
+          - PackagePath  full path of the analysed file
+          - References   hashtable: dll name -> list of importing files
+          - Bundled      array of pscustomobject (Name, Path, SizeBytes,
+                         Architecture) for runtime DLLs already in the package
+          - Missing      string[] of runtime DLL names referenced but absent
+
+    .EXAMPLE
+        $r = Get-MsixVcRuntimeReference -PackagePath .\app.msix
+        $r.Missing
     #>
     [CmdletBinding()]
     param(
@@ -181,8 +199,32 @@ function Add-MsixVcRuntimeBundle {
     .PARAMETER Names
         Override the DLL list (default: missing DLLs detected by analysis).
 
-    .PARAMETER OutputPath / SkipSigning / Pfx / PfxPassword
-        See Add-MsixPsfV2.
+    .PARAMETER OutputPath
+        Where to write the repacked .msix. Defaults to overwriting
+        -PackagePath.
+
+    .PARAMETER SkipSigning
+        Do not re-sign after repacking. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Path to the signing PFX. Required unless -SkipSigning is set.
+
+    .PARAMETER PfxPassword
+        SecureString password for -Pfx.
+
+    .OUTPUTS
+        [pscustomobject] with PackagePath, Bundled (the DLL names copied in)
+        and Architecture. Nothing is returned when no DLLs were copied.
+
+    .EXAMPLE
+        Add-MsixVcRuntimeBundle -PackagePath .\app.msix `
+            -SourceFolder 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.40.33807\x64\Microsoft.VC143.CRT' `
+            -Pfx .\cert.pfx -PfxPassword (Read-Host -AsSecureString)
+
+    .EXAMPLE
+        # Bundle a specific DLL only
+        Add-MsixVcRuntimeBundle -PackagePath .\app.msix `
+            -SourceFolder C:\Redist -Names 'msvcp140.dll' -SkipSigning
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(

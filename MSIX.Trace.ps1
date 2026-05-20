@@ -25,7 +25,37 @@ function ConvertFrom-MsixTraceLine {
     <#
     .SYNOPSIS
         Parses a single Trace Fixup log line into a structured object.
-        Returns $null for lines that don't match the expected shape.
+
+    .DESCRIPTION
+        Accepts one line of OutputDebugString text emitted by PSF's
+        TraceFixup.dll (typically captured via DebugView "Save As"). Two
+        regexes run against the line:
+
+          1. The function/path/result triplet: 'Func: <path> -> RESULT'.
+          2. The leading '[hh:mm:ss.fff PID:TID]' header.
+
+        If the first regex doesn't match, the line is silently skipped
+        (returns nothing) so the parser can be used across mixed log files.
+        On a match, the function name is mapped to a coarse category
+        (filesystem / registry / module-load / other) which is convenient
+        for downstream filtering.
+
+    .PARAMETER Line
+        A single text line from a DebugView capture. Empty strings are
+        accepted (and produce no output). Pipeline input is supported so an
+        entire file can be streamed via Get-Content | ConvertFrom-MsixTraceLine.
+
+    .OUTPUTS
+        [pscustomobject] with Timestamp, ProcessId, ThreadId, Function,
+        Category, Path, Result, Raw. No output for lines that don't match.
+
+    .EXAMPLE
+        '[00:00:01.234 8472:A1B] CreateFileW: C:\Program Files\WindowsApps\app\log.txt -> ACCESS_DENIED' |
+            ConvertFrom-MsixTraceLine
+
+    .EXAMPLE
+        Get-Content .\debugview.log | ConvertFrom-MsixTraceLine |
+            Where-Object Category -eq 'filesystem'
     #>
     [CmdletBinding()]
     param(
@@ -76,6 +106,13 @@ function Get-MsixTraceOutput {
         Parses an entire DebugView log file (or any text file containing PSF
         TraceFixup output) into structured objects.
 
+    .DESCRIPTION
+        Streams the file through ConvertFrom-MsixTraceLine and applies the
+        optional ProcessId / FunctionPattern filters. Lines that don't look
+        like TraceFixup output (banners, blank lines, other process noise)
+        are dropped. Use Get-MsixTraceFailure to narrow further to
+        non-success rows.
+
     .PARAMETER Path
         Path to the saved log (DebugView "Save As" or any text dump that
         contains TraceFixup messages).
@@ -87,10 +124,15 @@ function Get-MsixTraceOutput {
         Optional regex matched against Function (e.g. '^Reg' to keep registry only).
 
     .OUTPUTS
-        [pscustomobject] one per parseable line.
+        [pscustomobject] one per parseable line. Same shape as
+        ConvertFrom-MsixTraceLine.
 
     .EXAMPLE
         Get-MsixTraceOutput -Path C:\debug\app.log | Format-Table
+
+    .EXAMPLE
+        # Registry activity only, for a specific process
+        Get-MsixTraceOutput -Path .\app.log -ProcessId 8472 -FunctionPattern '^Reg'
     #>
     [CmdletBinding()]
     param(
@@ -116,13 +158,32 @@ function Get-MsixTraceFailure {
     <#
     .SYNOPSIS
         Filters Get-MsixTraceOutput to only the rows whose Result indicates a
-        failure (anything other than SUCCESS / NO_ERROR / null).
+        failure (anything other than SUCCESS / NO_ERROR / ERROR_SUCCESS).
+
+    .DESCRIPTION
+        Convenience wrapper around Get-MsixTraceOutput that drops successful
+        operations, leaving the rows most useful for diagnosing fixup needs.
+        Feed the output into ConvertFrom-MsixTraceToFinding to produce the
+        same finding shape that Get-MsixStaticAnalysis emits.
 
     .PARAMETER Path
         Trace log path.
 
-    .PARAMETER ProcessId / FunctionPattern
-        Forwarded to Get-MsixTraceOutput.
+    .PARAMETER ProcessId
+        Optional filter forwarded to Get-MsixTraceOutput.
+
+    .PARAMETER FunctionPattern
+        Optional regex forwarded to Get-MsixTraceOutput.
+
+    .OUTPUTS
+        [pscustomobject] one per failing trace row.
+
+    .EXAMPLE
+        Get-MsixTraceFailure -Path .\app.log | Format-Table Function, Path, Result
+
+    .EXAMPLE
+        # Identify only registry-side failures
+        Get-MsixTraceFailure -Path .\app.log -FunctionPattern '^Reg'
     #>
     [CmdletBinding()]
     param(
@@ -156,10 +217,27 @@ function ConvertFrom-MsixTraceToFinding {
           - Registry HKLM + access denied      => RegLegacyFixups
           - LoadLibrary failure                => DynamicLibraryFixup (manual)
 
-        Findings are deduplicated by (Category + leaf path).
+        Findings are deduplicated by (Category + leaf path). Rows that
+        don't fit any category are dropped.
 
     .PARAMETER Failures
-        Output of Get-MsixTraceFailure.
+        Output of Get-MsixTraceFailure. Accepts pipeline input.
+
+    .OUTPUTS
+        [pscustomobject] one per finding, with Severity, Category, Symptom,
+        Recommendation, AppId, Evidence -- the same shape used elsewhere by
+        Get-MsixStaticAnalysis / Invoke-MsixInvestigation.
+
+    .EXAMPLE
+        # Saved DebugView trace -> structured findings -> investigation report
+        Get-MsixTraceFailure -Path .\app.log |
+            ConvertFrom-MsixTraceToFinding |
+            Invoke-MsixInvestigation -PackagePath .\app.msix
+
+    .EXAMPLE
+        Get-MsixTraceFailure -Path .\app.log |
+            ConvertFrom-MsixTraceToFinding |
+            Where-Object Category -eq 'FileRedirectionFixup'
     #>
     [CmdletBinding()]
     param(

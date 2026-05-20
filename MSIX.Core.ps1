@@ -21,6 +21,23 @@ function Get-MsixToolsRoot {
 
     .PARAMETER Refresh
         Drop the cached result and re-resolve from scratch.
+
+    .OUTPUTS
+        [string] Absolute path that contains a Tools\MakeAppx.exe.
+
+    .EXAMPLE
+        # First call resolves and caches; later calls are O(1)
+        $root = Get-MsixToolsRoot
+        & "$root\Tools\MakeAppx.exe" /?
+
+    .EXAMPLE
+        # Force a one-shot install if nothing is found
+        Get-MsixToolsRoot -AutoInstall
+
+    .EXAMPLE
+        # Pin a specific layout via env var (overrides every other source)
+        $env:MSIX_TOOLS_PATH = 'C:\tools\msix-sdk'
+        Get-MsixToolsRoot -Refresh
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -116,6 +133,26 @@ MakeAppx.exe not found. Pick ONE of these:
 }
 
 function Set-MsixToolsRoot {
+    <#
+    .SYNOPSIS
+        Pins the tools root used by every cmdlet in this session.
+
+    .DESCRIPTION
+        Validates that <Path>\Tools\MakeAppx.exe exists, then sets the
+        session-level cache that Get-MsixToolsRoot returns. Use this when
+        you have a vendored SDK layout and don't want to set
+        $env:MSIX_TOOLS_PATH globally.
+
+        Equivalent to setting $env:MSIX_TOOLS_PATH and then calling
+        Get-MsixToolsRoot -Refresh, but scoped to the current session only.
+
+    .PARAMETER Path
+        Folder that directly contains a Tools subfolder with MakeAppx.exe.
+
+    .EXAMPLE
+        Set-MsixToolsRoot -Path 'C:\tools\msix-sdk'
+        # Get-MsixToolsRoot now returns 'C:\tools\msix-sdk'.
+    #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
@@ -129,6 +166,35 @@ function Set-MsixToolsRoot {
 }
 
 function New-MsixWorkspace {
+    <#
+    .SYNOPSIS
+        Creates a fresh, GUID-stamped temp folder for an unpack/repack cycle.
+
+    .DESCRIPTION
+        Primarily used internally by Invoke-MsixPipeline, Add-MsixPsfV2, and
+        the context-menu cmdlets to keep multiple concurrent runs isolated.
+        Exposed for callers who script custom unpack/edit/repack flows
+        outside the high-level pipeline.
+
+        The caller is responsible for removing the workspace when done
+        (Remove-Item -Recurse -Force).
+
+    .PARAMETER PackageName
+        Short label baked into the folder name. Use the package base name to
+        make the workspace easy to identify while it exists.
+
+    .OUTPUTS
+        [string] Absolute path of the new directory.
+
+    .EXAMPLE
+        $ws = New-MsixWorkspace -PackageName 'Contoso.App'
+        try {
+            # unpack, edit, repack into $ws
+        } finally {
+            Remove-Item $ws -Recurse -Force
+        }
+    #>
+    [OutputType([string])]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(
         [Parameter(Mandatory)]
@@ -163,12 +229,23 @@ function Invoke-MsixProcess {
         naive parser for backward compatibility -- new callers MUST use -ArgumentList.
         Logs a warning to encourage migration.
 
+    .OUTPUTS
+        [pscustomobject] with ExitCode (int), StdOut (string), StdErr (string).
+
     .EXAMPLE
+        # Preferred: array form (each argument quoted correctly)
         Invoke-MsixProcess "$root\Tools\MakeAppx.exe" -ArgumentList @(
             'unpack', '/p', $packagePath, '/d', $workspace, '/o'
         )
+
+    .EXAMPLE
+        # DEPRECATED legacy single-string form — emits a warning. New callers
+        # MUST use -ArgumentList; this is retained only for older scripts.
+        Invoke-MsixProcess "$root\Tools\MakeAppx.exe" `
+            -Arguments "unpack /p `"$packagePath`" /d `"$workspace`" /o"
     #>
     [CmdletBinding(DefaultParameterSetName = 'ArgumentList')]
+    [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)]
         [string]$FilePath,
@@ -245,6 +322,37 @@ function Invoke-MsixProcess {
 }
 
 function Get-MsixPublisherId {
+    <#
+    .SYNOPSIS
+        Computes the Crockford-Base32-encoded SHA-256 publisher hash used by
+        MSIX for VFS paths and package family names.
+
+    .DESCRIPTION
+        Implements the algorithm Windows uses to derive PublisherId from a
+        certificate Subject (e.g. 'CN=Contoso, O=Contoso, C=NL'):
+          1. Encode Publisher as UTF-16LE.
+          2. SHA-256 the bytes; keep the first 8 bytes.
+          3. Re-encode those 8 bytes as 13 Crockford-Base32 characters.
+
+        Useful for predicting the install path under
+        %ProgramFiles%\WindowsApps\<Name>_<Version>_<Arch>__<PublisherId>
+        without having to install the package first.
+
+        Available under the legacy alias Get-PublisherIdFromPublisher.
+
+    .PARAMETER Publisher
+        Full publisher Distinguished Name exactly as it appears in
+        AppxManifest.xml's Identity/Publisher attribute. Matching is
+        case-sensitive — even a space difference yields a different ID.
+
+    .OUTPUTS
+        [string] 13-character lowercase publisher ID.
+
+    .EXAMPLE
+        Get-MsixPublisherId -Publisher 'CN=Contoso, O=Contoso, C=NL'
+        # -> e.g. 8wekyb3d8bbwe-style id
+    #>
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)]
         [string]$Publisher

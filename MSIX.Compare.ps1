@@ -139,12 +139,48 @@ function Compare-MsixPackage {
         Diffs two .msix files. Returns a structured result with manifest /
         file / signing changes.
 
-    .PARAMETER LeftPath / RightPath
-        The two packages to compare.
+    .DESCRIPTION
+        Unpacks both packages into temporary workspaces and compares:
+
+          - Manifest    Identity (Name, Publisher, Version, Architecture),
+                        Properties (DisplayName, PublisherDisplayName),
+                        Dependencies (MinVersion, MaxVersionTested),
+                        Capabilities, and the Application list (by Id and
+                        Executable).
+          - Files       Per relative path, computed as Added / Removed /
+                        Modified-Size / Modified-Content (SHA256). Paths
+                        matching -ExcludePathPattern are skipped (default
+                        list ignores AppxBlockMap, [Content_Types].xml,
+                        AppxSignature -- which churn on every build).
+          - Signing     Get-AuthenticodeSignature on both files; Status,
+                        Thumbprint, Subject are diffed.
+
+        Workspaces are cleaned up afterwards. The output is designed to be
+        consumed by CI gates: `if (-not $diff.HasChanges) { ... }`.
+
+    .PARAMETER LeftPath
+        The 'old' / baseline .msix file.
+
+    .PARAMETER RightPath
+        The 'new' / candidate .msix file.
 
     .PARAMETER ExcludePathPattern
-        Regexes of file relative paths to ignore in the file diff (good for
-        timestamps, [Content_Types].xml, AppxBlockMap, AppxSignature).
+        Regexes of file relative paths to ignore in the file diff. Default
+        is '\\AppxBlockMap', '\\\[Content_Types\]', '\\AppxSignature' --
+        package metadata that changes on every rebuild and is rarely
+        interesting.
+
+    .OUTPUTS
+        [pscustomobject] with:
+          - LeftPath, RightPath  the inputs.
+          - HasChanges           [bool] true if any of the three change-sets
+                                 below is non-empty.
+          - ManifestChanges      list of @{ Field; Left; Right }.
+          - FileChanges          list of @{ Path; Status; LeftSize; RightSize }
+                                 where Status is one of Added, Removed,
+                                 Modified-Size, Modified-Content.
+          - SigningChanges       list of @{ Field; Left; Right } for Status,
+                                 Thumbprint, Subject.
 
     .EXAMPLE
         $diff = Compare-MsixPackage -LeftPath old.msix -RightPath new.msix
@@ -153,9 +189,16 @@ function Compare-MsixPackage {
         $diff.FileChanges     | Format-Table
 
     .EXAMPLE
-        # Skip auto-generated package metadata
+        # Skip auto-generated package metadata (this is also the default)
         Compare-MsixPackage -LeftPath a.msix -RightPath b.msix `
             -ExcludePathPattern '\\AppxBlockMap','\\\[Content_Types\]','\\AppxSignature'
+
+    .EXAMPLE
+        # CI gate: fail the build when anything other than the version bumps
+        $diff = Compare-MsixPackage -LeftPath baseline.msix -RightPath candidate.msix
+        if ($diff.FileChanges.Count -gt 0 -or $diff.SigningChanges.Count -gt 0) {
+            throw 'Unexpected change set'
+        }
     #>
     [CmdletBinding()]
     param(

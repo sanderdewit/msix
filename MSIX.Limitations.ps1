@@ -141,6 +141,17 @@ function Get-MsixLimitation {
     .SYNOPSIS
         Lists known MSIX limitations and their workarounds.
 
+    .DESCRIPTION
+        Returns entries from the module's curated MSIX-limitation knowledge
+        base. Each entry describes a documented scenario where the MSIX
+        runtime cannot host an application as-is, along with the recommended
+        workaround (PSF fixup, manifest extension, or out-of-band install).
+
+        Most entries are sourced directly from Microsoft Learn and tagged
+        'msft-docs'; a smaller set comes from community/vendor practice and
+        is tagged 'mixed'. Use -ExcludeVendor to limit the output to the
+        documented-by-Microsoft subset.
+
     .PARAMETER Id
         Filter to one limitation by id.
 
@@ -151,10 +162,18 @@ function Get-MsixLimitation {
         Exclude entries where Source != 'msft-docs' (i.e. drop vendor-flavoured
         items that are not directly documented by Microsoft).
 
+    .OUTPUTS
+        [pscustomobject] one per limitation with properties Id, Title, Source,
+        Severity, Description, Workaround.
+
     .EXAMPLE
         Get-MsixLimitation -Severity blocker
+
     .EXAMPLE
         Get-MsixLimitation -ExcludeVendor | Format-Table Id, Severity, Title
+
+    .EXAMPLE
+        Get-MsixLimitation -Id 'install-dir-readonly' | Select-Object -ExpandProperty Workaround
     #>
     [CmdletBinding()]
     param(
@@ -179,10 +198,37 @@ function Test-MsixAgainstLimitation {
     .SYNOPSIS
         Inspects an MSIX file and reports which documented limitations are
         likely to apply, based on heuristics on the manifest and unpacked
-        content. Complements Get-MsixStaticAnalysis.
+        content.
+
+    .DESCRIPTION
+        Unpacks the supplied .msix into a temporary workspace, parses
+        AppxManifest.xml, and walks the Applications / Extensions tree to
+        flag scenarios that are known to hit MSIX limitations (e.g. an
+        executable nested under a subfolder triggers the CWD=System32 and
+        install-dir-readonly limitations; a windows.service extension flags
+        elevation requirements). Limitations that always apply to a packaged
+        Win32 app (HKLM redirection, private AppData) are appended to the
+        result for completeness.
+
+        Complements Get-MsixStaticAnalysis. The workspace is removed
+        afterwards.
 
     .PARAMETER PackagePath
         .msix file to analyse.
+
+    .OUTPUTS
+        [pscustomobject] one per matched limitation, deduplicated by Id. Same
+        shape as Get-MsixLimitation.
+
+    .EXAMPLE
+        Test-MsixAgainstLimitation -PackagePath .\app.msix |
+            Format-Table Id, Severity, Title
+
+    .EXAMPLE
+        # Merge with a full static-analysis run
+        $hits  = Test-MsixAgainstLimitation -PackagePath .\app.msix
+        $static = Get-MsixStaticAnalysis    -PackagePath .\app.msix
+        $hits, $static.Findings
     #>
     [CmdletBinding()]
     param(

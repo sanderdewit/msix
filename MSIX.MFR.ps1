@@ -39,6 +39,33 @@ function Get-MsixMfrKnownFolder {
     <#
     .SYNOPSIS
         Returns the documented MFR override folders by mode.
+
+    .DESCRIPTION
+        MFRFixup classifies redirected paths into two folder families:
+        'Traditional' VFS-style folders (Local AppData, ProgramFilesX64, …)
+        and 'Local' user-shell folders (Personal, Common Desktop, …). This
+        function returns those documented values so callers can validate
+        their MFR rules against the actual TMEditX-equivalent list rather
+        than passing free-form strings.
+
+        With -Mode Both (the default), an object with all three sets is
+        returned (Traditional, Local, COW options).
+
+    .PARAMETER Mode
+        Which folder family to list. One of 'Traditional', 'Local', 'Both'
+        (default).
+
+    .OUTPUTS
+        [string[]] when -Mode is Traditional or Local.
+        [pscustomobject] with Traditional/Local/COW properties when -Mode
+        is Both.
+
+    .EXAMPLE
+        Get-MsixMfrKnownFolder -Mode Traditional
+
+    .EXAMPLE
+        # Inspect all three sets in one go
+        (Get-MsixMfrKnownFolder).COW
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -64,6 +91,12 @@ function New-MsixMfrTraditionalRule {
     .SYNOPSIS
         Build a single Traditional-mode MFR redirection rule.
 
+    .DESCRIPTION
+        Produces a hashtable in the shape MFRFixup expects under
+        config.redirectedPaths.traditionalRedirectedPaths[]. The known folder
+        is validated against the documented Traditional set. The result is
+        intended to be fed to New-MsixPsfMfrConfig.
+
     .PARAMETER KnownFolder
         One of the values from Get-MsixMfrKnownFolder -Mode Traditional.
 
@@ -78,6 +111,14 @@ function New-MsixMfrTraditionalRule {
 
     .PARAMETER IlvAware
         If true, this rule respects uap10:installedLocationVirtualization.
+
+    .OUTPUTS
+        [hashtable] (ordered) suitable for New-MsixPsfMfrConfig
+        -TraditionalRules.
+
+    .EXAMPLE
+        New-MsixMfrTraditionalRule -KnownFolder 'ProgramFilesX64' `
+            -RelativePath 'Contoso/logs' -Patterns '.*\.log' -Cow enablePe
     #>
     [OutputType([hashtable])]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
@@ -112,11 +153,34 @@ function New-MsixMfrLocalRule {
     .SYNOPSIS
         Build a single Local-mode MFR redirection rule (user-shell folders).
 
+    .DESCRIPTION
+        Produces a hashtable in the shape MFRFixup expects under
+        config.redirectedPaths.localRedirectedPaths[]. Use this for redirected
+        paths that live under user-shell folders (Desktop, Documents, …)
+        instead of the classic VFS roots covered by
+        New-MsixMfrTraditionalRule.
+
     .PARAMETER KnownFolder
         One of: ThisPCDesktopFolder, Personal, Common Desktop, Common Documents.
 
-    .PARAMETER RelativePath / Patterns / Cow / IlvAware
-        See New-MsixMfrTraditionalRule.
+    .PARAMETER RelativePath
+        Path relative to that known folder.
+
+    .PARAMETER Patterns
+        Filename regex patterns to match.
+
+    .PARAMETER Cow
+        Copy-on-write behaviour for PE files: default | enablePe | disableAll.
+
+    .PARAMETER IlvAware
+        If true, this rule respects uap10:installedLocationVirtualization.
+
+    .OUTPUTS
+        [hashtable] (ordered) suitable for New-MsixPsfMfrConfig -LocalRules.
+
+    .EXAMPLE
+        New-MsixMfrLocalRule -KnownFolder 'Personal' `
+            -RelativePath 'Contoso' -Patterns '.*\.cfg'
     #>
     [OutputType([hashtable])]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
@@ -169,13 +233,20 @@ function New-MsixPsfMfrConfig {
     .PARAMETER GlobalCow
         Default copyOnWrite mode at the top level.
 
+    .OUTPUTS
+        [hashtable] with keys 'dll' (always 'MFRFixup.dll') and 'config'
+        (the ordered hashtable assembled from the supplied rules). Consumed
+        by Add-MsixPsfV2 -Fixups.
+
     .EXAMPLE
+        # Builder -> Add-MsixPsfV2 chain
         $rule = New-MsixMfrTraditionalRule -KnownFolder 'ProgramFilesX64' `
             -RelativePath 'Contoso/logs' -Patterns '.*\.log' -Cow enablePe
 
         $mfr = New-MsixPsfMfrConfig -TraditionalRules @($rule) -GlobalIlvAware $true
 
-        Add-MsixPsfV2 -PackagePath app.msix -Fixups @($mfr) -Pfx cert.pfx -PfxPassword 'P@ss'
+        Add-MsixPsfV2 -PackagePath .\app.msix -Fixups @($mfr) `
+            -Pfx .\cert.pfx -PfxPassword (Read-Host -AsSecureString)
     #>
     [OutputType([hashtable])]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]

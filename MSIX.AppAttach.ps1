@@ -26,10 +26,21 @@ function Install-MsixMgr {
         $env:MSIX_MSIXMGR_PATH so subsequent calls find it.
 
     .PARAMETER Destination
-        Where to extract. Defaults to "$Get-MsixToolsRoot\msixmgr".
+        Where to extract. Defaults to "(Get-MsixToolsRoot)\msixmgr".
 
     .PARAMETER Force
         Re-download even if msixmgr is already installed.
+
+    .OUTPUTS
+        [pscustomobject] with Path, Updated, and (on fresh install) Source URL.
+
+    .EXAMPLE
+        # Install msixmgr so New-MsixAppAttachImage can produce VHDX / CIM images.
+        Install-MsixMgr
+
+    .EXAMPLE
+        # Force a re-download (msixmgr updates infrequently).
+        Install-MsixMgr -Force
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -89,6 +100,24 @@ function Update-MsixMgr {
     .SYNOPSIS
         Refreshes msixmgr if the local copy is older than -MaxAgeDays
         (default 60). Microsoft updates msixmgr infrequently.
+
+    .DESCRIPTION
+        Age-based updater. Re-runs Install-MsixMgr -Force only when the cached
+        marker is older than -MaxAgeDays; otherwise reports the existing
+        install. Falls back to a fresh install if nothing is cached.
+
+    .PARAMETER Destination
+        Cache folder. Defaults to "(Get-MsixToolsRoot)\msixmgr".
+
+    .PARAMETER MaxAgeDays
+        Refresh threshold in days. Default 60.
+
+    .OUTPUTS
+        [pscustomobject] from Install-MsixMgr or a no-op summary.
+
+    .EXAMPLE
+        # Keep msixmgr fresh on a CI agent.
+        Update-MsixMgr
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -122,6 +151,20 @@ function Get-MsixMgrVersion {
     <#
     .SYNOPSIS
         Reports the version of msixmgr.exe currently resolved.
+
+    .DESCRIPTION
+        Reads file-version metadata of the resolved msixmgr.exe. Falls back to
+        Resolve-MsixMgrPath when -Path is omitted.
+
+    .PARAMETER Path
+        Explicit path to msixmgr.exe. Defaults to Resolve-MsixMgrPath.
+
+    .OUTPUTS
+        [pscustomobject] with Path, Installed, Version (FileVersion).
+
+    .EXAMPLE
+        # Quickly verify the installed msixmgr build.
+        Get-MsixMgrVersion
     #>
     [CmdletBinding()]
     param([string]$Path)
@@ -140,6 +183,30 @@ function Get-MsixMgrVersion {
 
 
 function Resolve-MsixMgrPath {
+    <#
+    .SYNOPSIS
+        Locates msixmgr.exe.
+
+    .DESCRIPTION
+        Resolution order:
+          1. $env:MSIX_MSIXMGR_PATH (set by Install-MsixMgr).
+          2. "(Get-MsixToolsRoot)\msixmgr\x64\msixmgr.exe" or its x86 sibling.
+          3. "(Get-MsixToolsRoot)\Tools\msixmgr.exe" (legacy layout).
+
+        Returns $null when nothing is found. Callers can then choose to invoke
+        Install-MsixMgr.
+
+    .OUTPUTS
+        [string] full path to msixmgr.exe, or $null.
+
+    .EXAMPLE
+        # Resolve msixmgr before invoking it directly.
+        $exe = Resolve-MsixMgrPath
+        if (-not $exe) { Install-MsixMgr | Out-Null; $exe = Resolve-MsixMgrPath }
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
     if ($env:MSIX_MSIXMGR_PATH -and (Test-Path $env:MSIX_MSIXMGR_PATH)) {
         return (Resolve-Path $env:MSIX_MSIXMGR_PATH).Path
     }
@@ -203,13 +270,36 @@ function New-MsixAppAttachImage {
     .PARAMETER ApplyAcls
         Apply the necessary ACLs for App Attach. Default: $true.
 
+    .OUTPUTS
+        [System.IO.FileInfo] for the produced .vhdx or .cim file.
+
     .NOTES
-        Requires administrator rights (New-VHD, Mount-DiskImage, Initialize-Disk, Format-Volume).
+        Requires elevation (Administrator) AND the Hyper-V PowerShell module
+        (New-VHD, Mount-DiskImage, Initialize-Disk, Format-Volume). Install
+        with:
+            Enable-WindowsOptionalFeature -Online ``
+                -FeatureName Microsoft-Hyper-V-Management-PowerShell
+
+        -WhatIf semantics: every state-changing step (VHDX creation and each
+        msixmgr unpack call) honors -WhatIf, so you can dry-run the
+        per-package plan against an existing OutputPath without modifying
+        anything.
 
     .EXAMPLE
-        New-MsixAppAttachImage -PackagePath app.msix -OutputPath C:\images\app.vhdx
+        # Single-package VHDX (auto-sized) — typical App Attach scenario.
+        New-MsixAppAttachImage -PackagePath app.msix `
+                               -OutputPath C:\images\app.vhdx
+
     .EXAMPLE
-        New-MsixAppAttachImage -PackagePath app.msix -OutputPath C:\images\app.cim -FileType cim
+        # Multi-package CIM — one image with several apps.
+        New-MsixAppAttachImage -PackagePath app1.msix,app2.msix `
+                               -OutputPath C:\images\bundle.cim -FileType cim
+
+    .EXAMPLE
+        # Dry-run a 5GB build to see the planned operations without creating the VHDX.
+        New-MsixAppAttachImage -PackagePath app.msix `
+                               -OutputPath C:\images\app.vhdx `
+                               -SizeGB 5 -WhatIf
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -304,8 +394,22 @@ function Mount-MsixAppAttachImage {
         Mounts a VHDX/CIM created by New-MsixAppAttachImage so its contents can
         be inspected.
 
+    .DESCRIPTION
+        Wraps Mount-DiskImage + Get-Partition + Get-Volume to surface the
+        sandbox-friendly mount info (drive letter, disk number) in a single
+        object. Use Dismount-MsixAppAttachImage to release it.
+
+    .PARAMETER ImagePath
+        Path to the .vhdx or .cim file produced by New-MsixAppAttachImage.
+
+    .OUTPUTS
+        [pscustomobject] with ImagePath, DiskNumber, DriveLetter.
+
     .EXAMPLE
-        Mount-MsixAppAttachImage -ImagePath C:\images\app.vhdx
+        # Inspect an image's contents from PowerShell.
+        $mnt = Mount-MsixAppAttachImage -ImagePath C:\images\app.vhdx
+        Get-ChildItem $mnt.DriveLetter
+        Dismount-MsixAppAttachImage -ImagePath C:\images\app.vhdx
     #>
     [CmdletBinding()]
     param(
@@ -334,6 +438,17 @@ function Dismount-MsixAppAttachImage {
     <#
     .SYNOPSIS
         Dismounts a VHDX/CIM previously mounted with Mount-MsixAppAttachImage.
+
+    .DESCRIPTION
+        Thin wrapper around Dismount-DiskImage that logs the result via
+        Write-MsixLog.
+
+    .PARAMETER ImagePath
+        Path to the .vhdx or .cim file to dismount.
+
+    .EXAMPLE
+        # Release an image after inspection.
+        Dismount-MsixAppAttachImage -ImagePath C:\images\app.vhdx
     #>
     [CmdletBinding()]
     param(

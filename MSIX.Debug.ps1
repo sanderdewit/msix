@@ -12,6 +12,33 @@
 # =============================================================================
 
 function Resolve-MsixDebugViewPath {
+    <#
+    .SYNOPSIS
+        Locates Dbgview64.exe / Dbgview.exe (Sysinternals DebugView).
+
+    .DESCRIPTION
+        Resolution order:
+          1. $env:MSIX_DEBUGVIEW_PATH (set by Install-MsixDebugView).
+          2. The current PATH (Get-Command Dbgview*.exe).
+          3. The module's tools root: "(Get-MsixToolsRoot)\debugview\Dbgview64.exe"
+             (and the 32-bit variant), plus a legacy fallback under
+             "(Get-MsixToolsRoot)\procmon\".
+          4. Common Sysinternals install folders under Program Files.
+
+        Returns $null when nothing is found, so callers can decide whether to
+        invoke Install-MsixDebugView.
+
+    .OUTPUTS
+        [string] full path to Dbgview*.exe, or $null.
+
+    .EXAMPLE
+        # Find DebugView so a one-off TraceFixup viewer can be launched.
+        $exe = Resolve-MsixDebugViewPath
+        if ($exe) { Start-Process $exe }
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
     if ($env:MSIX_DEBUGVIEW_PATH -and (Test-Path $env:MSIX_DEBUGVIEW_PATH)) {
         return (Resolve-Path $env:MSIX_DEBUGVIEW_PATH).Path
     }
@@ -65,7 +92,23 @@ function Get-MsixDebugRecommendation {
 
     .OUTPUTS
         [string[]] — one entry per recommendation, formatted for printing
-                    or piping into a .ps1 file.
+                    or piping into a .ps1 file. The actual SecureString value
+                    of -PfxPassword is NEVER expanded into the output: the
+                    generated script always references a
+                    (Read-Host -AsSecureString) prompt so secrets stay off
+                    disk.
+
+    .EXAMPLE
+        # Inspect the recommended remediation script for a problematic package.
+        $report = Invoke-MsixInvestigation -PackagePath C:\drop\app.msix
+        Get-MsixDebugRecommendation -Report $report -Pfx C:\certs\debug.pfx
+
+    .EXAMPLE
+        # Pass a SecureString to satisfy the signature, while the output still
+        # emits a Read-Host prompt placeholder (the password never reaches disk).
+        $pw = Read-Host -AsSecureString -Prompt 'PFX password'
+        Get-MsixDebugRecommendation -Report $report -Pfx C:\certs\debug.pfx -PfxPassword $pw |
+            Set-Content recommended.ps1
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -262,17 +305,42 @@ function Start-MsixDebugSession {
         Where to write report.html + report.json + recommended-commands.ps1.
         Defaults to a "msix-debug-<pkg>" folder on the desktop.
 
-    .PARAMETER Pfx / PfxPassword
-        Certificate used to re-sign the package after TraceFixup injection
-        (required when -AddTraceFixup modifies the package).
+    .PARAMETER Pfx
+        Path to a .pfx file used to re-sign the package after TraceFixup
+        injection. Interpolated into recommended-commands.ps1 so the operator
+        can re-run signing manually if needed.
+
+    .PARAMETER PfxPassword
+        [SecureString] password for the PFX. The actual password value is
+        NEVER written to the generated recommended-commands.ps1 — the file
+        contains a (Read-Host -AsSecureString) placeholder instead.
+
+    .OUTPUTS
+        [pscustomobject] with Report, OutputDirectory, ReportHtml, ReportJson,
+        and RecommendedFile (path to recommended-commands.ps1).
 
     .EXAMPLE
-        Start-MsixDebugSession -PackagePath C:\Drop\app.msix -Install -LaunchProcMon -LaunchDebugView
+        # Procmon-based debug workflow: install, capture, view in Procmon + DebugView.
+        Start-MsixDebugSession -PackagePath C:\Drop\app.msix `
+            -Install -LaunchProcMon -LaunchDebugView
 
     .EXAMPLE
-        # PSF TraceFixup path (no Procmon required)
+        # PSF TraceFixup path (no Procmon required). The injected DLL emits
+        # failures via OutputDebugString, captured live in DebugView.
+        $pw = Read-Host -AsSecureString -Prompt 'PFX password'
         Start-MsixDebugSession -PackagePath C:\Drop\app.msix -Install -AddTraceFixup `
-            -Pfx C:\certs\debug.pfx -PfxPassword (Read-Host -AsSecureString)
+            -Pfx C:\certs\debug.pfx -PfxPassword $pw
+
+    .EXAMPLE
+        # Full sandbox workflow: cert generation -> sandbox config -> launch.
+        # Start-MsixSandbox -AutoSign chains everything below for you.
+        $cert  = New-MsixSelfSignedCertificate -PackagePath C:\Drop\broken.msix
+        $wsb   = New-MsixSandboxConfig -DropFolder C:\Drop -PackageName broken.msix `
+                                       -CertPath $cert.CerPath
+        Start-Process $wsb
+        # Inside the sandbox the bootstrap auto-calls:
+        #   Start-MsixDebugSession -PackagePath C:\msix-drop\broken.msix `
+        #       -Install -LaunchProcMon -LaunchDebugView
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -445,6 +513,17 @@ function ConvertTo-MsixReportHtml {
 
     .PARAMETER PackagePath
         Original .msix path; included in the header.
+
+    .OUTPUTS
+        [string] — full HTML document (UTF-8). Pipe to Set-Content to write a
+        report.html, or pass to Out-File / Set-Clipboard.
+
+    .EXAMPLE
+        # Render an investigation report to a standalone HTML file.
+        $report = Invoke-MsixInvestigation -PackagePath C:\drop\app.msix
+        $cmds   = Get-MsixDebugRecommendation -Report $report
+        ConvertTo-MsixReportHtml -Report $report -Commands $cmds -PackagePath C:\drop\app.msix |
+            Set-Content C:\drop\report.html
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -587,14 +666,27 @@ function New-MsixSandboxConfig {
     .PARAMETER OutputPath
         Where to write the .wsb. Defaults to "$DropFolder\msix-debug.wsb".
 
-    .PARAMETER vGPU / Networking
-        Sandbox features.
+    .PARAMETER vGPU
+        Enable the sandbox virtual GPU. Default $true.
+
+    .PARAMETER Networking
+        Enable sandbox networking. Default $true. Set $false for a
+        no-network forensic environment.
+
+    .OUTPUTS
+        [string] — full path to the generated .wsb file. Pass to Start-Process
+        (or Start-MsixSandbox -ConfigPath) to launch.
 
     .EXAMPLE
         # The package was signed with a self-signed cert (cert.cer next to .msix)
         $wsb = New-MsixSandboxConfig -DropFolder C:\drop -PackageName broken.msix `
                                      -CertPath C:\drop\debug-cert.cer
         Start-Process $wsb
+
+    .EXAMPLE
+        # No network, no GPU: forensic capture environment.
+        New-MsixSandboxConfig -DropFolder C:\drop -PackageName broken.msix `
+                              -vGPU $false -Networking $false
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
@@ -782,8 +874,13 @@ function Start-MsixSandbox {
              it into LocalMachine\Root + TrustedPeople before installing the
              package.
 
-    .PARAMETER DropFolder / PackageName
-        Forwarded to New-MsixSandboxConfig if -ConfigPath isn't given.
+    .PARAMETER DropFolder
+        Host folder containing the .msix to debug. Required unless -ConfigPath
+        is given. Forwarded to New-MsixSandboxConfig.
+
+    .PARAMETER PackageName
+        Filename inside DropFolder. Required unless -ConfigPath is given.
+        Forwarded to New-MsixSandboxConfig.
 
     .PARAMETER ConfigPath
         Use an existing .wsb file instead of generating one.
@@ -804,13 +901,28 @@ function Start-MsixSandbox {
         Bring your own .cer file to trust in the sandbox (instead of
         -AutoSign generating one).
 
-    .PARAMETER Pfx / PfxPassword
-        Certificate for re-signing after TraceFixup injection when -AutoSign
-        is not used.
+    .PARAMETER Pfx
+        Path to a .pfx for re-signing the modified package when -AddTraceFixup
+        is used WITHOUT -AutoSign.
+
+    .PARAMETER PfxPassword
+        [SecureString] password matching -Pfx. Required when -Pfx is given
+        and the PFX is protected by a password.
 
     .EXAMPLE
-        # Fast path: auto-sign, inject TraceFixup, launch sandbox + DebugView
-        Start-MsixSandbox -DropFolder C:\drop -PackageName broken.msix -AutoSign -AddTraceFixup
+        # Fast path: auto-sign, inject TraceFixup, launch sandbox + DebugView.
+        Start-MsixSandbox -DropFolder C:\drop -PackageName broken.msix `
+            -AutoSign -AddTraceFixup
+
+    .EXAMPLE
+        # Re-launch a previously generated sandbox config.
+        Start-MsixSandbox -ConfigPath C:\drop\msix-debug.wsb
+
+    .EXAMPLE
+        # Use a pre-existing signing cert + inject TraceFixup.
+        $pw = Read-Host -AsSecureString -Prompt 'PFX password'
+        Start-MsixSandbox -DropFolder C:\drop -PackageName broken.msix `
+            -AddTraceFixup -Pfx C:\certs\debug.pfx -PfxPassword $pw
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(

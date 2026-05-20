@@ -14,8 +14,24 @@ function Get-MsixFontCandidate {
         Lists font files inside the package (.ttf / .otf / .ttc) — candidates
         for registration via uap4:SharedFonts.
 
+    .DESCRIPTION
+        Read-only scanner that unpacks the package to a scratch workspace,
+        enumerates .ttf / .otf / .ttc files anywhere in the tree, and returns
+        their package-relative paths. The workspace is always cleaned up.
+
+        Pipe the Path values into Add-MsixFontExtension to register the
+        discovered fonts via uap4:SharedFonts.
+
+        Surfaces a `ManifestFix:SharedFonts` finding via Get-MsixHeuristicFinding
+        when the package ships fonts but does not declare them.
+
     .PARAMETER PackagePath
         .msix to scan (read-only).
+
+    .EXAMPLE
+        # Discover fonts and register them via uap4:SharedFonts in one pipeline
+        $fonts = Get-MsixFontCandidate -PackagePath app.msix | Select-Object -ExpandProperty Path
+        Add-MsixFontExtension -PackagePath app.msix -FontPaths $fonts -SkipSigning
 
     .OUTPUTS
         [pscustomobject] one per font: Name, Path (package-relative), SizeBytes
@@ -55,8 +71,23 @@ function Get-MsixDesktopShortcutCandidate {
         (VFS\Common Desktop, VFS\User Desktop, etc.) — common installer
         leftovers that clutter the user's actual desktop after MSIX install.
 
+    .DESCRIPTION
+        Read-only scanner. Matches .lnk files whose package-relative path lies
+        under any of `VFS\Common Desktop`, `VFS\User Desktop`, or `VFS\Desktop`.
+
+        Feeds Get-MsixHeuristicFinding (Category=DesktopShortcuts) and is the
+        detection half of Remove-MsixDesktopShortcut. No mutation, no signing.
+
     .PARAMETER PackagePath
         .msix to scan (read-only).
+
+    .EXAMPLE
+        # Surface unwanted desktop shortcuts, then strip them in-place
+        Get-MsixDesktopShortcutCandidate -PackagePath app.msix
+        Remove-MsixDesktopShortcut -PackagePath app.msix -SkipSigning
+
+    .OUTPUTS
+        [pscustomobject] one per shortcut: Name, Path (package-relative), SizeBytes
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$PackagePath)
@@ -93,6 +124,48 @@ function Remove-MsixDesktopShortcut {
         Removes shortcut files (.lnk) the original installer dropped under
         the package's virtualized desktop folders. Repacks + signs unless
         -SkipSigning / -NoSign.
+
+    .DESCRIPTION
+        Mutator counterpart to Get-MsixDesktopShortcutCandidate. Unpacks the
+        package, deletes every .lnk under VFS\Common Desktop, VFS\User Desktop
+        or VFS\Desktop, repacks, and (unless -SkipSigning) re-signs.
+
+        Idempotent: re-running on a package with no matching shortcuts logs an
+        info line and returns without repacking.
+
+        Wired into Invoke-MsixAutoFix via the `-RemoveDesktopShortcuts` switch
+        and into Invoke-MsixAutoFixFromAnalysis for the `DesktopShortcuts`
+        finding category.
+
+    .PARAMETER PackagePath
+        .msix file to mutate.
+
+    .PARAMETER OutputPath
+        If set, the repacked package is written here instead of overwriting
+        the input.
+
+    .PARAMETER SkipSigning
+        Skip the signing pass — useful when chaining multiple fixers and
+        signing only once at the end. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Path to a signing certificate (.pfx). Ignored when -SkipSigning is set.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .EXAMPLE
+        # Test/dev case: strip desktop shortcuts and skip signing
+        Remove-MsixDesktopShortcut -PackagePath app.msix -SkipSigning
+
+    .EXAMPLE
+        # Production: strip and re-sign with a dev cert (idempotent)
+        Remove-MsixDesktopShortcut -PackagePath app.msix `
+            -Pfx cert.pfx -PfxPassword $pw
+
+    .OUTPUTS
+        [pscustomobject] with Removed (string[] of package-relative paths) and
+        Output (final package path). Returns nothing when no shortcuts matched.
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -165,6 +238,26 @@ function Get-MsixCapabilityHint {
         Suggests a minimum capability set based on the DLLs imported by
         executables inside the package. Heuristic only — confirm with the
         Application Capability Profiler before publishing.
+
+    .DESCRIPTION
+        Unpacks the package, scans the first 8 MB of each .exe / .dll for
+        well-known Win32 DLL imports, and maps them to the capability names a
+        packaged app typically needs (e.g. `wininet.dll` -> `internetClient`).
+
+        Returns the union of detected capability names. Feeds the
+        `CapabilityHints` finding produced by Get-MsixHeuristicFinding and the
+        `AddCapabilityHints` stage of Invoke-MsixAutoFixFromAnalysis.
+
+    .PARAMETER PackagePath
+        .msix to scan (read-only).
+
+    .EXAMPLE
+        # Discover hints and add them via Add-MsixCapability
+        $hints = Get-MsixCapabilityHint -PackagePath app.msix
+        Add-MsixCapability -PackagePath app.msix -Names $hints -SkipSigning
+
+    .OUTPUTS
+        [string[]] capability names (sorted, unique).
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$PackagePath)
@@ -215,6 +308,10 @@ function Get-MsixNestedPackageCandidate {
 
     .PARAMETER PackagePath
         .msix to scan (read-only).
+
+    .EXAMPLE
+        # Surface any nested installer packages — there is no auto-fix
+        Get-MsixNestedPackageCandidate -PackagePath app.msix
 
     .OUTPUTS
         [pscustomobject] one per nested package: Name, Path (package-relative), SizeBytes

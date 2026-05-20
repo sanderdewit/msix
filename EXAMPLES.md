@@ -29,6 +29,8 @@ Import-Module C:\temp\msix\MSIX\MSIX.psd1
 15. [Compare two packages](#15-compare-two-packages)
 16. [App Attach VHDX for multi-session hosts](#16-app-attach-vhdx-for-multi-session-hosts)
 17. [Full pipeline: publisher + PSF + signing in one call](#17-full-pipeline-publisher--psf--signing-in-one-call)
+18. [Standard scripts (PSADT-flavoured, parameterised)](#18-standard-scripts-psadt-flavoured-parameterised)
+19. [Win32 App Isolation (opt-in)](#19-win32-app-isolation-opt-in)
 
 ---
 
@@ -440,6 +442,130 @@ Invoke-MsixPipeline -PackagePath 'C:\drop\App.msix' `
 - `-WhatIf` runs the unpack-edit-pack stages so you can preview the result
   (via `-UnsignedOutputPath` and `-SaveManifestTo`) but skips the destructive
   sign + replace.
+
+---
+
+## 18. Standard scripts (PSADT-flavoured, parameterised)
+
+Generate signed PowerShell scripts from bundled templates and inject them as PSF
+`startScript` entries in one call. Customer-specific values are baked in at
+generation time, so the same package base can carry per-customer state without
+repackaging the binaries.
+
+```powershell
+$pw = Read-Host -AsSecureString -Prompt 'PFX password'
+
+# Inspect the catalogue — five templates ship with the module
+Get-MsixStandardScript | Format-Table Name, Description, RequiredParams
+
+# 1) Generate + sign a script in isolation (no package touched yet)
+New-MsixStandardScript -Name CreateShortcut `
+    -Parameters @{
+        DisplayName = 'Contoso Expenses'
+        Target      = 'contosoexpenses.exe'
+        Location    = 'Desktop'        # optional; default is Desktop
+    } `
+    -OutputPath 'C:\src\createshortcut.ps1' `
+    -Pfx cert.pfx -PfxPassword $pw
+
+# 2) Generate + sign + inject into the MSIX in one step
+#    The script is added as a PSF startScript: it runs once on first launch,
+#    before the main executable starts.
+Add-MsixStandardScript -PackagePath app.msix -AppId 'App' `
+    -Name CreateShortcut `
+    -Parameters @{ DisplayName = 'Contoso Expenses'; Target = 'contosoexpenses.exe' } `
+    -RunOnce -WaitForScriptToFinish `
+    -Pfx cert.pfx -PfxPassword $pw
+
+# 3) Sign an arbitrary .ps1 you wrote yourself (same cert as the package)
+Set-MsixScriptSignature -ScriptPath my-bootstrap.ps1 `
+    -Pfx cert.pfx -PfxPassword $pw
+
+# 4) Cleanup script — bake the legacy AppData path as a parameter
+New-MsixStandardScript -Name CleanupOldUserData `
+    -Parameters @{
+        Paths            = '%AppData%\Contoso\v1;%AppData%\Contoso\v2'
+        OnlyOlderThanDays = '90'
+    } `
+    -OutputPath 'C:\src\cleanup.ps1' `
+    -Pfx cert.pfx -PfxPassword $pw
+```
+
+Bundled templates (`Get-MsixStandardScript | Select-Object Name, Description`):
+
+| Template | What it does |
+|---|---|
+| `CreateShortcut` | Desktop / Start-menu `.lnk` pointing at the AppExecutionAlias. |
+| `CopyIconToAppData` | Copies bundled icons to `%APPDATA%` so `.lnk` files survive updates. |
+| `CleanupOldUserData` | Idempotent removal of legacy profile paths and registry keys. |
+| `RegisterFileAssociation` | Per-user FTA registration for one or more file extensions. |
+| `CustomerSettingsBootstrap` | Writes per-customer JSON settings to HKCU on first run. |
+
+> **Tip:** inject the script via `Add-MsixStandardScript` and then chain
+> `Invoke-MsixPipeline` with `Signing.Skip = $true` to produce an unsigned
+> package for review before the final sign-off.
+
+---
+
+## 19. Win32 App Isolation (opt-in)
+
+Adds `rescap:Capability` entries to the manifest so the app runs inside the
+Win32 isolation broker (Windows 11 24H2 / build 26100+). The module
+auto-injects the `rescap` namespace, bumps `MaxVersionTested` to `10.0.26100.0`,
+and adds the `unvirtualizedResources` capability required by the schema.
+
+**Validate first** — many legacy apps break under isolation because they rely on
+broad filesystem / registry access.  Use Microsoft's
+[Application Capability Profiler](https://github.com/microsoft/win32-app-isolation/releases)
+to discover exactly which capabilities your app needs before adding them.
+
+```powershell
+$pw = Read-Host -AsSecureString -Prompt 'PFX password'
+
+# See all documented isolation capabilities the module knows about
+Get-MsixIsolationCapability
+
+# Enable isolation with minimal profile access
+Add-MsixAppIsolation -PackagePath app.msix `
+    -Capabilities 'isolatedWin32-promptForAccess', 'isolatedWin32-userProfileMinimal' `
+    -Pfx cert.pfx -PfxPassword $pw
+
+# Networking-capable isolated app
+Add-MsixAppIsolation -PackagePath app.msix `
+    -Capabilities @(
+        'isolatedWin32-promptForAccess'
+        'isolatedWin32-userProfileMinimal'
+        'isolatedWin32-internetClient'
+        'isolatedWin32-privateNetworkClientServer'
+    ) `
+    -Pfx cert.pfx -PfxPassword $pw
+
+# Remove isolation entirely (roll back)
+Remove-MsixAppIsolation -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw
+
+# Preview what the manifest would look like — no package written
+Add-MsixAppIsolation -PackagePath app.msix `
+    -Capabilities 'isolatedWin32-promptForAccess' `
+    -Pfx cert.pfx -PfxPassword $pw `
+    -WhatIf
+```
+
+Common capabilities and their meaning:
+
+| Capability | Grants |
+|---|---|
+| `isolatedWin32-promptForAccess` | Broker dialog for resources outside the isolation boundary |
+| `isolatedWin32-userProfileMinimal` | Read/write to a minimal set of known user folders |
+| `isolatedWin32-userProfile` | Broader user-profile access (AppData, Documents, etc.) |
+| `isolatedWin32-internetClient` | Outbound internet connections |
+| `isolatedWin32-internetClientServer` | Inbound + outbound internet connections |
+| `isolatedWin32-privateNetworkClientServer` | LAN access |
+| `isolatedWin32-allowElevation` | UAC elevation inside the isolation boundary |
+| `isolatedWin32-fullFileSystemAccess` | Broad filesystem access (defeats much of the isolation benefit) |
+
+> The pipeline supports isolation natively — add `AppIsolation` to your
+> `Invoke-MsixPipeline` config alongside `PSF` and `Signing` so it is applied in
+> one unpack/repack/sign pass.
 
 ---
 

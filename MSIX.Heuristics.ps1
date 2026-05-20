@@ -283,21 +283,21 @@ function Get-MsixUninstallRegistryEntry {
         leftover and don't function inside an MSIX container.
 
     .DESCRIPTION
-        Loads Registry.dat as a temporary hive (HKLM\TempMsixHive_*), walks
-        SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall and the WOW6432Node
-        equivalent, captures DisplayName / DisplayVersion / Publisher /
-        UninstallString for each, and unloads.
+        Parses Registry.dat in-memory via offreg.dll (Offline Registry API).
+        Walks SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall and the
+        WOW6432Node equivalent, captures DisplayName / DisplayVersion /
+        Publisher / UninstallString for each entry.
 
-        Without admin rights the function falls back to a string scan of
-        Registry.dat, returning best-effort KeyName entries (no value
-        details). For full DisplayName/DisplayVersion/Publisher/UninstallString
-        extraction, run elevated so reg.exe can load the hive.
+        Works WITHOUT elevation. The original implementation used reg.exe load
+        which requires SeBackupPrivilege + SeRestorePrivilege regardless of
+        mount point (HKLM, HKU, HKCU). offreg.dll parses the hive from disk
+        without mounting it into the live registry, so no privileges are needed.
 
     .PARAMETER PackagePath
         .msix file (read-only).
 
     .EXAMPLE
-        # Surface leftover uninstall registry entries (run elevated for full detail)
+        # Surface leftover uninstall registry entries (no elevation required)
         Get-MsixUninstallRegistryEntry -PackagePath app.msix |
             Select-Object DisplayName, Publisher, UninstallString
 
@@ -314,40 +314,6 @@ function Get-MsixUninstallRegistryEntry {
     $fileinfo  = Get-Item $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-uninreg"
 
-    if (-not (_MsixIsAdmin)) {
-        Write-MsixLog Warning 'Get-MsixUninstallRegistryEntry: not elevated — string scan only (no value details).'
-        try {
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-            Assert-MsixProcessSuccess $r 'MakeAppx unpack'
-            $datPath = Join-Path $workspace 'Registry.dat'
-            if (-not (Test-Path $datPath)) { return @() }
-            $bytes = [IO.File]::ReadAllBytes($datPath)
-            $textU = [System.Text.Encoding]::Unicode.GetString($bytes)
-            $textA = [System.Text.Encoding]::ASCII.GetString($bytes)
-            $uninstSuffix = 'CurrentVersion\Uninstall\'
-            $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-            $results = @()
-            foreach ($encoding in @($textU, $textA)) {
-                $m = [regex]::Matches($encoding, [regex]::Escape($uninstSuffix) + '([^\x00\x01\x02\\]+)', 'IgnoreCase')
-                foreach ($mm in $m) {
-                    $keyName = $mm.Groups[1].Value.Trim()
-                    if ($keyName.Length -gt 1 -and $keyName.Length -lt 200 -and $seen.Add($keyName)) {
-                        $results += [pscustomobject]@{
-                            KeyName         = $keyName
-                            DisplayName     = $keyName
-                            DisplayVersion  = $null
-                            Publisher       = $null
-                            UninstallString = $null
-                            FullPath        = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$keyName"
-                        }
-                    }
-                }
-            }
-            return $results
-        } finally {
-            Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
     try {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
@@ -358,57 +324,37 @@ function Get-MsixUninstallRegistryEntry {
             return @()
         }
 
-        $hiveName = "TempMsixHive_$([guid]::NewGuid().ToString('N').Substring(0,8))"
-        $entries  = @()
-        $hiveLoaded = $false
+        $hive = _MsixOpenOfflineHive -Path $datPath
         try {
-            $null = & reg.exe load "HKLM\$hiveName" "$datPath" 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                Write-MsixLog Warning "reg.exe load failed (exit $LASTEXITCODE)."
-                return @()
-            }
-            $hiveLoaded = $true
-
+            $entries = [System.Collections.Generic.List[object]]::new()
             foreach ($branch in @(
-                "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-                "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+                'REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+                'REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
             )) {
-                if (-not (Test-Path $branch)) { continue }
-                Get-ChildItem $branch -ErrorAction SilentlyContinue | ForEach-Object {
-                    $values = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
-                    $entries += [pscustomobject]@{
-                        KeyName         = $_.PSChildName
-                        DisplayName     = $values.DisplayName
-                        DisplayVersion  = $values.DisplayVersion
-                        Publisher       = $values.Publisher
-                        UninstallString = $values.UninstallString
-                        FullPath        = $_.PSPath -replace [regex]::Escape("HKLM:\$hiveName\REGISTRY\MACHINE\"), 'HKLM:\'
+                $branchKey = _MsixOfflineOpenKey -Parent $hive -SubKey $branch
+                if ($branchKey -eq [IntPtr]::Zero) { continue }
+                try {
+                    foreach ($child in (_MsixOfflineEnumSubKeys -Key $branchKey)) {
+                        $entries.Add([pscustomobject]@{
+                            KeyName         = $child
+                            DisplayName     = _MsixOfflineGetValue -Parent $hive -SubKey "$branch\$child" -Name 'DisplayName'
+                            DisplayVersion  = _MsixOfflineGetValue -Parent $hive -SubKey "$branch\$child" -Name 'DisplayVersion'
+                            Publisher       = _MsixOfflineGetValue -Parent $hive -SubKey "$branch\$child" -Name 'Publisher'
+                            UninstallString = _MsixOfflineGetValue -Parent $hive -SubKey "$branch\$child" -Name 'UninstallString'
+                            FullPath        = "HKLM:\$($branch -replace 'REGISTRY\\MACHINE\\', '')\$child"
+                        })
                     }
+                } finally {
+                    _MsixOfflineCloseKey -Key $branchKey
                 }
             }
+            return $entries.ToArray()
         } finally {
-            # Always release the hive — even when an exception interrupted the
-            # walk above. Leaving a TempMsixHive_* loaded leaks an HKLM key and
-            # blocks the on-disk Registry.dat from being deleted.
-            if ($hiveLoaded) {
-                [gc]::Collect(); [gc]::WaitForPendingFinalizers()
-                & reg.exe unload "HKLM\$hiveName" 2>&1 | Out-Null
-                if ($LASTEXITCODE -ne 0) {
-                    Write-MsixLog Warning "Failed to unload hive 'HKLM\$hiveName' (exit $LASTEXITCODE) — may need manual: reg.exe unload HKLM\$hiveName"
-                }
-            }
+            _MsixCloseOfflineHive -Hive $hive
         }
-        return $entries
     } finally {
         Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
-}
-
-
-function _MsixIsAdmin {
-    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
-    (New-Object Security.Principal.WindowsPrincipal $id).IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
 
@@ -519,40 +465,53 @@ function Remove-MsixUninstallerArtifact {
         $removedKeys = @()
         $datPath = Join-Path $workspace 'Registry.dat'
         if (-not $KeepRegistry -and (Test-Path $datPath)) {
-            if (-not (_MsixIsAdmin)) {
-                Write-MsixLog Warning 'Skipping Registry.dat cleanup (not elevated). Re-run as admin or pass -KeepRegistry.'
-            } else {
-                $hiveName = "TempMsixHive_$([guid]::NewGuid().ToString('N').Substring(0,8))"
-                try {
-                    $null = & reg.exe load "HKLM\$hiveName" "$datPath" 2>&1
-                    if ($LASTEXITCODE -ne 0) {
-                        Write-MsixLog Warning "reg.exe load failed (exit $LASTEXITCODE); skipping registry cleanup."
-                    } else {
-                        foreach ($branch in @(
-                            "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-                            "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
-                        )) {
-                            if (-not (Test-Path $branch)) { continue }
-                            Get-ChildItem $branch -ErrorAction SilentlyContinue | ForEach-Object {
-                                $vals = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
-                                $name = $vals.DisplayName
-                                if (-not $name -or ($name -match $UninstallKeyFilter)) {
-                                    if ($PSCmdlet.ShouldProcess($_.PSPath, "Remove Uninstall key '$name'")) {
-                                        Remove-Item $_.PSPath -Recurse -Force -ErrorAction SilentlyContinue
-                                        $removedKeys += $name
-                                    }
+            # Parse + mutate the hive via offreg.dll (no elevation required).
+            # ORSaveHive cannot overwrite, so we save to a sibling path and replace.
+            $newDat = "$datPath.new"
+            if (Test-Path -LiteralPath $newDat) { Remove-Item -LiteralPath $newDat -Force }
+
+            $hive = _MsixOpenOfflineHive -Path $datPath
+            $modified = $false
+            try {
+                foreach ($branch in @(
+                    'REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+                    'REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+                )) {
+                    $branchKey = _MsixOfflineOpenKey -Parent $hive -SubKey $branch
+                    if ($branchKey -eq [IntPtr]::Zero) { continue }
+                    try {
+                        $children = _MsixOfflineEnumSubKeys -Key $branchKey
+                    } finally {
+                        _MsixOfflineCloseKey -Key $branchKey
+                    }
+                    foreach ($child in $children) {
+                        $name = _MsixOfflineGetValue -Parent $hive -SubKey "$branch\$child" -Name 'DisplayName'
+                        if (-not $name -or ($name -match $UninstallKeyFilter)) {
+                            $logical = "$branch\$child"
+                            if ($PSCmdlet.ShouldProcess($logical, "Remove Uninstall key '$name'")) {
+                                if (_MsixOfflineDeleteKey -Parent $hive -SubKey $logical) {
+                                    $removedKeys += $name
+                                    $modified = $true
+                                } else {
+                                    Write-MsixLog Warning "ORDeleteKey failed for '$logical'."
                                 }
                             }
                         }
                     }
-                } finally {
-                    [gc]::Collect(); [gc]::WaitForPendingFinalizers()
-                    Start-Sleep -Milliseconds 500
-                    $null = & reg.exe unload "HKLM\$hiveName" 2>&1
-                    if ($LASTEXITCODE -ne 0) {
-                        Write-MsixLog Warning "reg.exe unload failed; the in-package Registry.dat may have leaked handles."
+                }
+                if ($modified) {
+                    if (-not (_MsixOfflineSaveHive -Hive $hive -Path $newDat)) {
+                        Write-MsixLog Warning 'ORSaveHive failed; Registry.dat is unchanged.'
+                        $modified = $false
                     }
                 }
+            } finally {
+                _MsixCloseOfflineHive -Hive $hive
+            }
+            if ($modified) {
+                Move-Item -LiteralPath $newDat -Destination $datPath -Force
+            } elseif (Test-Path -LiteralPath $newDat) {
+                Remove-Item -LiteralPath $newDat -Force -ErrorAction SilentlyContinue
             }
         }
 
@@ -719,20 +678,22 @@ function Get-MsixShellContextMenuEntry {
         invisible in File Explorer when outside the MSIX container.
 
     .DESCRIPTION
-        When elevated, loads the hive via reg.exe and extracts full key paths,
-        CLSIDs, absolute DLL paths, and package-relative VFS paths.
-        Without elevation, falls back to a Unicode string scan (names only;
-        no CLSIDs or command values).
+        Loads Registry.dat via reg.exe into a temporary HKCU hive (no
+        elevation required) and extracts full key paths, CLSIDs, absolute
+        DLL paths, and package-relative VFS paths.
 
         Returned objects have these properties:
           Type         'ShellVerb' or 'ShellExt'
           Target       '*', 'Directory', 'Directory\Background', …
           VerbName     (ShellVerb) the verb label, e.g. 'Open with Notepad++'
           HandlerName  (ShellExt)  handler key name, often same as display name
-          Command      (ShellVerb) the command string if elevated
-          Clsid        (ShellExt)  GUID string e.g. '{AAAA-...}' if elevated
-          DllPath      (ShellExt)  absolute InProcServer32 path if elevated
+          Command      (ShellVerb) the command string
+          Clsid        (ShellExt)  GUID string e.g. '{AAAA-...}'
+          DllPath      (ShellExt)  absolute InProcServer32 path
           VfsDllPath   (ShellExt)  package-relative VFS path if DLL found in pkg
+
+        Uses offreg.dll (Offline Registry API) to parse Registry.dat in memory.
+        No elevation required.
 
         Surfaces `ShellVerb` and `ShellExt` findings via Get-MsixHeuristicFinding;
         ShellExt entries with a resolved Clsid + VfsDllPath are auto-fixable
@@ -742,7 +703,7 @@ function Get-MsixShellContextMenuEntry {
         .msix file to inspect.
 
     .EXAMPLE
-        # Surface all shell verbs and shellex handlers (run elevated for full detail)
+        # Surface all shell verbs and shellex handlers (no elevation required)
         Get-MsixShellContextMenuEntry -PackagePath app.msix |
             Format-Table Type, Target, VerbName, HandlerName, Clsid, VfsDllPath
 
@@ -765,145 +726,98 @@ function Get-MsixShellContextMenuEntry {
         if (-not (Test-Path $datPath)) { return @() }
 
         $results = [System.Collections.Generic.List[object]]::new()
+        $clsidGuidRegex = '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$'
 
-        if (_MsixIsAdmin) {
-            $hiveName = "TempMsixHive_$([guid]::NewGuid().ToString('N').Substring(0,8))"
-            try {
-                $null = & reg.exe load "HKLM\$hiveName" "$datPath" 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                    foreach ($target in @('\*', 'Directory', 'Directory\Background', 'AllFilesystemObjects')) {
-                        $tgtClean = $target.TrimStart('\')
+        $hive = _MsixOpenOfflineHive -Path $datPath
+        try {
+            # Helper: read the InProcServer32 default value from either the
+            # 64-bit Classes\CLSID branch or the WOW6432Node fallback.
+            function _resolveClsidDll([IntPtr]$h, [string]$clsid) {
+                foreach ($prefix in @(
+                    'REGISTRY\MACHINE\SOFTWARE\Classes\CLSID',
+                    'REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Classes\CLSID'
+                )) {
+                    $v = _MsixOfflineGetValue -Parent $h -SubKey "$prefix\$clsid\InProcServer32" -Name ''
+                    if ($v) { return $v }
+                }
+                return $null
+            }
 
-                        # Simple shell verbs.
-                        # IMPORTANT: Use -LiteralPath everywhere — the target may be '*' which
-                        # PowerShell's registry provider treats as a wildcard without -LiteralPath,
-                        # causing Get-ChildItem to return the 'shell' key objects themselves
-                        # (PSChildName='shell') instead of their verb children.
-                        $shellPath = "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\Classes\$target\shell"
-                        if (Test-Path -LiteralPath $shellPath) {
-                            foreach ($verbKey in Get-ChildItem -LiteralPath $shellPath -ErrorAction SilentlyContinue) {
-                                # A verb key that carries ExplorerCommandHandler is a COM-delegating verb
-                                # (IExplorerCommand). It must be declared as a FileExplorerContextMenus
-                                # extension (desktop4/desktop5), NOT as a uap3:SupportedVerb.
-                                $verbProps = Get-ItemProperty -LiteralPath $verbKey.PSPath -ErrorAction SilentlyContinue
-                                $ech = $verbProps.ExplorerCommandHandler
-                                if ($ech) {
-                                    # Normalise CLSID format
-                                    if ($ech -notmatch '^\{') { $ech = "{$ech}" }
-                                    $dll    = $null
-                                    $vfsDll = $null
-                                    if ($ech -match '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$') {
-                                        foreach ($clsidBranch in @(
-                                            "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\Classes\CLSID\$ech\InProcServer32",
-                                            "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Classes\CLSID\$ech\InProcServer32"
-                                        )) {
-                                            if (Test-Path -LiteralPath $clsidBranch) {
-                                                $dll = (Get-ItemProperty -LiteralPath $clsidBranch -ErrorAction SilentlyContinue).'(default)'
-                                                if ($dll) { break }
-                                            }
-                                        }
-                                        if ($dll) {
-                                            $vfsDll = _MsixRegPathToVfsRelative -RegPath $dll -WorkspacePath $workspace
-                                        }
-                                    }
-                                    $results.Add([pscustomobject]@{
-                                        Type        = 'ShellExt'
-                                        Target      = $tgtClean
-                                        HandlerName = $verbKey.PSChildName
-                                        Command     = $null
-                                        Clsid       = $ech
-                                        DllPath     = $dll
-                                        VfsDllPath  = $vfsDll
-                                    })
-                                } else {
-                                    # Standard shell verb with a command subkey
-                                    $cmdPath = Join-Path $verbKey.PSPath 'command'
-                                    $cmd     = if (Test-Path -LiteralPath $cmdPath) {
-                                        (Get-ItemProperty -LiteralPath $cmdPath -ErrorAction SilentlyContinue).'(default)'
-                                    } else { $null }
-                                    $results.Add([pscustomobject]@{
-                                        Type       = 'ShellVerb'
-                                        Target     = $tgtClean
-                                        VerbName   = $verbKey.PSChildName
-                                        Command    = $cmd
-                                        Clsid      = $null
-                                        DllPath    = $null
-                                        VfsDllPath = $null
-                                    })
-                                }
-                            }
-                        }
+            foreach ($target in @('*', 'Directory', 'Directory\Background', 'AllFilesystemObjects')) {
+                $tgtClean = $target
 
-                        # shellex COM context-menu handlers
-                        $shPath = "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\Classes\$target\shellex\ContextMenuHandlers"
-                        if (Test-Path -LiteralPath $shPath) {
-                            foreach ($hKey in Get-ChildItem -LiteralPath $shPath -ErrorAction SilentlyContinue) {
-                                $clsid = (Get-ItemProperty -LiteralPath $hKey.PSPath -ErrorAction SilentlyContinue).'(default)'
-                                if ($clsid -and $clsid -notmatch '^\{') { $clsid = "{$clsid}" }
-                                $dll    = $null
-                                $vfsDll = $null
-                                if ($clsid -match '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$') {
-                                    $ipPath = "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\Classes\CLSID\$clsid\InProcServer32"
-                                    if (Test-Path -LiteralPath $ipPath) {
-                                        $dll = (Get-ItemProperty -LiteralPath $ipPath -ErrorAction SilentlyContinue).'(default)'
-                                    }
-                                    # Also check 32-bit CLSID branch
-                                    if (-not $dll) {
-                                        $ip32 = "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Classes\CLSID\$clsid\InProcServer32"
-                                        if (Test-Path -LiteralPath $ip32) {
-                                            $dll = (Get-ItemProperty -LiteralPath $ip32 -ErrorAction SilentlyContinue).'(default)'
-                                        }
-                                    }
-                                    if ($dll) {
-                                        $vfsDll = _MsixRegPathToVfsRelative -RegPath $dll -WorkspacePath $workspace
-                                    }
+                # ── Shell verbs: Classes\<target>\shell\<verb>
+                $shellPath = "REGISTRY\MACHINE\SOFTWARE\Classes\$target\shell"
+                $shellKey  = _MsixOfflineOpenKey -Parent $hive -SubKey $shellPath
+                if ($shellKey -ne [IntPtr]::Zero) {
+                    try {
+                        foreach ($verbName in (_MsixOfflineEnumSubKeys -Key $shellKey)) {
+                            $verbPath = "$shellPath\$verbName"
+                            $ech = _MsixOfflineGetValue -Parent $hive -SubKey $verbPath -Name 'ExplorerCommandHandler'
+                            if ($ech) {
+                                if ($ech -notmatch '^\{') { $ech = "{$ech}" }
+                                $dll = $null; $vfsDll = $null
+                                if ($ech -match $clsidGuidRegex) {
+                                    $dll = _resolveClsidDll $hive $ech
+                                    if ($dll) { $vfsDll = _MsixRegPathToVfsRelative -RegPath $dll -WorkspacePath $workspace }
                                 }
                                 $results.Add([pscustomobject]@{
                                     Type        = 'ShellExt'
                                     Target      = $tgtClean
-                                    HandlerName = $hKey.PSChildName
+                                    HandlerName = $verbName
                                     Command     = $null
-                                    Clsid       = $clsid
+                                    Clsid       = $ech
                                     DllPath     = $dll
                                     VfsDllPath  = $vfsDll
                                 })
+                            } else {
+                                $cmd = _MsixOfflineGetValue -Parent $hive -SubKey "$verbPath\command" -Name ''
+                                $results.Add([pscustomobject]@{
+                                    Type       = 'ShellVerb'
+                                    Target     = $tgtClean
+                                    VerbName   = $verbName
+                                    Command    = $cmd
+                                    Clsid      = $null
+                                    DllPath    = $null
+                                    VfsDllPath = $null
+                                })
                             }
                         }
+                    } finally {
+                        _MsixOfflineCloseKey -Key $shellKey
                     }
                 }
-            } finally {
-                [gc]::Collect(); [gc]::WaitForPendingFinalizers()
-                $null = & reg.exe unload "HKLM\$hiveName" 2>&1
-            }
-        } else {
-            Write-MsixLog Warning 'Get-MsixShellContextMenuEntry: not elevated — shellex handler names detected via string scan; shell verb detection skipped (run as administrator for full results including verb names and CLSIDs).'
-            $bytes = [IO.File]::ReadAllBytes($datPath)
-            $text  = [System.Text.Encoding]::Unicode.GetString($bytes)
 
-            # shellex\ContextMenuHandlers\<name>  — reliable enough without elevation
-            # (the handler key name directly follows the fixed path ContextMenuHandlers\)
-            foreach ($m in [regex]::Matches($text, 'Classes\\(\*|Directory(?:\\Background)?|AllFilesystemObjects)\\shellex\\ContextMenuHandlers\\([^\x00\\]{2,64})', 'IgnoreCase')) {
-                $tgt  = $m.Groups[1].Value.Trim("`0")
-                $name = $m.Groups[2].Value.Trim("`0")
-                if ($tgt -and $name) {
-                    $results.Add([pscustomobject]@{
-                        Type        = 'ShellExt'
-                        Target      = $tgt
-                        HandlerName = $name
-                        Command     = $null
-                        Clsid       = $null
-                        DllPath     = $null
-                        VfsDllPath  = $null
-                    })
+                # ── shellex COM handlers: Classes\<target>\shellex\ContextMenuHandlers\<name>
+                $shexPath = "REGISTRY\MACHINE\SOFTWARE\Classes\$target\shellex\ContextMenuHandlers"
+                $shexKey  = _MsixOfflineOpenKey -Parent $hive -SubKey $shexPath
+                if ($shexKey -ne [IntPtr]::Zero) {
+                    try {
+                        foreach ($handlerName in (_MsixOfflineEnumSubKeys -Key $shexKey)) {
+                            $clsid = _MsixOfflineGetValue -Parent $hive -SubKey "$shexPath\$handlerName" -Name ''
+                            if ($clsid -and $clsid -notmatch '^\{') { $clsid = "{$clsid}" }
+                            $dll = $null; $vfsDll = $null
+                            if ($clsid -and $clsid -match $clsidGuidRegex) {
+                                $dll = _resolveClsidDll $hive $clsid
+                                if ($dll) { $vfsDll = _MsixRegPathToVfsRelative -RegPath $dll -WorkspacePath $workspace }
+                            }
+                            $results.Add([pscustomobject]@{
+                                Type        = 'ShellExt'
+                                Target      = $tgtClean
+                                HandlerName = $handlerName
+                                Command     = $null
+                                Clsid       = $clsid
+                                DllPath     = $dll
+                                VfsDllPath  = $vfsDll
+                            })
+                        }
+                    } finally {
+                        _MsixOfflineCloseKey -Key $shexKey
+                    }
                 }
             }
-
-            # Shell verb detection is intentionally skipped in non-elevated mode.
-            # Registry.dat uses the REGF binary format where key names are stored
-            # as individual NK records — not as contiguous full-path strings.
-            # A naive regex scan matches the intermediate 'shell' key name itself,
-            # producing a false-positive entry with VerbName='shell'.
-            # Run as administrator to get accurate verb names via reg.exe hive load.
+        } finally {
+            _MsixCloseOfflineHive -Hive $hive
         }
 
         # Deduplicate
@@ -930,7 +844,7 @@ function Get-MsixComServerEntry {
     .DESCRIPTION
         When elevated, loads the hive via reg.exe for full extraction: CLSIDs,
         server type, DLL path, VFS-relative path (if the DLL lives in the package),
-        and ThreadingModel. Non-elevated: Unicode string scan (CLSIDs only).
+        and ThreadingModel. Works without elevation: hive is mounted under HKCU.
 
         Returned objects:
           Clsid          '{XXXXXXXX-...}'
@@ -970,67 +884,53 @@ function Get-MsixComServerEntry {
         if (-not (Test-Path $datPath)) { return @() }
 
         $results = [System.Collections.Generic.List[object]]::new()
+        $clsidGuidRegex = '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$'
 
-        if (_MsixIsAdmin) {
-            $hiveName = "TempMsixHive_$([guid]::NewGuid().ToString('N').Substring(0,8))"
-            try {
-                $null = & reg.exe load "HKLM\$hiveName" "$datPath" 2>&1
-                if ($LASTEXITCODE -eq 0) {
-                    foreach ($branch in @(
-                        "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\Classes\CLSID",
-                        "HKLM:\$hiveName\REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Classes\CLSID"
-                    )) {
-                        if (-not (Test-Path $branch)) { continue }
-                        foreach ($clsidKey in Get-ChildItem $branch -ErrorAction SilentlyContinue) {
-                            $clsid = $clsidKey.PSChildName
-                            if ($clsid -notmatch '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$') { continue }
+        $hive = _MsixOpenOfflineHive -Path $datPath
+        try {
+            foreach ($branch in @(
+                'REGISTRY\MACHINE\SOFTWARE\Classes\CLSID',
+                'REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Classes\CLSID'
+            )) {
+                $branchKey = _MsixOfflineOpenKey -Parent $hive -SubKey $branch
+                if ($branchKey -eq [IntPtr]::Zero) { continue }
+                try {
+                    foreach ($clsid in (_MsixOfflineEnumSubKeys -Key $branchKey)) {
+                        if ($clsid -notmatch $clsidGuidRegex) { continue }
 
-                            $ipPath = Join-Path $clsidKey.PSPath 'InProcServer32'
-                            if (Test-Path $ipPath) {
-                                $vals   = Get-ItemProperty $ipPath -ErrorAction SilentlyContinue
-                                $dll    = $vals.'(default)'
-                                $thread = $vals.ThreadingModel
-                                $vfsDll = if ($dll) { _MsixAbsoluteToVfsRelativeDirect -AbsPath $dll -WorkspacePath $workspace } else { $null }
-                                $results.Add([pscustomobject]@{
-                                    Clsid          = $clsid
-                                    ServerType     = 'InProc'
-                                    DllPath        = $dll
-                                    VfsDllPath     = $vfsDll
-                                    ThreadingModel = if ($thread) { $thread } else { 'Apartment' }
-                                })
-                            }
+                        # InProcServer32 (DLL)
+                        $ipBase = "$branch\$clsid\InProcServer32"
+                        $dll    = _MsixOfflineGetValue -Parent $hive -SubKey $ipBase -Name ''
+                        if ($dll) {
+                            $thread = _MsixOfflineGetValue -Parent $hive -SubKey $ipBase -Name 'ThreadingModel'
+                            $vfsDll = _MsixAbsoluteToVfsRelativeDirect -AbsPath $dll -WorkspacePath $workspace
+                            $results.Add([pscustomobject]@{
+                                Clsid          = $clsid
+                                ServerType     = 'InProc'
+                                DllPath        = $dll
+                                VfsDllPath     = $vfsDll
+                                ThreadingModel = if ($thread) { $thread } else { 'Apartment' }
+                            })
+                        }
 
-                            $lsPath = Join-Path $clsidKey.PSPath 'LocalServer32'
-                            if (Test-Path $lsPath) {
-                                $cmd = (Get-ItemProperty $lsPath -ErrorAction SilentlyContinue).'(default)'
-                                $results.Add([pscustomobject]@{
-                                    Clsid          = $clsid
-                                    ServerType     = 'LocalServer'
-                                    DllPath        = $cmd
-                                    VfsDllPath     = $null    # EXE, not DLL-path based
-                                    ThreadingModel = $null
-                                })
-                            }
+                        # LocalServer32 (EXE)
+                        $lsCmd = _MsixOfflineGetValue -Parent $hive -SubKey "$branch\$clsid\LocalServer32" -Name ''
+                        if ($lsCmd) {
+                            $results.Add([pscustomobject]@{
+                                Clsid          = $clsid
+                                ServerType     = 'LocalServer'
+                                DllPath        = $lsCmd
+                                VfsDllPath     = $null
+                                ThreadingModel = $null
+                            })
                         }
                     }
+                } finally {
+                    _MsixOfflineCloseKey -Key $branchKey
                 }
-            } finally {
-                [gc]::Collect(); [gc]::WaitForPendingFinalizers()
-                $null = & reg.exe unload "HKLM\$hiveName" 2>&1
             }
-        } else {
-            Write-MsixLog Warning 'Get-MsixComServerEntry: not elevated — CLSID string scan only (no DLL paths or threading model).'
-            $bytes = [IO.File]::ReadAllBytes($datPath)
-            $text  = [System.Text.Encoding]::Unicode.GetString($bytes)
-            foreach ($m in [regex]::Matches($text, '\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}')) {
-                $results.Add([pscustomobject]@{
-                    Clsid          = $m.Value
-                    ServerType     = 'Unknown'
-                    DllPath        = $null
-                    VfsDllPath     = $null
-                    ThreadingModel = $null
-                })
-            }
+        } finally {
+            _MsixCloseOfflineHive -Hive $hive
         }
 
         # Deduplicate by CLSID + ServerType

@@ -247,7 +247,7 @@ function Invoke-MsixProcess {
     [CmdletBinding(DefaultParameterSetName = 'ArgumentList')]
     [OutputType([pscustomobject])]
     param(
-        [Parameter(Mandatory)]
+        [Parameter(Mandatory, Position = 0)]
         [string]$FilePath,
 
         [Parameter(Mandatory, ParameterSetName = 'ArgumentList', Position = 1)]

@@ -158,6 +158,13 @@
         default          { $Signer }
     }
 
+    # Emit security warning before any file I/O so it is always visible even
+    # when PackagePath does not yet exist (e.g. -WhatIf / staging scenarios).
+    # Uses the real Warning stream so callers can capture it via -WarningVariable.
+    if ($effectiveSigner -eq 'SignTool' -and $Pfx) {
+        Write-Warning 'SignTool /p exposes the PFX password on the process command line (visible to other processes via WMI). For mission-critical environments, use -Signer TrustedSigning.'
+    }
+
     $toolsRoot = Get-MsixToolsRoot
     $signtool  = Join-Path $toolsRoot 'Tools\signtool.exe'
     $fileinfo  = Get-Item $PackagePath
@@ -171,9 +178,6 @@
         # =====================================================================
         'SignTool' {
             $sigArgs = if ($Pfx) {
-                # Use the real Warning stream (not Write-MsixLog which goes to Information)
-                # so callers and tests can capture this security-critical notice via -WarningVariable.
-                Write-Warning 'SignTool /p exposes the PFX password on the process command line (visible to other processes via WMI). For mission-critical environments, use -Signer TrustedSigning.'
 
                 $cert = Get-Item $Pfx
                 # Decrypt SecureString only at the CLI boundary — never stored in a plain variable

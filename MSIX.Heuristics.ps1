@@ -1229,6 +1229,7 @@ function Invoke-MsixAutoFix {
             - BumpVersion             bump the package version
           Recommended
             - AddCapabilities         add common capabilities
+            - AddAliases              register AppExecutionAlias for top-level exes
             - InjectPsf               run Add-MsixPsfV2 with the fixups you supply
             - BundleVcRuntimes        copy missing VC runtime DLLs in
           Optional
@@ -1247,6 +1248,16 @@ function Invoke-MsixAutoFix {
 
     .PARAMETER PsfFixups / PsfAppOptions / PsfWorkingDirectory / PsfAdditionalFiles
         Forwarded to Add-MsixPsfV2.
+
+    .PARAMETER AddAliases
+        If set, runs Add-MsixAlias for top-level user-facing executables.
+        When -AliasAppIds is supplied, aliases are added only for those apps;
+        otherwise Get-MsixAliasCandidate selects candidates automatically and
+        skips apps that already have an alias.
+
+    .PARAMETER AliasAppIds
+        Optional list of Application IDs to alias. Implies -AddAliases.
+        When omitted, Get-MsixAliasCandidate makes the selection.
 
     .PARAMETER VcRuntimeSourceFolder
         If set, runs Add-MsixVcRuntimeBundle with this source folder.
@@ -1293,6 +1304,8 @@ function Invoke-MsixAutoFix {
         # Recommended stage
         [string[]]$Capabilities,
         [switch]$AddFontExtension,
+        [switch]$AddAliases,
+        [string[]]$AliasAppIds,
         [hashtable[]]$PsfFixups,
         [hashtable[]]$PsfAppOptions,
         [string]$PsfWorkingDirectory,
@@ -1354,6 +1367,25 @@ function Invoke-MsixAutoFix {
                 Add-MsixFontExtension -PackagePath $current -FontPaths @($fonts | Select-Object -ExpandProperty Path) -SkipSigning
             } else {
                 Write-MsixLog Info 'AddFontExtension: no font files found in package.'
+            }
+        }
+    }
+    if ($AddAliases -or $AliasAppIds) {
+        _Stage 'Recommended:AddAliases' {
+            # If explicit AliasAppIds were supplied, honour them; otherwise let
+            # Get-MsixAliasCandidate pick the top-level user-facing executables.
+            if ($AliasAppIds) {
+                Add-MsixAlias -PackagePath $current -AppIds $AliasAppIds -SkipSigning
+            } else {
+                $candidates = @(Get-MsixAliasCandidate -PackagePath $current |
+                    Where-Object { -not $_.AlreadyHasAlias })
+                if ($candidates) {
+                    Add-MsixAlias -PackagePath $current `
+                        -AppIds @($candidates | Select-Object -ExpandProperty AppId) `
+                        -SkipSigning
+                } else {
+                    Write-MsixLog Info 'AddAliases: no eligible alias candidates (all apps already aliased or filtered out).'
+                }
             }
         }
     }
@@ -1426,6 +1458,7 @@ function Invoke-MsixAutoFixFromAnalysis {
         Maps Findings.Category to a concrete cmdlet:
 
           UninstallerArtifact                 -> Remove-MsixUninstallerArtifact
+          AppExecutionAlias                    -> Add-MsixAlias (only AppIds without an existing alias)
           VcRuntime                            -> Add-MsixVcRuntimeBundle (needs -VcRuntimeSourceFolder)
           ManifestFix:FileSystemWriteVirt..    -> Set-MsixFileSystemWriteVirtualization
           ManifestFix:RegistryWriteVirt..      -> Set-MsixRegistryWriteVirtualization
@@ -1658,6 +1691,23 @@ function Invoke-MsixAutoFixFromAnalysis {
             })
         } else {
             Write-MsixLog Info "ComServer: no auto-fixable InProc servers (run elevated for DLL path resolution)."
+        }
+    }
+
+    # Stage 2i — AppExecutionAlias suggestions
+    # Get-MsixAliasCandidate emits one AppExecutionAlias finding per top-level
+    # user-facing exe that lacks an alias. Auto-fix: register the alias for the
+    # AppIds carried on those findings.
+    if ($byCat.ContainsKey('AppExecutionAlias')) {
+        $aliasFindings = @($Report.Findings | Where-Object Category -eq 'AppExecutionAlias')
+        $aliasAppIds   = @($aliasFindings | ForEach-Object { $_.AppId } | Where-Object { $_ } | Sort-Object -Unique)
+        if ($aliasAppIds) {
+            $capturedAliasIds = $aliasAppIds
+            $plan.Add([pscustomobject]@{
+                Stage  = 'AddAliases'
+                Reason = "Register AppExecutionAlias for $($capturedAliasIds.Count) app(s): $($capturedAliasIds -join ', ')"
+                Action = { Add-MsixAlias -PackagePath $current -AppIds $capturedAliasIds -SkipSigning }
+            })
         }
     }
 

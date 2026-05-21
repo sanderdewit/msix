@@ -309,6 +309,26 @@ Invoke-MsixAutoFixFromAnalysis -Report $report `
 `-PreferManifestOverPsf` (default `$true`) skips PSF injection when a
 manifest-only fix covers the same symptom.
 
+`Invoke-MsixAutoFixFromAnalysis` also picks up `AppExecutionAlias` findings
+(emitted by `Get-MsixAliasCandidate` for top-level user-facing executables
+that lack an alias) and runs `Add-MsixAlias` for the affected AppIds in
+the same one-shot pass.
+
+To trigger the alias step explicitly from the parameterised orchestrator:
+
+```powershell
+# Add aliases for every eligible top-level exe (auto-selected via
+# Get-MsixAliasCandidate; skips apps that already have an alias).
+Invoke-MsixAutoFix -PackagePath 'C:\drop\App.msix' `
+    -AddAliases `
+    -Pfx 'C:\certs\cert.pfx' -PfxPassword (Read-Host -AsSecureString)
+
+# Or target specific AppIds (implies -AddAliases):
+Invoke-MsixAutoFix -PackagePath 'C:\drop\App.msix' `
+    -AliasAppIds 'App','Worker' `
+    -Pfx 'C:\certs\cert.pfx' -PfxPassword $pw
+```
+
 ---
 
 ## 12. Sign with Azure Trusted Signing (production)

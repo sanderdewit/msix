@@ -56,9 +56,13 @@ $script:KnownNamespaces = [ordered]@{
     desktop  = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10'
     desktop2 = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/2' # FirewallRules
     desktop4 = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/4'
+    desktop5 = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/5'
     desktop6 = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/6' # File/Registry write virtualization
     desktop9 = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/9'
     com      = 'http://schemas.microsoft.com/appx/manifest/com/windows10'
+    com2     = 'http://schemas.microsoft.com/appx/manifest/com/windows10/2'
+    com3     = 'http://schemas.microsoft.com/appx/manifest/com/windows10/3'
+    com4     = 'http://schemas.microsoft.com/appx/manifest/com/windows10/4'
     rescap         = 'http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities'
     virtualization = 'http://schemas.microsoft.com/appx/manifest/virtualization/windows10'
 }
@@ -405,7 +409,7 @@ function Get-MsixManifestApplication {
     #>
     [CmdletBinding(DefaultParameterSetName = 'First')]
     param(
-        [Parameter(Mandatory)]
+        [Parameter(Mandatory, Position = 0)]
         $Manifest,
         [Parameter(Mandatory, ParameterSetName = 'ById')]
         [string]$AppId,

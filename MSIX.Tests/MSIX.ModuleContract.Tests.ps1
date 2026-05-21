@@ -1,4 +1,4 @@
-BeforeAll {
+﻿BeforeAll {
     Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
 }
 
@@ -8,8 +8,23 @@ Describe 'Module contract' -Tag 'ModuleContract' {
     It 'Imports through the manifest with command versions' {
         $module = Get-Module MSIX
 
-        $module.Version.ToString() | Should -Be '0.70.0'
-        (Get-Command Add-MsixFirewallRule -Module MSIX).Version.ToString() | Should -Be '0.70.0'
+        # The manifest is the source of truth — read its version once and
+        # compare everything else against it. Pinning a literal version
+        # string here forces a test edit on every release bump (it did
+        # exactly that at 0.70.0 -> 0.70.2). The functional invariants
+        # the test cares about are:
+        #   - The module's runtime version matches the .psd1 manifest
+        #   - Exported cmdlets carry the same module version
+        $manifestPath = Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')
+        $manifestData = Import-PowerShellDataFile -Path $manifestPath
+        $expectedVersion = $manifestData.ModuleVersion
+
+        # Sanity guard: ensure the version is well-formed (e.g. '0.70.2')
+        # so a broken/missing manifest never silently passes the test.
+        $expectedVersion | Should -Match '^\d+\.\d+\.\d+(\.\d+)?$'
+
+        $module.Version.ToString() | Should -Be $expectedVersion
+        (Get-Command Add-MsixFirewallRule -Module MSIX).Version.ToString() | Should -Be $expectedVersion
     }
 
     It 'Exports compatibility aliases from the packaged module' {

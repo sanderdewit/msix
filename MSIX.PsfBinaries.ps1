@@ -27,10 +27,11 @@ $script:SdkToolsNuGet = 'Microsoft.Windows.SDK.BuildTools'   # publishes MakeApp
 $script:MsixTrustedPublishers = @(
     'CN=Microsoft Corporation,',                    # Microsoft (incl. Windows SDK, signtool, MakeAppx, DesktopAppInstaller, Windows App Runtime)
     'CN=Microsoft Windows,',                        # Some Microsoft signing certs
+    'CN=Windows Phone,',                        # deployutil.exe etc
     'CN=Microsoft Windows Publisher,',              # Microsoft publisher (Procmon, DebugView via Sysinternals signing)
     'CN=Microsoft 3rd Party Application Component,', # Sysinternals tools sometimes use this
     'CN=Tim Mangan,',                               # PSF maintainer (TMurgent fork)
-    'CN=TMurgent Technologies, LLP,'                # PSF maintainer corporate
+    'CN=TMurgent Technologies LLP,'                # PSF maintainer corporate
 )
 
 function _MsixVerifyAuthenticode {

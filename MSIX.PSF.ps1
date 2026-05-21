@@ -808,13 +808,19 @@ function Add-MsixPsfV2 {
                 $newExe  = $oldExe -replace [regex]::Escape($oldLeaf), $launcherName
                 $app.SetAttribute('Executable', $newExe)
 
-                # Keep AppExecutionAlias in sync if present
-                $aliasExt = $app.Extensions.Extension |
-                            Where-Object { $_.Category -eq 'windows.appExecutionAlias' }
-                if ($aliasExt) {
-                    $aliasExt.SetAttribute('Executable', $newExe)
-                    Write-MsixLog Debug "AppExecutionAlias updated for $($app.Id)"
-                }
+                # Note: we intentionally do NOT touch any existing
+                # windows.appExecutionAlias extension here. The alias
+                # inherits its launch target from the parent Application's
+                # Executable attribute when the Extension itself omits
+                # Executable/EntryPoint. Setting Executable on the alias
+                # Extension without also setting EntryPoint is a schema
+                # violation ("The attribute EntryPoint must be specified
+                # if the attribute Executable on the Extension element is
+                # specified"). An earlier sync block set only Executable
+                # and produced exactly that MakeAppx error every time PSF
+                # ran on a package that already had an alias declared
+                # (e.g. one added by Invoke-MsixAutoFixFromAnalysis's
+                # AppExecutionAlias stage).
             }
 
             if ($PSCmdlet.ShouldProcess("$workspace\AppxManifest.xml", 'Save updated manifest')) {

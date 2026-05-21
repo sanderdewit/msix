@@ -56,6 +56,7 @@ $script:KnownNamespaces = [ordered]@{
     desktop  = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10'
     desktop2 = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/2' # FirewallRules
     desktop4 = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/4'
+    desktop5 = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/5'
     desktop6 = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/6' # File/Registry write virtualization
     desktop9 = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/9'
     com      = 'http://schemas.microsoft.com/appx/manifest/com/windows10'

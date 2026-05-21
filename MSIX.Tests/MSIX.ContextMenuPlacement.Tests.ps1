@@ -29,39 +29,54 @@ AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
 Describe 'Shell-integration extensions placement (Package vs Application)' -Tag 'ContextMenu' {
 
-    # Shell-integration extensions (windows.comServer for a SurrogateServer,
-    # windows.fileExplorerClassicContextMenuHandler, windows.fileExplorerContextMenus)
-    # MUST live at Package/Extensions, not Applications/Application/Extensions.
-    # Microsoft's context-menu integration sample registers them at Package
-    # level; placing them under an Application makes MakeAppx happy but the
-    # shell never registers the handler at runtime — bug surfaced as
-    # "legacy context menu doesn't appear" on Notepad++-style packages.
+    # SCHEMA / RUNTIME RULES (learned the hard way from MakeAppx + Shell):
+    #
+    #   com:Extension (v10 'com' prefix) with SurrogateServer
+    #     - Application-level only. MakeAppx rejects Package-level placement:
+    #       "Extension 'windows.comServer' must be …/com/windows10/4 or newer
+    #        on package level".
+    #     - Package-level com4 disallows Surrogate entirely:
+    #       "Package extension 'windows.comServer' must not declare
+    #        'ExeServer'/'SurrogateServer'/'ServiceServer'".
+    #     - Net: Surrogate-hosted CLSID *must* be declared at Application level.
+    #
+    #   com4:Extension (v10/4) with InProcessServer
+    #     - Package-level only (Package extension windows.comServer must be com4+).
+    #     - InProcessServer is the only allowed server type at Package level.
+    #
+    #   desktop9:Extension (windows.fileExplorerClassicContextMenuHandler)
+    #     - Package-level. Placing it under an Application makes MakeAppx
+    #       happy but Explorer never registers the shell hook at runtime.
 
-    It 'Add-MsixLegacyContextMenu writes com4:Extension at Package level (not Application)' {
+    It 'Add-MsixLegacyContextMenu writes the COM SurrogateServer at Application level (bare com namespace)' {
         [xml]$xml = $script:SampleXml
         & (Get-Module MSIX) {
             param($m)
-            # Drive the inner mutation logic directly via the manifest transform.
-            # We can't invoke the full cmdlet (it requires MakeAppx) but we can
-            # exercise the manifest mutation by replicating its core steps.
-            # Package-level windows.comServer requires the com4 namespace.
-            Add-MsixManifestNamespace $m 'com4'
-            Add-MsixManifestNamespace $m 'desktop9'
-            $pkgExt = _MsixGetOrCreatePackageExtensions $m
-
-            $comUri = Get-MsixManifestNamespaceUri 'com4'
-            $comExt = $m.CreateElement('com4:Extension', $comUri)
+            # Replicate the cmdlet's mutation steps in-memory (no MakeAppx needed).
+            Add-MsixManifestNamespace $m 'com'
+            $app = Get-MsixManifestApplication -Manifest $m
+            $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
+            if (-not $appExt) {
+                $appExt = $m.CreateElement('Extensions', $m.Package.NamespaceURI)
+                $null = $app.AppendChild($appExt)
+            }
+            $comUri    = Get-MsixManifestNamespaceUri 'com'
+            $comExt    = $m.CreateElement('com:Extension', $comUri)
             $comExt.SetAttribute('Category', 'windows.comServer')
-            $null = $pkgExt.AppendChild($comExt)
+            $comServer = $m.CreateElement('com:ComServer', $comUri)
+            $surrogate = $m.CreateElement('com:SurrogateServer', $comUri)
+            $surrogate.SetAttribute('DisplayName', 'Test')
+            $null = $comServer.AppendChild($surrogate)
+            $null = $comExt.AppendChild($comServer)
+            $null = $appExt.AppendChild($comExt)
         } $xml
 
-        $pkgComServer = $xml.SelectNodes("/*[local-name()='Package']/*[local-name()='Extensions']/*[local-name()='Extension' and @Category='windows.comServer']")
         $appComServer = $xml.SelectNodes("//*[local-name()='Application']/*[local-name()='Extensions']/*[local-name()='Extension' and @Category='windows.comServer']")
-        $pkgComServer.Count | Should -Be 1
-        $appComServer.Count | Should -Be 0
-
-        # com4 namespace (v10/4) — required for Package-level windows.comServer
-        $pkgComServer[0].NamespaceURI | Should -Be 'http://schemas.microsoft.com/appx/manifest/com/windows10/4'
+        $pkgComServer = $xml.SelectNodes("/*[local-name()='Package']/*[local-name()='Extensions']/*[local-name()='Extension' and @Category='windows.comServer']")
+        $appComServer.Count | Should -Be 1
+        $pkgComServer.Count | Should -Be 0
+        # bare 'com' namespace (v10) — surrogate is only legal here
+        $appComServer[0].NamespaceURI | Should -Be 'http://schemas.microsoft.com/appx/manifest/com/windows10'
     }
 
     It 'Add-MsixLegacyContextMenu writes desktop9 context menu at Package level' {
@@ -82,33 +97,29 @@ Describe 'Shell-integration extensions placement (Package vs Application)' -Tag 
         $app.Count | Should -Be 0
     }
 
-    It 'ContextMenu.ps1 calls _MsixGetOrCreatePackageExtensions (not _MsixGetOrCreateApplicationExtensions)' {
-        # Source-level regression guard: catches future commits that accidentally
-        # move shell-integration extensions back to Application level.
+    It 'ContextMenu.ps1 calls _MsixGetOrCreatePackageExtensions (for desktop9)' {
+        # Regression guard: desktop9 must end up at Package level.
         $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.ContextMenu.ps1')) -Raw
         $src | Should -Match '_MsixGetOrCreatePackageExtensions'
-        # Must NOT contain the Application-level pattern that caused the original bug.
-        # (Local $appExt variable name is fine; we look specifically for the helper call.)
-        $src | Should -Not -Match '_MsixGetOrCreateApplicationExtensions'
     }
 
-    It 'ContextMenu.ps1 emits com4: prefix (not bare com:) for Package-level COM extensions' {
-        # Schema rule: package-level windows.comServer must be v10/4 (com4).
-        # MakeAppx rejects packaging with "Extension 'windows.comServer' must
-        # be 'http://schemas.microsoft.com/appx/manifest/com/windows10/4' or
-        # newer on package level" when the bare 'com' prefix is used at
-        # Package scope. Regression guard.
+    It 'ContextMenu.ps1 uses bare com: namespace for the SurrogateServer block (not com4:)' {
+        # Schema rule: SurrogateServer is forbidden in Package-level com4.
+        # The COM declaration in Add-MsixLegacyContextMenu must use the bare
+        # 'com' prefix at Application level.
         $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.ContextMenu.ps1')) -Raw
-        $src | Should -Match "CreateElement\('com4:Extension'"
-        $src | Should -Match "CreateElement\('com4:ComServer'"
-        $src | Should -Match "CreateElement\('com4:SurrogateServer'"
-        $src | Should -Match "CreateElement\('com4:Class'"
-        # Must NOT contain the v10 (bare 'com:') element creations at this point.
-        $src | Should -Not -Match "CreateElement\('com:Extension'"
-        $src | Should -Not -Match "CreateElement\('com:SurrogateServer'"
+        $src | Should -Match "CreateElement\('com:Extension'"
+        $src | Should -Match "CreateElement\('com:ComServer'"
+        $src | Should -Match "CreateElement\('com:SurrogateServer'"
+        $src | Should -Match "CreateElement\('com:Class'"
+        # Must NOT use com4 here — Surrogate is forbidden at Package level.
+        $src | Should -Not -Match "CreateElement\('com4:Extension'"
+        $src | Should -Not -Match "CreateElement\('com4:SurrogateServer'"
     }
 
-    It 'ManifestExtensions.ps1 (Add-MsixComServerExtension) emits com4: prefix' {
+    It 'ManifestExtensions.ps1 (Add-MsixComServerExtension, InProcessServer only) uses com4 at Package level' {
+        # Inverse rule: Package-level windows.comServer must be com4 AND may
+        # only declare InProcessServer.
         $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.ManifestExtensions.ps1')) -Raw
         $startIdx = $src.IndexOf('function Add-MsixComServerExtension')
         $nextIdx  = $src.IndexOf("`nfunction ", $startIdx + 1)
@@ -117,16 +128,16 @@ Describe 'Shell-integration extensions placement (Package vs Application)' -Tag 
         $body | Should -Match "CreateElement\('com4:Extension'"
         $body | Should -Match "CreateElement\('com4:InProcessServer'"
         $body | Should -Match "CreateElement\('com4:Class'"
+        # Must NOT use bare 'com:' here — Package-level requires com4.
         $body | Should -Not -Match "CreateElement\('com:Extension'"
+        # And must not declare SurrogateServer at Package level.
+        $body | Should -Not -Match 'SurrogateServer'
     }
 
     It 'Add-MsixComServerExtension uses Package-level Extensions' {
         $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.ManifestExtensions.ps1')) -Raw
-        # The COM-server adder body must call the Package helper, NOT the
-        # Application helper (the latter is what caused the original bug).
         $startIdx = $src.IndexOf('function Add-MsixComServerExtension')
         $startIdx | Should -BeGreaterThan 0
-        # Find the next 'function' declaration after this one — that's the end of our body.
         $nextIdx = $src.IndexOf("`nfunction ", $startIdx + 1)
         if ($nextIdx -lt 0) { $nextIdx = $src.Length }
         $body = $src.Substring($startIdx, $nextIdx - $startIdx)

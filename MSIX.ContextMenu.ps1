@@ -167,10 +167,18 @@
         -Activity 'Add Legacy Context Menu' -Mutate {
         param([xml]$manifest)
 
-        # Required namespaces. We need com4 (v10/4) — not the bare 'com' —
-        # because Package-level windows.comServer extensions must declare
-        # the v4 schema (see _MsixGetOrCreatePackageExtensions block below).
-        Add-MsixManifestNamespace $manifest 'com4'
+        # Required namespaces.
+        # NOTE on placement:
+        #   - com:Extension (bare 'com', v10) hosts the SurrogateServer; this
+        #     is the only schema/level combination that allows SurrogateServer.
+        #     MakeAppx hard-errors if SurrogateServer appears at Package level
+        #     (com4): "Package extension 'windows.comServer' must not declare
+        #     'SurrogateServer'/'ExeServer'/'ServiceServer'". So the COM
+        #     declaration must live at Applications/Application/Extensions.
+        #   - desktop9:Extension (the shell handler that references the CLSID)
+        #     must live at Package/Extensions so Explorer registers the
+        #     context-menu hook on package activation.
+        Add-MsixManifestNamespace $manifest 'com'
         Add-MsixManifestNamespace $manifest 'desktop9'
 
         # desktop9 requires MaxVersionTested >= 10.0.22000.0 (Windows 11 21H2)
@@ -192,34 +200,25 @@
             return
         }
 
-        # ── Package-level Extensions node ────────────────────────────────
-        # Shell-integration extensions (com:Extension/windows.comServer for a
-        # SurrogateServer, desktop9:Extension/windows.fileExplorerClassicContextMenuHandler)
-        # are NOT tied to any single Application — they register system-wide
-        # COM classes that Explorer activates cross-process via the surrogate.
-        # They MUST live at Package/Extensions, not Applications/Application/Extensions,
-        # for the shell to register them on package activation. Microsoft's
-        # context-menu sample places them at Package level.
-        $pkgExt = _MsixGetOrCreatePackageExtensions $manifest
+        # ── COM SurrogateServer goes at APPLICATION level (bare com namespace) ──
+        # Package-level com4 disallows SurrogateServer; the only legal place
+        # for a surrogate-hosted shell extension's COM declaration is
+        # Applications/Application/Extensions with the v10 'com:' prefix.
+        $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
+        if (-not $appExt) {
+            $appExt = $manifest.CreateElement('Extensions', $manifest.Package.NamespaceURI)
+            $null   = $app.AppendChild($appExt)
+        }
 
-        # ── COM server registration ───────────────────────────────────────
-        # Package-level windows.comServer requires the com4 namespace (v10/4)
-        # per MakeAppx schema validation:
-        #   "Extension 'windows.comServer' must be
-        #    'http://schemas.microsoft.com/appx/manifest/com/windows10/4'
-        #    or newer on package level."
-        # The original 'com' namespace (v10) is only valid at Application level.
-        Add-MsixManifestNamespace $manifest 'com4'
-        $comUri    = Get-MsixManifestNamespaceUri 'com4'
-
-        $comExt    = $manifest.CreateElement('com4:Extension',       $comUri)
+        $comUri    = Get-MsixManifestNamespaceUri 'com'
+        $comExt    = $manifest.CreateElement('com:Extension',       $comUri)
         $comExt.SetAttribute('Category', 'windows.comServer')
 
-        $comServer = $manifest.CreateElement('com4:ComServer',       $comUri)
-        $surrogate = $manifest.CreateElement('com4:SurrogateServer', $comUri)
+        $comServer = $manifest.CreateElement('com:ComServer',       $comUri)
+        $surrogate = $manifest.CreateElement('com:SurrogateServer', $comUri)
         $surrogate.SetAttribute('DisplayName', $DisplayName)
 
-        $class = $manifest.CreateElement('com4:Class', $comUri)
+        $class = $manifest.CreateElement('com:Class', $comUri)
         $class.SetAttribute('Id',             $ClsidBare)   # ST_GUID — no braces
         $class.SetAttribute('Path',           $ShellExtDll)
         $class.SetAttribute('ThreadingModel', 'STA')
@@ -227,10 +226,14 @@
         $null = $surrogate.AppendChild($class)
         $null = $comServer.AppendChild($surrogate)
         $null = $comExt.AppendChild($comServer)
-        $null = $pkgExt.AppendChild($comExt)
+        $null = $appExt.AppendChild($comExt)
 
-        # ── Shell extension handler ───────────────────────────────────────
-        $d9Uri = Get-MsixManifestNamespaceUri 'desktop9'
+        # ── desktop9 shell handler goes at PACKAGE level ─────────────────
+        # The shell context-menu hook registers system-wide on package
+        # activation — placing desktop9:Extension under an Application
+        # passes MakeAppx but the shell never wires up the handler.
+        $pkgExt = _MsixGetOrCreatePackageExtensions $manifest
+        $d9Uri  = Get-MsixManifestNamespaceUri 'desktop9'
 
         $category, $handlerTag = switch ($MenuType) {
             'ContextMenu' {

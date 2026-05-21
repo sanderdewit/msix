@@ -409,7 +409,7 @@ function Get-MsixManifestApplication {
     #>
     [CmdletBinding(DefaultParameterSetName = 'First')]
     param(
-        [Parameter(Mandatory)]
+        [Parameter(Mandatory, Position = 0)]
         $Manifest,
         [Parameter(Mandatory, ParameterSetName = 'ById')]
         [string]$AppId,

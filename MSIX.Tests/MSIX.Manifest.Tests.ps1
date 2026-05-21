@@ -37,6 +37,26 @@ AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
 Describe 'Manifest helpers' -Tag 'Manifest' {
 
+    Context 'Get-MsixManifestApplication parameter binding' {
+        # Regression guard: a missing Position attribute on -Manifest caused
+        # 'A positional parameter cannot be found that accepts argument
+        # System.Xml.XmlDocument' at every site that called the function
+        # positionally (Add-MsixPsfV2, Start-MsixDebugSession, etc.).
+        It '-Manifest is positional (Position 0)' {
+            $cmd = Get-Command Get-MsixManifestApplication -Module MSIX
+            $p   = $cmd.Parameters['Manifest']
+            $p | Should -Not -BeNullOrEmpty
+            $attr = $p.Attributes | Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] }
+            ($attr | Where-Object { $_.Position -eq 0 } | Measure-Object).Count | Should -BeGreaterThan 0
+        }
+        It 'Accepts an [xml] document as the first positional argument without -Manifest name' {
+            [xml]$x = $script:SampleManifest
+            $app = Get-MsixManifestApplication $x
+            $app | Should -Not -BeNullOrEmpty
+            $app.GetAttribute('Id') | Should -Not -BeNullOrEmpty
+        }
+    }
+
     Context 'Add-MsixManifestNamespace' {
         It 'Adds rescap namespace if missing' {
             [xml]$x = $script:SampleManifest

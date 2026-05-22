@@ -1,41 +1,45 @@
 ﻿BeforeAll {
     Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+
+    # Build the SARIF fixture HERE — once at the top — so every Context
+    # inside the Describe shares a single instance. Pester 5 in some
+    # configurations doesn't make module commands imported by the
+    # Describe-level BeforeAll visible to nested Context-level BeforeAll
+    # blocks (the inner one runs in a different runspace scope), which
+    # caused CI to fail with "ConvertTo-MsixSarif is not recognized".
+    $script:Findings = @(
+        [pscustomobject]@{
+            Severity       = 'Warning'
+            Category       = 'ManifestFix:FileSystemWriteVirtualization'
+            Symptom        = 'Writable-looking files shipped inside the VFS payload.'
+            Recommendation = "Set-MsixFileSystemWriteVirtualization -PackagePath 'app.msix'"
+            Evidence       = 'app.log, cache.tmp'
+            AppId          = 'App'
+        }
+        [pscustomobject]@{
+            Severity       = 'Error'
+            Category       = 'ShellExt'
+            Symptom        = 'Legacy shellex handler in Registry.dat.'
+            Recommendation = 'Add-MsixLegacyContextMenu ...'
+            Evidence       = 'NppShell'
+            AppId          = $null
+        }
+        [pscustomobject]@{
+            Severity       = 'Info'
+            Category       = 'AppExecutionAlias'
+            Symptom        = 'NOTEPAD has no AppExecutionAlias.'
+            Recommendation = "Add-MsixAlias ..."
+            Evidence       = 'notepad++.exe'
+            AppId          = 'NOTEPAD'
+        }
+    )
+    $script:Sarif = ConvertTo-MsixSarif -Findings $script:Findings -PackagePath 'C:\drop\app.msix'
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
 Describe 'SARIF export' -Tag 'Sarif' {
 
     Context 'ConvertTo-MsixSarif shape' {
-
-        BeforeAll {
-            $script:Findings = @(
-                [pscustomobject]@{
-                    Severity       = 'Warning'
-                    Category       = 'ManifestFix:FileSystemWriteVirtualization'
-                    Symptom        = 'Writable-looking files shipped inside the VFS payload.'
-                    Recommendation = "Set-MsixFileSystemWriteVirtualization -PackagePath 'app.msix'"
-                    Evidence       = 'app.log, cache.tmp'
-                    AppId          = 'App'
-                }
-                [pscustomobject]@{
-                    Severity       = 'Error'
-                    Category       = 'ShellExt'
-                    Symptom        = 'Legacy shellex handler in Registry.dat.'
-                    Recommendation = 'Add-MsixLegacyContextMenu ...'
-                    Evidence       = 'NppShell'
-                    AppId          = $null
-                }
-                [pscustomobject]@{
-                    Severity       = 'Info'
-                    Category       = 'AppExecutionAlias'
-                    Symptom        = 'NOTEPAD has no AppExecutionAlias.'
-                    Recommendation = "Add-MsixAlias ..."
-                    Evidence       = 'notepad++.exe'
-                    AppId          = 'NOTEPAD'
-                }
-            )
-            $script:Sarif = ConvertTo-MsixSarif -Findings $script:Findings -PackagePath 'C:\drop\app.msix'
-        }
 
         It 'Produces a SARIF 2.1.0 document' {
             $script:Sarif.version | Should -Be '2.1.0'

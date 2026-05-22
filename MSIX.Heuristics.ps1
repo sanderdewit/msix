@@ -275,6 +275,111 @@ function Get-MsixUninstallerCandidate {
 }
 
 
+function Get-MsixUpdaterCandidate {
+    <#
+    .SYNOPSIS
+        Lists files inside the package that look like auto-updater binaries or
+        scheduled-task artefacts. Auto-updaters typically fail (or worse,
+        damage the install) inside the MSIX container and should be removed
+        before publishing.
+
+    .DESCRIPTION
+        Pattern matches against well-known auto-updater filename shapes
+        (Updater.exe, *UpdateSvc*.exe, *Sparkle*.dll, *Squirrel*.exe,
+        GoogleUpdate*.exe, MicrosoftEdgeUpdate*.exe, omaha*.exe,
+        *AutoUpdater*.exe, *MaintenanceService*.exe) and flags any *.xml
+        shipped under a Tasks\ or VFS\Windows\Tasks\ folder as scheduled-task
+        artefacts.
+
+        Detection-only — pair with Remove-MsixUpdaterArtifact to strip the
+        matched files. Feeds the `UpdaterArtifact` finding in
+        Get-MsixHeuristicFinding.
+
+        False-positive guard: filenames also matching PSF helpers, MSVC /
+        UCRT redistributables, or the MSIX runtime itself are skipped.
+
+    .PARAMETER PackagePath
+        .msix to scan (read-only).
+
+    .EXAMPLE
+        # List updater leftovers, then remove them in a follow-up call
+        Get-MsixUpdaterCandidate -PackagePath app.msix
+        Remove-MsixUpdaterArtifact -PackagePath app.msix -SkipSigning
+
+    .OUTPUTS
+        [pscustomobject] one per match: RelativePath, LeafName, Kind
+        ('Binary' or 'ScheduledTask'), Reason.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$PackagePath)
+
+    $patterns = @(
+        '^.*updater?\.exe$',
+        '^.*updatesvc.*\.exe$',
+        '^.*sparkle.*\.(dll|exe)$',
+        '^.*squirrel.*\.exe$',
+        '^GoogleUpdate.*\.exe$',
+        '^MicrosoftEdgeUpdate.*\.exe$',
+        '^omaha.*\.exe$',
+        '^.*autoupdater?.*\.exe$',
+        '^.*maintenanceservice.*\.exe$',
+        '^.*winsparkle.*\.(dll|exe)$'
+    )
+    $excludePatterns = @('^psf', '^msvc', '^vcruntime', '^api-ms-win-', '^msix')
+
+    $toolsRoot = Get-MsixToolsRoot
+    $fileinfo  = Get-Item $PackagePath
+    $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-upd"
+    try {
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+
+        Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                $leaf = $_.Name
+                $rel  = $_.FullName.Substring($workspace.Length + 1)
+
+                # False-positive guard
+                $skip = $false
+                foreach ($ex in $excludePatterns) {
+                    if ($leaf -match $ex) { $skip = $true; break }
+                }
+                if ($skip) { return }
+
+                # Binary signal
+                $matched = $null
+                foreach ($p in $patterns) {
+                    if ($leaf -match $p) { $matched = $p; break }
+                }
+                if ($matched) {
+                    [pscustomobject]@{
+                        RelativePath = $rel
+                        LeafName     = $leaf
+                        Kind         = 'Binary'
+                        Reason       = "Matches updater binary pattern: $matched"
+                    }
+                    return
+                }
+
+                # Scheduled-task XML signal
+                if ($leaf -match '\.xml$') {
+                    $relLower = $rel.ToLowerInvariant()
+                    if ($relLower -match '(^|\\)tasks\\' -or $relLower -match '\\vfs\\windows\\tasks\\') {
+                        [pscustomobject]@{
+                            RelativePath = $rel
+                            LeafName     = $leaf
+                            Kind         = 'ScheduledTask'
+                            Reason       = 'Scheduled task XML under Tasks/'
+                        }
+                    }
+                }
+            }
+    } finally {
+        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+
 function Get-MsixUninstallRegistryEntry {
     <#
     .SYNOPSIS
@@ -542,6 +647,177 @@ function Remove-MsixUninstallerArtifact {
             FilesRemoved = $removedFiles
             KeysRemoved  = $removedKeys
             Output       = $target
+        }
+    } finally {
+        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Remove-MsixUpdaterArtifact {
+    <#
+    .SYNOPSIS
+        Strips auto-updater binaries and scheduled-task XMLs from inside the
+        package. Repacks + re-signs unless -SkipSigning / -NoSign.
+
+    .DESCRIPTION
+        Mutator counterpart to Get-MsixUpdaterCandidate. Two-step cleanup:
+
+          1. Remove files inside the package whose leaf name matches
+             -PathPatterns (default = the known updater set).
+          2. Remove *.xml files under any Tasks\ or VFS\Windows\Tasks\
+             subdirectory (scheduled-task artefacts that ship with installers
+             but cannot fire from inside the MSIX container).
+
+        Repacks via a scratch path and re-signs at the end. Idempotent — a
+        second run on a clean package logs "No updater artefacts found."
+        and returns without repacking.
+
+        Does NOT touch Registry.dat — updater registry entries (e.g. Run-key
+        autostart) are detected separately via Get-MsixRunKeyEntry and the
+        existing uninstall-registry / shell-registry cleanup paths.
+
+        Used by both Invoke-MsixAutoFix (via -RemoveUpdaters) and
+        Invoke-MsixAutoFixFromAnalysis (RemoveUpdaters stage).
+
+    .PARAMETER PackagePath
+        .msix file to mutate.
+
+    .PARAMETER PathPatterns
+        Filename regex patterns. Defaults to the same set
+        Get-MsixUpdaterCandidate uses.
+
+    .PARAMETER OutputPath
+        Write the repacked package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Don't sign the repacked .msix. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package at this path
+        for inspection.
+
+    .EXAMPLE
+        # Strip updater binaries and scheduled-task XMLs, then sign
+        Remove-MsixUpdaterArtifact -PackagePath app.msix `
+            -Pfx cert.pfx -PfxPassword $pw
+
+    .EXAMPLE
+        # Test/dev — strip without signing
+        Remove-MsixUpdaterArtifact -PackagePath app.msix -SkipSigning
+
+    .OUTPUTS
+        [pscustomobject] with FilesRemoved (string[]), TasksRemoved (string[]),
+        and Output (final package path). Returns nothing when nothing matched.
+
+    .NOTES
+        Pair with Get-MsixRunKeyEntry to surface Run-key autostart leftovers
+        that updaters often plant in Registry.dat / User.dat.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] [string]$PackagePath,
+        [string[]]$PathPatterns,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
+    )
+    if (-not $PathPatterns) {
+        $PathPatterns = @(
+            '^.*updater?\.exe$',
+            '^.*updatesvc.*\.exe$',
+            '^.*sparkle.*\.(dll|exe)$',
+            '^.*squirrel.*\.exe$',
+            '^GoogleUpdate.*\.exe$',
+            '^MicrosoftEdgeUpdate.*\.exe$',
+            '^omaha.*\.exe$',
+            '^.*autoupdater?.*\.exe$',
+            '^.*maintenanceservice.*\.exe$',
+            '^.*winsparkle.*\.(dll|exe)$'
+        )
+    }
+    $excludePatterns = @('^psf', '^msvc', '^vcruntime', '^api-ms-win-', '^msix')
+
+    $toolsRoot = Get-MsixToolsRoot
+    $fileinfo  = Get-Item $PackagePath
+    $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-updrm"
+    try {
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+
+        # ── Strip updater binaries ─────────────────────────────────────────
+        $removedFiles = @()
+        Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object {
+                $name = $_.Name
+                $skip = $false
+                foreach ($ex in $excludePatterns) {
+                    if ($name -match $ex) { $skip = $true; break }
+                }
+                if ($skip) { return $false }
+                ($PathPatterns | Where-Object { $name -match $_ }).Count -gt 0
+            } |
+            ForEach-Object {
+                if ($PSCmdlet.ShouldProcess($_.FullName, 'Remove updater artefact')) {
+                    Remove-Item $_.FullName -Force
+                    $removedFiles += $_.FullName.Substring($workspace.Length + 1)
+                }
+            }
+
+        # ── Strip scheduled-task XMLs ──────────────────────────────────────
+        $removedTasks = @()
+        Get-ChildItem $workspace -Recurse -File -Filter '*.xml' -ErrorAction SilentlyContinue |
+            Where-Object {
+                $rel = $_.FullName.Substring($workspace.Length + 1).ToLowerInvariant()
+                ($rel -match '(^|\\)tasks\\') -or ($rel -match '\\vfs\\windows\\tasks\\')
+            } |
+            ForEach-Object {
+                if ($PSCmdlet.ShouldProcess($_.FullName, 'Remove scheduled-task XML')) {
+                    Remove-Item $_.FullName -Force
+                    $removedTasks += $_.FullName.Substring($workspace.Length + 1)
+                }
+            }
+
+        if (-not $removedFiles -and -not $removedTasks) {
+            Write-MsixLog Info 'No updater artefacts found.'
+            return
+        }
+        if ($removedFiles) { Write-MsixLog Info "Files removed: $($removedFiles -join ', ')" }
+        if ($removedTasks) { Write-MsixLog Info "Tasks removed: $($removedTasks -join ', ')" }
+
+        # Atomic repack — pack to a scratch path, sign, then move into place.
+        $target  = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
+        $scratch = Join-Path $env:TEMP ("msix-updrm-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($target)))
+        $packOk = $false
+        try {
+            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+            Assert-MsixProcessSuccess $r 'MakeAppx pack'
+            $packOk = $true
+            if (-not $SkipSigning) {
+                Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword
+            }
+            Move-Item -LiteralPath $scratch -Destination $target -Force
+            return [pscustomobject]@{
+                FilesRemoved = $removedFiles
+                TasksRemoved = $removedTasks
+                Output       = $target
+            }
+        } catch {
+            if ($packOk -and $UnsignedOutputPath) {
+                Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction SilentlyContinue
+                Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
+            }
+            throw
+        } finally {
+            if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue }
         }
     } finally {
         Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
@@ -1459,6 +1735,7 @@ function Invoke-MsixAutoFix {
 
           PrePsf
             - RemoveUninstallers      strip uninstall*.exe and friends
+            - RemoveUpdaters          strip auto-updater binaries + Tasks XMLs
             - BumpVersion             bump the package version
           Recommended
             - AddCapabilities         add common capabilities
@@ -1504,6 +1781,9 @@ function Invoke-MsixAutoFix {
     .PARAMETER RemoveUninstallers
         If $true, strips uninstaller-looking files first.
 
+    .PARAMETER RemoveUpdaters
+        If $true, strips auto-updater binaries and scheduled-task XMLs.
+
     .PARAMETER OutputPath
         If set, all writes go here instead of overwriting -PackagePath.
 
@@ -1530,6 +1810,7 @@ function Invoke-MsixAutoFix {
 
         # PrePsf stage
         [switch]$RemoveUninstallers,
+        [switch]$RemoveUpdaters,
         [switch]$RemoveDesktopShortcuts,
         [ValidateSet('Major','Minor','Build','Revision')]
         [string]$VersionBumpComponent,
@@ -1576,6 +1857,11 @@ function Invoke-MsixAutoFix {
     if ($RemoveUninstallers) {
         _Stage 'PrePsf:RemoveUninstallers' {
             Remove-MsixUninstallerArtifact -PackagePath $current -SkipSigning
+        }
+    }
+    if ($RemoveUpdaters) {
+        _Stage 'PrePsf:RemoveUpdaters' {
+            Remove-MsixUpdaterArtifact -PackagePath $current -SkipSigning
         }
     }
     if ($RemoveDesktopShortcuts) {
@@ -1691,6 +1977,7 @@ function Invoke-MsixAutoFixFromAnalysis {
         Maps Findings.Category to a concrete cmdlet:
 
           UninstallerArtifact                 -> Remove-MsixUninstallerArtifact
+          UpdaterArtifact                      -> Remove-MsixUpdaterArtifact (skip with -IgnoreUpdaters)
           AppExecutionAlias                    -> Add-MsixAlias (only AppIds without an existing alias)
           VcRuntime                            -> Add-MsixVcRuntimeBundle (needs -VcRuntimeSourceFolder)
           ManifestFix:FileSystemWriteVirt..    -> Set-MsixFileSystemWriteVirtualization
@@ -1725,6 +2012,25 @@ function Invoke-MsixAutoFixFromAnalysis {
     .PARAMETER LoaderPaths
         Required when a ManifestFix:LoaderSearchPathOverride finding is in the report.
 
+    .PARAMETER IgnoreUpdaters
+        When set, omit the RemoveUpdaters stage from the plan even if the
+        report contains UpdaterArtifact findings. Use to keep package
+        auto-update binaries in place (e.g. for testing) without filtering
+        the report by hand.
+
+    .PARAMETER IgnorePluginDirectories
+        When set, omit the PluginDirectory stage from the plan even if the
+        report contains PluginDirectory findings. Useful when the operator
+        has already chosen a different plugin strategy (e.g. host-side
+        AppData seeding via PSADT scripts).
+
+    .PARAMETER LegacyPluginFix
+        Apply plugin-directory write-passthrough via PSF FileRedirection
+        instead of the modern desktop6:FileSystemWriteVirtualization +
+        ExcludedDirectory route. Default behaviour targets Win10 19041+
+        which covers everything from Win10 2004 onward; pass this switch
+        when the target fleet still has earlier builds.
+
     .PARAMETER DryRun
         Print the plan and return without mutating.
 
@@ -1746,6 +2052,10 @@ function Invoke-MsixAutoFixFromAnalysis {
         [string]$StartupTaskAppId,
         [string]$StartupTaskName,
         [string[]]$LoaderPaths,
+        [switch]$IgnoreUpdaters,
+        [switch]$IgnorePluginDirectories,
+        [switch]$LegacyPluginFix,
+        [switch]$IgnoreNestedPackages,
         [switch]$DryRun,
         [string]$OutputPath,
         [Alias('NoSign')]
@@ -1774,6 +2084,15 @@ function Invoke-MsixAutoFixFromAnalysis {
         })
     }
 
+    # Stage 1b — strip auto-updater binaries and scheduled-task XMLs
+    if ($byCat.ContainsKey('UpdaterArtifact') -and -not $IgnoreUpdaters) {
+        $plan.Add([pscustomobject]@{
+            Stage  = 'RemoveUpdaters'
+            Reason = 'Findings include auto-updater binaries or scheduled-task XMLs'
+            Action = { Remove-MsixUpdaterArtifact -PackagePath $current -SkipSigning }
+        })
+    }
+
     # Stage 2 — manifest-only virtualization (preferred over PSF when matching)
     $hasFsManifestFix  = $byCat.ContainsKey('ManifestFix:FileSystemWriteVirtualization')
     $hasRegManifestFix = $byCat.ContainsKey('ManifestFix:RegistryWriteVirtualization')
@@ -1793,6 +2112,51 @@ function Invoke-MsixAutoFixFromAnalysis {
             Reason = 'Package writes to HKLM; manifest fix is simpler than RegLegacy Hklm2Hkcu'
             Action = { Set-MsixRegistryWriteVirtualization -PackagePath $current -SkipSigning }
         })
+    }
+
+    # Stage 2.5 — plugin/theme/extension directories.
+    # Modern path: enable desktop6:FileSystemWriteVirtualization + add each
+    # plugin dir to <virtualization:ExcludedDirectories> so writes there
+    # pass through to the host filesystem and survive across sessions.
+    # Legacy path: PSF FileRedirection mapping the dir to per-user AppData.
+    if ($byCat.ContainsKey('PluginDirectory') -and -not $IgnorePluginDirectories) {
+        $pluginFindings = @($Report.Findings | Where-Object Category -eq 'PluginDirectory')
+        $pluginDirs = @($pluginFindings | ForEach-Object { $_.Evidence } | Where-Object { $_ } | Sort-Object -Unique)
+        if ($pluginDirs) {
+            $capturedPluginDirs = $pluginDirs
+            if ($LegacyPluginFix) {
+                # Wide-compat: PSF FileRedirection per plugin folder.
+                $plan.Add([pscustomobject]@{
+                    Stage  = 'PluginDirectory'
+                    Reason = "PSF FileRedirection passthrough for $($capturedPluginDirs.Count) extension folder(s): $($capturedPluginDirs -join ', ')"
+                    Action = {
+                        $fixups = @(foreach ($d in $capturedPluginDirs) {
+                            # Normalise '\' to '/' for the PSF base path; '.*' covers
+                            # everything underneath since plugin payloads vary.
+                            New-MsixPsfFileRedirectionConfig -Base ($d -replace '\\','/') -Patterns '.*'
+                        })
+                        Add-MsixPsfV2 -PackagePath $current -Fixups $fixups -SkipSigning
+                    }
+                })
+            } else {
+                # Modern path (Win10 19041+): selective virtualization carve-out.
+                # Set-MsixFileSystemWriteVirtualization defaults excluded dirs to
+                # LocalAppData + RoamingAppData; extend that list with the plugin
+                # folders so the explicit declaration is single-call.
+                $plan.Add([pscustomobject]@{
+                    Stage  = 'PluginDirectory'
+                    Reason = "Selective virtualization passthrough for $($capturedPluginDirs.Count) extension folder(s): $($capturedPluginDirs -join ', ')"
+                    Action = {
+                        $excluded = @('$(KnownFolder:LocalAppData)','$(KnownFolder:RoamingAppData)') + @($capturedPluginDirs | ForEach-Object { $_ -replace '\\','/' })
+                        # We DISABLE legacy virtualization and exclude these
+                        # specific directories from the virtualization layer
+                        # so writes inside them land on the real filesystem.
+                        Set-MsixFileSystemWriteVirtualization -PackagePath $current `
+                            -ExcludedDirectories $excluded -SkipSigning
+                    }
+                })
+            }
+        }
     }
     if ($hasStartupFix) {
         if ($StartupTaskAppId -and $StartupTaskName) {
@@ -1871,6 +2235,26 @@ function Invoke-MsixAutoFixFromAnalysis {
         Write-MsixLog Info "ShellVerb: $($shellVerbFinding.ShellEntries.Count) plain command shell verb(s) detected ($verbNames). Cannot be auto-fixed — desktop9:fileExplorerClassicContextMenuHandler requires a COM CLSID. Convert to a COM surrogate server and use Add-MsixLegacyContextMenu."
     }
 
+    # Stage 2f.5 — merge nested (sparse) shell-extension packages
+    # Sparse inner .msix packages cannot be activated post-install: the COM
+    # surrogate host can't traverse the inner zip. The fix is to lift their
+    # manifest declarations + payload into the outer package BEFORE the
+    # ShellExt / AddLegacyContextMenu stage so any downstream detection sees
+    # the merged declarations.
+    if ($byCat.ContainsKey('NestedPackage') -and -not $IgnoreNestedPackages) {
+        $nested = @($Report.Findings | Where-Object Category -eq 'NestedPackage')
+        foreach ($n in $nested) {
+            $captured = $n.Evidence  # package-relative path of the nested .msix
+            $plan.Add([pscustomobject]@{
+                Stage  = 'ImportSparseShellExtension'
+                Reason = "Merge nested package '$captured' into outer manifest"
+                Action = {
+                    Import-MsixSparseShellExtension -PackagePath $current -NestedPackagePath $captured -SkipSigning
+                }
+            })
+        }
+    }
+
     # Stage 2g — COM shellex context menu via desktop4 + desktop5 (TMEditX pattern)
     if ($byCat.ContainsKey('ShellExt')) {
         $shellExtFinding = @($Report.Findings | Where-Object Category -eq 'ShellExt') | Select-Object -First 1
@@ -1908,7 +2292,7 @@ function Invoke-MsixAutoFixFromAnalysis {
                 }
             })
         } else {
-            Write-MsixLog Info "ShellExt: CLSID/VFS DLL path not resolved — run elevated for full detection, then call Add-MsixLegacyContextMenu manually."
+            Write-MsixLog Info "ShellExt: CLSID/VFS DLL path could not be resolved (the bundled DLL may not be Authenticode-stamped with the CLSID, or the package omits the COM class registration). Call Add-MsixLegacyContextMenu manually with the CLSID and -ShellExtDll path."
         }
     }
 
@@ -1938,7 +2322,7 @@ function Invoke-MsixAutoFixFromAnalysis {
                 }
             })
         } else {
-            Write-MsixLog Info "ComServer: no auto-fixable InProc servers (run elevated for DLL path resolution)."
+            Write-MsixLog Info "ComServer: no auto-fixable InProc servers (none of the detected CLSIDs resolved to a VFS-bundled DLL)."
         }
     }
 
@@ -2067,6 +2451,37 @@ function Get-MsixHeuristicFinding {
         })
     }
 
+    # Auto-updater artefacts (binaries + scheduled-task XMLs)
+    try {
+        foreach ($u in Get-MsixUpdaterCandidate -PackagePath $PackagePath) {
+            $out.Add([pscustomobject]@{
+                Severity = 'Info'
+                Category = 'UpdaterArtifact'
+                Symptom  = "Auto-updater detected: $($u.LeafName) ($($u.Kind))"
+                Recommendation = "Remove-MsixUpdaterArtifact -PackagePath '$PackagePath'"
+                Evidence = $u.RelativePath
+                AppId    = $null
+            })
+        }
+    } catch { Write-MsixLog Debug "Updater heuristic skipped: $_" }
+
+    # Plugin / extension-point directories. Default fix path is
+    # selective FileSystemWriteVirtualization (Win10 19041+); operators on
+    # older fleets can opt into PSF FileRedirection via -LegacyPluginFix on
+    # Invoke-MsixAutoFixFromAnalysis.
+    try {
+        foreach ($p in Get-MsixPluginExtensionPoint -PackagePath $PackagePath) {
+            $out.Add([pscustomobject]@{
+                Severity = 'Info'
+                Category = 'PluginDirectory'
+                Symptom  = "Likely runtime extension folder: $($p.Name) ($($p.FileCount) entries)"
+                Recommendation = "Set-MsixFileSystemWriteVirtualization -PackagePath '$PackagePath' -ExcludedDirectories @('$($p.RelativePath -replace '\\','/')')  (modern: desktop6+virtualization carve-out)  OR  Add-MsixPsfV2 -Fixups (New-MsixPsfFileRedirectionConfig -Base '$($p.RelativePath -replace '\\','/')' -Patterns '.*')  (legacy: PSF route)"
+                Evidence = $p.RelativePath
+                AppId    = $null
+            })
+        }
+    } catch { Write-MsixLog Debug "Plugin extension-point heuristic skipped: $_" }
+
     # Run keys
     foreach ($r in Get-MsixRunKeyEntry -PackagePath $PackagePath) {
         $out.Add([pscustomobject]@{
@@ -2160,7 +2575,7 @@ function Get-MsixHeuristicFinding {
                 Severity = 'Warning'
                 Category = 'UninstallRegistry'
                 Symptom  = "Package's Registry.dat has $($uninst.Count) Uninstall\* leftover key(s)."
-                Recommendation = "Remove-MsixUninstallerArtifact -PackagePath '$PackagePath'  (run elevated to also strip the registry entries)"
+                Recommendation = "Remove-MsixUninstallerArtifact -PackagePath '$PackagePath'  (strips Uninstall\* keys from Registry.dat via offreg; no elevation required)"
                 Evidence = ($uninst | Select-Object -First 3 -ExpandProperty DisplayName) -join ', '
                 AppId    = $null
             })
@@ -2380,6 +2795,7 @@ Set-Alias Get-MsixKnownCapabilities Get-MsixKnownCapability
 Set-Alias Get-MsixUninstallerCandidates Get-MsixUninstallerCandidate
 Set-Alias Get-MsixUninstallRegistryEntries Get-MsixUninstallRegistryEntry
 Set-Alias Remove-MsixUninstallerArtifacts Remove-MsixUninstallerArtifact
+Set-Alias Get-MsixUpdaterCandidates Get-MsixUpdaterCandidate
 Set-Alias Get-MsixRunKeyEntries Get-MsixRunKeyEntry
 Set-Alias Get-MsixShellContextMenuEntries Get-MsixShellContextMenuEntry
 Set-Alias Get-MsixComServerEntries Get-MsixComServerEntry

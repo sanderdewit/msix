@@ -11,13 +11,53 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Stage publish folder (only the files that belong on PSGallery)
+        shell: pwsh
+        run: |
+          # Publish-Module packages EVERY file under -Path. Without filtering
+          # we ship workflow YAMLs, test files, CHANGELOG/EXAMPLES/TEST-PLAN/
+          # CONTRIBUTING markdown, and TestResults.xml — none of which the
+          # installed module needs, and the markdown bloat trips the
+          # PSGallery 10,600-char ReleaseNotes limit indirectly when it
+          # gets folded into NuGet metadata.
+          $src   = $env:GITHUB_WORKSPACE
+          $stage = Join-Path $env:RUNNER_TEMP 'msix-publish'
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+
+          # Whitelist: only ship what the installed module actually needs at
+          # runtime. README.md is included because PSGallery surfaces it on
+          # the package page.
+          Copy-Item (Join-Path $src 'msix.psd1') $stage -Force
+          Copy-Item (Join-Path $src 'MSIX.psm1') $stage -Force
+          Copy-Item (Join-Path $src 'MSIX.*.ps1') $stage -Force
+          if (Test-Path (Join-Path $src 'README.md'))   { Copy-Item (Join-Path $src 'README.md')   $stage -Force }
+          if (Test-Path (Join-Path $src 'LICENSE'))     { Copy-Item (Join-Path $src 'LICENSE')     $stage -Force }
+          if (Test-Path (Join-Path $src 'LICENSE.md'))  { Copy-Item (Join-Path $src 'LICENSE.md')  $stage -Force }
+          # templates/ — the standard-script templates Add-MsixStandardScript
+          # reads at runtime.
+          if (Test-Path (Join-Path $src 'templates')) {
+            Copy-Item (Join-Path $src 'templates') $stage -Recurse -Force
+          }
+          # playbooks/ — package fingerprint playbooks the heuristic finder
+          # loads on demand. Skipped silently if the directory doesn't exist.
+          if (Test-Path (Join-Path $src 'playbooks')) {
+            Copy-Item (Join-Path $src 'playbooks') $stage -Recurse -Force
+          }
+
+          # Sanity dump so the build log shows exactly what is about to ship.
+          Get-ChildItem $stage -Recurse | Select-Object FullName | Format-Table -AutoSize
+
+          # Export the stage path for the next steps.
+          "STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Validate module manifest
         shell: pwsh
-        run: Test-ModuleManifest -Path msix.psd1
+        run: Test-ModuleManifest -Path (Join-Path $env:STAGE 'msix.psd1')
 
       - name: Publish to PSGallery
         shell: pwsh
         env:
           PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
         run: |
-          Publish-Module -Path . -NuGetApiKey $env:PSGALLERY_API_KEY -Verbose
+          Publish-Module -Path $env:STAGE -NuGetApiKey $env:PSGALLERY_API_KEY -Verbose

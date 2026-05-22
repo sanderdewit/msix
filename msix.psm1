@@ -1,4 +1,4 @@
-#region --- Load sub-modules ------------------------------------------------
+﻿#region --- Load sub-modules ------------------------------------------------
 . "$PSScriptRoot\MSIX.Logging.ps1"
 . "$PSScriptRoot\MSIX.Core.ps1"
 . "$PSScriptRoot\MSIX.Validation.ps1"
@@ -17,6 +17,7 @@
 . "$PSScriptRoot\MSIX.Limitations.ps1"
 . "$PSScriptRoot\MSIX.Trace.ps1"
 . "$PSScriptRoot\MSIX.Scripts.ps1"
+. "$PSScriptRoot\MSIX.SparseShell.ps1"
 . "$PSScriptRoot\MSIX.MFR.ps1"
 . "$PSScriptRoot\MSIX.VcRuntime.ps1"
 . "$PSScriptRoot\MSIX.Detection.ps1"
@@ -25,6 +26,7 @@
 . "$PSScriptRoot\MSIX.Heuristics.ps1"
 . "$PSScriptRoot\MSIX.Compare.ps1"
 . "$PSScriptRoot\MSIX.Functions.ps1"
+. "$PSScriptRoot\MSIX.Playbooks.ps1"
 #endregion
 
 
@@ -169,6 +171,8 @@ Export-ModuleMember -Function @(
     'Get-MsixUninstallerCandidate'
     'Get-MsixUninstallRegistryEntry'
     'Remove-MsixUninstallerArtifact'
+    'Get-MsixUpdaterCandidate'
+    'Remove-MsixUpdaterArtifact'
     'Remove-MsixShellRegistryArtifact'
     'Get-MsixRunKeyEntry'
     'Get-MsixShellContextMenuEntry'
@@ -177,13 +181,19 @@ Export-ModuleMember -Function @(
     'Add-MsixSplashScreen'
     'Update-MsixPackageVersion'
     'Get-MsixHeuristicFinding'
+    'Import-MsixSparseShellExtension'
     'Invoke-MsixAutoFix'
     'Invoke-MsixAutoFixFromAnalysis'
+    # Playbook bus — fingerprint -> curated cmdlet sequence
+    'Get-MsixPlaybook'
+    'Find-MsixPlaybook'
+    'Invoke-MsixPlaybook'
     # Auto-detection scanners (v0.11)
     'Get-MsixFontCandidate'
     'Get-MsixDesktopShortcutCandidate'
     'Get-MsixCapabilityHint'
     'Get-MsixNestedPackageCandidate'
+    'Get-MsixPluginExtensionPoint'
     # Package compare
     'Compare-MsixPackage'
     # Manifest-only fixers (alternatives to PSF)
@@ -226,10 +236,12 @@ Export-ModuleMember -Function @(
     'Remove-MsixDesktopShortcuts'
     'Get-MsixCapabilityHints'
     'Get-MsixNestedPackageCandidates'
+    'Get-MsixPluginExtensionPoints'
     'Get-MsixKnownCapabilities'
     'Get-MsixUninstallerCandidates'
     'Get-MsixUninstallRegistryEntries'
     'Remove-MsixUninstallerArtifacts'
+    'Get-MsixUpdaterCandidates'
     'Get-MsixRunKeyEntries'
     'Get-MsixShellContextMenuEntries'
     'Get-MsixComServerEntries'

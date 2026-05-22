@@ -365,6 +365,41 @@ function Get-MsixStaticAnalysis {
             }
         }
 
+        # Quick filename scan for auto-updater binaries — uses the already-
+        # unpacked $workspace so we don't pay the unpack cost twice.
+        # Get-MsixUpdaterCandidate runs separately via the heuristic merge
+        # below; this static-analysis hit surfaces the same evidence earlier
+        # in the report's flow.
+        try {
+            $updaterPatterns = @(
+                '^.*updater?\.exe$', '^.*updatesvc.*\.exe$',
+                '^.*sparkle.*\.(dll|exe)$', '^.*squirrel.*\.exe$',
+                '^GoogleUpdate.*\.exe$', '^MicrosoftEdgeUpdate.*\.exe$',
+                '^omaha.*\.exe$', '^.*autoupdater?.*\.exe$',
+                '^.*maintenanceservice.*\.exe$', '^.*winsparkle.*\.(dll|exe)$'
+            )
+            $updaterExclude = @('^psf', '^msvc', '^vcruntime', '^api-ms-win-', '^msix')
+            Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    $leaf = $_.Name
+                    foreach ($ex in $updaterExclude) { if ($leaf -match $ex) { return } }
+                    foreach ($p in $updaterPatterns) {
+                        if ($leaf -match $p) {
+                            $relPath = $_.FullName.Substring($workspace.Length + 1)
+                            $findings += [pscustomobject]@{
+                                Severity        = 'Info'
+                                Category        = 'UpdaterArtifact'
+                                Symptom         = "Auto-updater shipped in package: $relPath"
+                                Recommendation  = "Remove-MsixUpdaterArtifact -PackagePath '$PackagePath'"
+                                AppId           = $null
+                                Evidence        = $relPath
+                            }
+                            break
+                        }
+                    }
+                }
+        } catch { Write-MsixLog Debug "Static updater scan skipped: $_" }
+
         # Merge in TMEditX-style heuristic findings (uninstaller artefacts,
         # Run keys, alias suggestions, missing VC runtimes). Defined in
         # MSIX.Heuristics.ps1 — same module scope, so just call it.

@@ -360,12 +360,21 @@ function Set-MsixRegistryWriteVirtualization {
         Write 'enabled' instead of the default 'disabled'.
 
     .PARAMETER ExcludedKeys
-        Registry key paths that should NOT be virtualized
-        (e.g. 'SOFTWARE\Vendor\PublicKeys'). No defaults — omit to skip the
+        Registry key paths that should be passed through to the host registry
+        instead of being virtualized. Only HKEY_CURRENT_USER\* paths are valid
+        — HKLM exclusions are not supported by the schema and will throw.
+        Maximum 512 chars per key path. Duplicates (case-insensitive) are
+        collapsed. No defaults — omit to skip the
         virtualization:RegistryWriteVirtualization section entirely.
 
     .EXAMPLE
         Set-MsixRegistryWriteVirtualization -PackagePath app.msix -Pfx cert.pfx -PfxPassword 'P@ss'
+
+    .EXAMPLE
+        # Selectively pass through specific HKCU subkeys to the host registry
+        Set-MsixRegistryWriteVirtualization -PackagePath app.msix `
+            -ExcludedKeys 'HKEY_CURRENT_USER\SOFTWARE\Contoso','HKEY_CURRENT_USER\SOFTWARE\Contoso\v2' `
+            -Pfx cert.pfx -PfxPassword $pw
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
@@ -374,7 +383,7 @@ function Set-MsixRegistryWriteVirtualization {
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
         [switch]$Enable,
-        [string[]]$ExcludedKeys,
+        [string[]]$ExcludedKeys = @(),
         [string]$OutputPath,
         [Alias('NoSign')]
         [switch]$SkipSigning,
@@ -391,6 +400,28 @@ function Set-MsixRegistryWriteVirtualization {
                         -WhatIfPreview:$isWhatIf `
                         -Activity 'desktop6:RegistryWriteVirtualization' -Mutate {
         param([xml]$M)
+
+        # ── validate -ExcludedKeys before any mutation ─────────────────────
+        $validatedKeys = @()
+        if ($ExcludedKeys.Count -gt 0) {
+            foreach ($key in $ExcludedKeys) {
+                if ([string]::IsNullOrWhiteSpace($key)) {
+                    throw "ExcludedKeys entries may not be empty or whitespace."
+                }
+                if ($key -notmatch '^HKEY_CURRENT_USER\\') {
+                    throw "ExcludedKeys may only contain HKEY_CURRENT_USER paths. Got: '$key'"
+                }
+                if ($key.Length -gt 512) {
+                    throw "ExcludedKeys entry exceeds 512 chars ($($key.Length)): '$key'"
+                }
+            }
+            # Case-insensitive dedupe, preserve first-seen order.
+            $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+            foreach ($key in $ExcludedKeys) {
+                if ($seen.Add($key)) { $validatedKeys += $key }
+            }
+        }
+
         Add-MsixManifestNamespace $M 'desktop6'
         Add-MsixManifestNamespace $M 'rescap'
         Set-MsixManifestMaxVersionTested $M -MinBuild 19041
@@ -416,18 +447,18 @@ function Set-MsixRegistryWriteVirtualization {
             'namespace-uri()="' + $virtUri + '"]')
         if ($virtNode) { $null = $props.RemoveChild($virtNode) }
 
-        if ($ExcludedKeys.Count -gt 0) {
+        if ($validatedKeys.Count -gt 0) {
             Add-MsixManifestNamespace $M 'virtualization'
             $virtNode = $M.CreateElement('virtualization:RegistryWriteVirtualization', $virtUri)
             $keys     = $M.CreateElement('virtualization:ExcludedKeys', $virtUri)
-            foreach ($k in $ExcludedKeys) {
+            foreach ($k in $validatedKeys) {
                 $entry = $M.CreateElement('virtualization:ExcludedKey', $virtUri)
-                $entry.InnerText = $k
+                $entry.SetAttribute('Key', $k)
                 $null = $keys.AppendChild($entry)
             }
             $null = $virtNode.AppendChild($keys)
             $null = $props.AppendChild($virtNode)
-            Write-MsixLog Info "virtualization:RegistryWriteVirtualization: $($ExcludedKeys.Count) excluded key(s)."
+            Write-MsixLog Info "virtualization:RegistryWriteVirtualization: $($validatedKeys.Count) excluded key(s)."
         }
 
         # ── unvirtualizedResources capability (required by the schema) ─────

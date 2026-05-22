@@ -169,6 +169,7 @@ Export-ModuleMember -Function @(
     'Get-MsixUninstallerCandidate'
     'Get-MsixUninstallRegistryEntry'
     'Remove-MsixUninstallerArtifact'
+    'Remove-MsixShellRegistryArtifact'
     'Get-MsixRunKeyEntry'
     'Get-MsixShellContextMenuEntry'
     'Get-MsixComServerEntry'

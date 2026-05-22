@@ -489,11 +489,20 @@ function Remove-MsixUninstallerArtifact {
                         if (-not $name -or ($name -match $UninstallKeyFilter)) {
                             $logical = "$branch\$child"
                             if ($PSCmdlet.ShouldProcess($logical, "Remove Uninstall key '$name'")) {
-                                if (_MsixOfflineDeleteKey -Parent $hive -SubKey $logical) {
-                                    $removedKeys += $name
+                                # Uninstall\<app> often has Component subkeys
+                                # (per-feature MSI references etc.). ORDeleteKey
+                                # is NOT recursive — calling it on a key that
+                                # still has children silently fails. Use the
+                                # bottom-up recursive helper so the WHOLE
+                                # subtree goes away in one call.
+                                if (_MsixOfflineDeleteKeyRecursive -Parent $hive -SubKey $logical) {
+                                    $removedKeys += if ($name) { $name } else { $child }
                                     $modified = $true
                                 } else {
-                                    Write-MsixLog Warning "ORDeleteKey failed for '$logical'."
+                                    Write-MsixLog Warning "Recursive ORDeleteKey failed for '$logical' — the hive is now in a partial state and will be discarded; the package is unchanged."
+                                    # Bail out so we never persist a half-deleted hive.
+                                    $modified = $false
+                                    break
                                 }
                             }
                         }
@@ -533,6 +542,230 @@ function Remove-MsixUninstallerArtifact {
             FilesRemoved = $removedFiles
             KeysRemoved  = $removedKeys
             Output       = $target
+        }
+    } finally {
+        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Remove-MsixShellRegistryArtifact {
+    <#
+    .SYNOPSIS
+        Strips legacy shellex/shell context-menu entries from the package's
+        Registry.dat so they don't double-register alongside the modern
+        desktop4/desktop5 manifest declaration that Add-MsixLegacyContextMenu
+        emits.
+
+    .DESCRIPTION
+        After Add-MsixLegacyContextMenu adds the manifest-declared verb
+        (desktop4:Extension/desktop5:Verb), the package's Registry.dat may
+        still contain the original installer's classic shell extension
+        registration:
+
+          HKCR\<target>\shellex\ContextMenuHandlers\<HandlerName>
+              (default) = "{<clsid>}"
+          HKCR\<target>\shell\<verb>
+              ExplorerCommandHandler = "{<clsid>}"
+
+        Both forms cause the OS to register the handler AGAIN — the symptom
+        is two identical entries in File Explorer's right-click menu. This
+        cmdlet walks Registry.dat (via offreg.dll, no elevation needed) and
+        removes ONLY the entries that point at CLSIDs we have just declared
+        in the manifest. The CLSID class itself (HKCR\CLSID\{...}) is left
+        intact — the manifest's com:Extension is the new source of truth.
+
+        The -Entries shape matches what Get-MsixShellContextMenuEntry emits,
+        so the autofix orchestrator can hand the exact same set straight
+        through after Add-MsixLegacyContextMenu.
+
+    .PARAMETER PackagePath
+        .msix to mutate.
+
+    .PARAMETER Entries
+        Array of pscustomobjects with at least Target, HandlerName/VerbName,
+        and Clsid properties. Typically the auto-fixable subset of
+        Get-MsixShellContextMenuEntry.
+
+    .PARAMETER OutputPath
+        If set, write the repacked package here.
+
+    .PARAMETER SkipSigning
+        Skip signing. Alias: -NoSign.
+
+    .PARAMETER Pfx / PfxPassword / UnsignedOutputPath
+        Forwarded to the shared sign/move path.
+
+    .EXAMPLE
+        $shell = Get-MsixShellContextMenuEntry -PackagePath app.msix
+        Remove-MsixShellRegistryArtifact -PackagePath app.msix -Entries $shell -SkipSigning
+
+    .OUTPUTS
+        [pscustomobject] with KeysRemoved (string[]) and Output (final path).
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] [string]$PackagePath,
+        [Parameter(Mandatory)] [object[]]$Entries,
+        [string]$OutputPath,
+        [Alias('NoSign')] [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
+    )
+
+    if (-not $Entries -or $Entries.Count -eq 0) {
+        Write-MsixLog Info 'No shell registry entries supplied; nothing to do.'
+        return
+    }
+
+    $toolsRoot = Get-MsixToolsRoot
+    $fileinfo  = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
+    $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-shellreg"
+    try {
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+
+        $datPath = Join-Path $workspace 'Registry.dat'
+        if (-not (Test-Path $datPath)) {
+            Write-MsixLog Info 'No Registry.dat in package — nothing to clean.'
+            return
+        }
+
+        # Targets to walk under Classes — the same set Get-MsixShellContextMenuEntry uses.
+        $targets = @('*', 'Directory', 'Directory\Background', 'AllFilesystemObjects')
+
+        # Build a CLSID set for fast membership testing (lower-cased, both bare
+        # and braced forms accepted in inputs).
+        $clsidSet = New-Object 'System.Collections.Generic.HashSet[string]'
+        foreach ($e in $Entries) {
+            if ($e.Clsid) {
+                $bare = $e.Clsid.ToString().Trim().Trim('{', '}').ToLowerInvariant()
+                $null = $clsidSet.Add($bare)
+            }
+        }
+        if ($clsidSet.Count -eq 0) {
+            Write-MsixLog Warning 'None of the supplied entries had a Clsid; nothing to clean (resolve CLSIDs via Get-MsixShellContextMenuEntry).'
+            return
+        }
+
+        $newDat = "$datPath.new"
+        if (Test-Path -LiteralPath $newDat) { Remove-Item -LiteralPath $newDat -Force }
+
+        $removedKeys = @()
+        $hive = _MsixOpenOfflineHive -Path $datPath
+        $modified = $false
+        try {
+            foreach ($prefix in @(
+                'REGISTRY\MACHINE\SOFTWARE\Classes',
+                'REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Classes'
+            )) {
+                foreach ($target in $targets) {
+                    # ── shellex\ContextMenuHandlers\<name> — delete iff (default) value matches our CLSID
+                    $shexBase = "$prefix\$target\shellex\ContextMenuHandlers"
+                    $shexKey  = _MsixOfflineOpenKey -Parent $hive -SubKey $shexBase
+                    if ($shexKey -ne [IntPtr]::Zero) {
+                        try {
+                            $handlers = _MsixOfflineEnumSubKeys -Key $shexKey
+                        } finally {
+                            _MsixOfflineCloseKey -Key $shexKey
+                        }
+                        foreach ($handler in $handlers) {
+                            $logical = "$shexBase\$handler"
+                            $value   = _MsixOfflineGetValue -Parent $hive -SubKey $logical -Name ''
+                            if (-not $value) { continue }
+                            $bare = $value.ToString().Trim().Trim('{', '}').ToLowerInvariant()
+                            if ($clsidSet.Contains($bare)) {
+                                if ($PSCmdlet.ShouldProcess($logical, 'Remove legacy shellex handler')) {
+                                    if (_MsixOfflineDeleteKeyRecursive -Parent $hive -SubKey $logical) {
+                                        $removedKeys += $logical
+                                        $modified = $true
+                                    } else {
+                                        Write-MsixLog Warning "Recursive ORDeleteKey failed for '$logical' — discarding partial changes."
+                                        $modified = $false
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if ($modified -eq $false -and $removedKeys.Count -gt 0) { break }
+
+                    # ── shell\<verb> — delete iff ExplorerCommandHandler matches our CLSID
+                    $shellBase = "$prefix\$target\shell"
+                    $shellKey  = _MsixOfflineOpenKey -Parent $hive -SubKey $shellBase
+                    if ($shellKey -ne [IntPtr]::Zero) {
+                        try {
+                            $verbs = _MsixOfflineEnumSubKeys -Key $shellKey
+                        } finally {
+                            _MsixOfflineCloseKey -Key $shellKey
+                        }
+                        foreach ($verb in $verbs) {
+                            $logical = "$shellBase\$verb"
+                            $ech     = _MsixOfflineGetValue -Parent $hive -SubKey $logical -Name 'ExplorerCommandHandler'
+                            if (-not $ech) { continue }
+                            $bare = $ech.ToString().Trim().Trim('{', '}').ToLowerInvariant()
+                            if ($clsidSet.Contains($bare)) {
+                                if ($PSCmdlet.ShouldProcess($logical, 'Remove legacy shell verb')) {
+                                    if (_MsixOfflineDeleteKeyRecursive -Parent $hive -SubKey $logical) {
+                                        $removedKeys += $logical
+                                        $modified = $true
+                                    } else {
+                                        Write-MsixLog Warning "Recursive ORDeleteKey failed for '$logical' — discarding partial changes."
+                                        $modified = $false
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if ($modified) {
+                if (-not (_MsixOfflineSaveHive -Hive $hive -Path $newDat)) {
+                    Write-MsixLog Warning 'ORSaveHive failed; Registry.dat is unchanged.'
+                    $modified = $false
+                }
+            }
+        } finally {
+            _MsixCloseOfflineHive -Hive $hive
+        }
+        if ($modified) {
+            Move-Item -LiteralPath $newDat -Destination $datPath -Force
+        } elseif (Test-Path -LiteralPath $newDat) {
+            Remove-Item -LiteralPath $newDat -Force -ErrorAction SilentlyContinue
+        }
+
+        if (-not $removedKeys -or $removedKeys.Count -eq 0) {
+            Write-MsixLog Info 'No matching legacy shell registry entries found.'
+            return
+        }
+        Write-MsixLog Info "Legacy shell registry entries removed: $($removedKeys.Count)"
+        $removedKeys | ForEach-Object { Write-MsixLog Info "  $_" }
+
+        # Repack — share the atomic pack/sign/move path used by the manifest mutators.
+        $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
+        $scratch = Join-Path $env:TEMP ("msix-shellreg-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($target)))
+        $packOk = $false
+        try {
+            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+            Assert-MsixProcessSuccess $r 'MakeAppx pack'
+            $packOk = $true
+            if (-not $SkipSigning) {
+                Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword
+            }
+            Move-Item -LiteralPath $scratch -Destination $target -Force
+            return [pscustomobject]@{
+                KeysRemoved = $removedKeys
+                Output      = $target
+            }
+        } catch {
+            if ($packOk -and $UnsignedOutputPath) {
+                Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction SilentlyContinue
+                Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
+            }
+            throw
+        } finally {
+            if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue }
         }
     } finally {
         Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
@@ -1638,7 +1871,7 @@ function Invoke-MsixAutoFixFromAnalysis {
         Write-MsixLog Info "ShellVerb: $($shellVerbFinding.ShellEntries.Count) plain command shell verb(s) detected ($verbNames). Cannot be auto-fixed — desktop9:fileExplorerClassicContextMenuHandler requires a COM CLSID. Convert to a COM surrogate server and use Add-MsixLegacyContextMenu."
     }
 
-    # Stage 2g — COM shellex context menu (desktop9 surrogate-server pattern)
+    # Stage 2g — COM shellex context menu via desktop4 + desktop5 (TMEditX pattern)
     if ($byCat.ContainsKey('ShellExt')) {
         $shellExtFinding = @($Report.Findings | Where-Object Category -eq 'ShellExt') | Select-Object -First 1
         $autoFixable     = @($shellExtFinding.ShellEntries | Where-Object { $_.Clsid -and $_.VfsDllPath })
@@ -1646,7 +1879,7 @@ function Invoke-MsixAutoFixFromAnalysis {
             $capturedShellEntries = $autoFixable   # capture for closure
             $plan.Add([pscustomobject]@{
                 Stage  = 'AddLegacyContextMenu'
-                Reason = "Register $($capturedShellEntries.Count) shellex COM handler(s) via desktop9 surrogate-server"
+                Reason = "Register $($capturedShellEntries.Count) shellex COM handler(s) via desktop4/desktop5"
                 Action = {
                     foreach ($entry in $capturedShellEntries) {
                         $ft = @(if ($entry.Target -eq '*') { '*' } else { $entry.Target })
@@ -1657,6 +1890,21 @@ function Invoke-MsixAutoFixFromAnalysis {
                             -FileTypes $ft `
                             -SkipSigning
                     }
+                }
+            })
+
+            # Stage 2g.b — strip the OLD shellex/shell registry entries from
+            # Registry.dat now that the modern manifest declaration handles
+            # them. Without this, the package's HKCR\<target>\shellex\... and
+            # HKCR\<target>\shell\... entries persist and the OS registers the
+            # handler TWICE — surfacing as duplicate items in File Explorer's
+            # right-click menu (issue #28).
+            $plan.Add([pscustomobject]@{
+                Stage  = 'StripLegacyShellRegistry'
+                Reason = "Remove old Registry.dat shell/shellex entries for $($capturedShellEntries.Count) handler(s) so they don't double-register alongside the new desktop4 declaration"
+                Action = {
+                    Remove-MsixShellRegistryArtifact -PackagePath $current `
+                        -Entries $capturedShellEntries -SkipSigning
                 }
             })
         } else {

@@ -326,9 +326,11 @@ function _MsixOfflineGetValue {
 function _MsixOfflineDeleteKey {
     <#
     .SYNOPSIS
-        Deletes a subkey (and all of its descendants) under the given parent
-        handle. Wraps ORDeleteKey. After mutating the hive, callers must call
-        _MsixOfflineSaveHive (to a NEW path) to persist the change.
+        Deletes a subkey under the given parent handle. Wraps ORDeleteKey,
+        which per MSDN is NOT recursive: it returns an error if the subkey
+        still has children. For uninstall-style entries that ship with
+        component subkeys (e.g. Uninstall\Notepad++\Components), call
+        _MsixOfflineDeleteKeyRecursive instead.
     #>
     [CmdletBinding()]
     [OutputType([bool])]
@@ -339,6 +341,50 @@ function _MsixOfflineDeleteKey {
     if ($Parent -eq [IntPtr]::Zero) { return $false }
     $rc = [MsixOffReg]::ORDeleteKey($Parent, $SubKey)
     return ($rc -eq 0)
+}
+
+function _MsixOfflineDeleteKeyRecursive {
+    <#
+    .SYNOPSIS
+        Deletes a subkey and ALL of its descendants under the given parent
+        handle, working bottom-up because ORDeleteKey itself is NOT recursive.
+
+    .DESCRIPTION
+        Per MSDN "The subkey to be deleted must not have any subkeys" — so
+        we open the target, enumerate children, recurse into each child,
+        close the target, then issue ORDeleteKey on the now-empty subtree.
+
+        Returns $true when the SubKey ends up deleted (or was already gone).
+        Returns $false on any failure mid-walk so the caller knows the hive
+        is now in a partial state and should not be persisted.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][IntPtr]$Parent,
+        [Parameter(Mandatory)][string]$SubKey
+    )
+    if ($Parent -eq [IntPtr]::Zero) { return $false }
+
+    # Open the target so we can walk it. If it doesn't exist treat as success
+    # (idempotent — the caller asked us to delete something that's not there).
+    $target = _MsixOfflineOpenKey -Parent $Parent -SubKey $SubKey
+    if ($target -eq [IntPtr]::Zero) { return $true }
+
+    try {
+        $children = _MsixOfflineEnumSubKeys -Key $target
+    } finally {
+        _MsixOfflineCloseKey -Key $target
+    }
+
+    # Recurse into children first (depth-first), then delete the now-empty
+    # parent. SubKey paths are joined with '\' which is the AppX/Reg convention.
+    foreach ($child in $children) {
+        if (-not (_MsixOfflineDeleteKeyRecursive -Parent $Parent -SubKey "$SubKey\$child")) {
+            return $false
+        }
+    }
+    return (_MsixOfflineDeleteKey -Parent $Parent -SubKey $SubKey)
 }
 
 function _MsixCreateOfflineHive {

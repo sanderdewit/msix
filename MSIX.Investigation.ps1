@@ -246,6 +246,9 @@ function Get-MsixStaticAnalysis {
         .msix file to analyse (read-only; not modified).
     #>
     [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSUseDeclaredVarsMoreThanAssignments', 'hasRegVirt',
+        Justification = '$hasRegVirt is consumed later inside a switch ($f.Category) "RegLegacyFixups" branch; PSSA''s scope analyser misses it across the inner foreach.')]
     param(
         [Parameter(Mandatory)]
         [string]$PackagePath
@@ -263,6 +266,22 @@ function Get-MsixStaticAnalysis {
         $null = Test-MsixManifest "$workspace\AppxManifest.xml"
         [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
         $apps = @($manifest.Package.Applications.Application)
+
+        # Idempotency cross-check: if the manifest already declares the
+        # desktop6 virtualization elements, suppress the corresponding
+        # ManifestFix:* findings below. Without this, every re-run of
+        # Get-MsixStaticAnalysis (or Invoke-MsixInvestigation) on an
+        # already-fixed package still surfaced the recommendation, telling
+        # the user to apply the fix they had already applied (issue #28).
+        #
+        # The matching check in Get-MsixHeuristicFindings is for the
+        # merged-in heuristic stream — this one covers the static-analysis
+        # path that emits its own writable-file finding.
+        $d6Uri = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/6'
+        $hasFsVirt  = [bool]($manifest.Package.Properties.SelectSingleNode(
+            "*[local-name()='FileSystemWriteVirtualization' and namespace-uri()='$d6Uri']"))
+        $hasRegVirt = [bool]($manifest.Package.Properties.SelectSingleNode(
+            "*[local-name()='RegistryWriteVirtualization' and namespace-uri()='$d6Uri']"))
 
         # Detect existing PSF.
         # Use GetAttribute() rather than the PowerShell XML shorthand to avoid member-enumeration
@@ -309,21 +328,27 @@ function Get-MsixStaticAnalysis {
                 }
             }
 
-            # Write-permission heuristic: log/cache/data files shipped under VFS
-            $appDir = if ($exe.Contains('\')) { Join-Path $workspace ($exe.Substring(0, $exe.LastIndexOf('\'))) } else { $workspace }
-            if (Test-Path $appDir) {
-                $writableHints = Get-ChildItem $appDir -Recurse -File -ErrorAction SilentlyContinue |
-                                 Where-Object { $_.Extension -in '.log', '.tmp', '.cache' -or
-                                                $_.Name -match '^(settings|user|state)\.' }
-                if ($writableHints) {
-                    $base = ($exe.Substring(0, $exe.LastIndexOf('\'))).Replace('\','/') + '/'
-                    $findings += [pscustomobject]@{
-                        Severity        = 'Warning'
-                        Category        = 'ManifestFix:FileSystemWriteVirtualization'
-                        Symptom         = 'Writable-looking files shipped inside the VFS payload.'
-                        Recommendation  = "Preferred (Win11+): Set-MsixFileSystemWriteVirtualization -PackagePath '$PackagePath'  | Alternative: Apply FileRedirectionFixup -Base '$base' -Patterns '.*\.log','.*\.tmp'"
-                        AppId           = $app.Id
-                        Evidence        = ($writableHints | Select-Object -First 5 -ExpandProperty Name) -join ', '
+            # Write-permission heuristic: log/cache/data files shipped under VFS.
+            # Skipped entirely when desktop6:FileSystemWriteVirtualization is
+            # already declared in <Properties> — the user has made an explicit
+            # choice (enabled or disabled) and re-recommending the fix would
+            # be noise.
+            if (-not $hasFsVirt) {
+                $appDir = if ($exe.Contains('\')) { Join-Path $workspace ($exe.Substring(0, $exe.LastIndexOf('\'))) } else { $workspace }
+                if (Test-Path $appDir) {
+                    $writableHints = Get-ChildItem $appDir -Recurse -File -ErrorAction SilentlyContinue |
+                                     Where-Object { $_.Extension -in '.log', '.tmp', '.cache' -or
+                                                    $_.Name -match '^(settings|user|state)\.' }
+                    if ($writableHints) {
+                        $base = ($exe.Substring(0, $exe.LastIndexOf('\'))).Replace('\','/') + '/'
+                        $findings += [pscustomobject]@{
+                            Severity        = 'Warning'
+                            Category        = 'ManifestFix:FileSystemWriteVirtualization'
+                            Symptom         = 'Writable-looking files shipped inside the VFS payload.'
+                            Recommendation  = "Preferred (Win11+): Set-MsixFileSystemWriteVirtualization -PackagePath '$PackagePath'  | Alternative: Apply FileRedirectionFixup -Base '$base' -Patterns '.*\.log','.*\.tmp'"
+                            AppId           = $app.Id
+                            Evidence        = ($writableHints | Select-Object -First 5 -ExpandProperty Name) -join ', '
+                        }
                     }
                 }
             }
@@ -447,15 +472,21 @@ function Get-MsixCompatibilityReport {
     foreach ($f in $allFindings) {
         switch ($f.Category) {
             'FileRedirectionFixup' {
-                $manifestAlternatives += [pscustomobject]@{
-                    Cmdlet = 'Set-MsixFileSystemWriteVirtualization'
-                    Reason = 'Redirects writes to install dir without PSF (Win11+)'
+                # Skip the alternative when the manifest already declares it
+                # (issue #28: was still being recommended on already-fixed packages).
+                if (-not $hasFsVirt) {
+                    $manifestAlternatives += [pscustomobject]@{
+                        Cmdlet = 'Set-MsixFileSystemWriteVirtualization'
+                        Reason = 'Redirects writes to install dir without PSF (Win11+)'
+                    }
                 }
             }
             'RegLegacyFixups' {
-                $manifestAlternatives += [pscustomobject]@{
-                    Cmdlet = 'Set-MsixRegistryWriteVirtualization'
-                    Reason = 'Redirects HKLM writes without PSF (Win11+)'
+                if (-not $hasRegVirt) {
+                    $manifestAlternatives += [pscustomobject]@{
+                        Cmdlet = 'Set-MsixRegistryWriteVirtualization'
+                        Reason = 'Redirects HKLM writes without PSF (Win11+)'
+                    }
                 }
             }
         }

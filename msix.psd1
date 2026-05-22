@@ -117,6 +117,7 @@
         'Remove-MsixAppIsolation',
         'Remove-MsixDesktopShortcut',
         'Remove-MsixStartMenuEntry',
+        'Remove-MsixShellRegistryArtifact',
         'Remove-MsixUninstallerArtifact',
         'Resolve-MsixDebugViewPath',
         'Resolve-MsixMgrPath',

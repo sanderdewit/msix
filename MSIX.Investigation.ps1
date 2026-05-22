@@ -334,18 +334,34 @@ function Get-MsixStaticAnalysis {
             # choice (enabled or disabled) and re-recommending the fix would
             # be noise.
             if (-not $hasFsVirt) {
-                $appDir = if ($exe.Contains('\')) { Join-Path $workspace ($exe.Substring(0, $exe.LastIndexOf('\'))) } else { $workspace }
+                # Apps whose Executable attribute is just a leaf filename
+                # (no '\' separator — e.g. "notepad++.exe" at the package
+                # root) have no "exe directory" to anchor the scan, so we
+                # walk the whole workspace and emit a recommendation with
+                # an empty -Base. Without this guard $exe.LastIndexOf('\')
+                # returns -1 and Substring(0, -1) throws "length must be a
+                # non-negative value" mid-investigation, killing the whole
+                # report.
+                $hasDir = $exe.Contains('\')
+                $appDir = if ($hasDir) { Join-Path $workspace ($exe.Substring(0, $exe.LastIndexOf('\'))) } else { $workspace }
                 if (Test-Path $appDir) {
                     $writableHints = Get-ChildItem $appDir -Recurse -File -ErrorAction SilentlyContinue |
                                      Where-Object { $_.Extension -in '.log', '.tmp', '.cache' -or
                                                     $_.Name -match '^(settings|user|state)\.' }
                     if ($writableHints) {
-                        $base = ($exe.Substring(0, $exe.LastIndexOf('\'))).Replace('\','/') + '/'
+                        $base = if ($hasDir) { ($exe.Substring(0, $exe.LastIndexOf('\'))).Replace('\','/') + '/' } else { '' }
+                        $recPsf = if ($base) {
+                            "Apply FileRedirectionFixup -Base '$base' -Patterns '.*\.log','.*\.tmp'"
+                        } else {
+                            # Package-root case: no -Base argument, the
+                            # default empty base matches the whole package.
+                            "Apply FileRedirectionFixup -Patterns '.*\.log','.*\.tmp'"
+                        }
                         $findings += [pscustomobject]@{
                             Severity        = 'Warning'
                             Category        = 'ManifestFix:FileSystemWriteVirtualization'
                             Symptom         = 'Writable-looking files shipped inside the VFS payload.'
-                            Recommendation  = "Preferred (Win11+): Set-MsixFileSystemWriteVirtualization -PackagePath '$PackagePath'  | Alternative: Apply FileRedirectionFixup -Base '$base' -Patterns '.*\.log','.*\.tmp'"
+                            Recommendation  = "Preferred (Win11+): Set-MsixFileSystemWriteVirtualization -PackagePath '$PackagePath'  | Alternative: $recPsf"
                             AppId           = $app.Id
                             Evidence        = ($writableHints | Select-Object -First 5 -ExpandProperty Name) -join ', '
                         }

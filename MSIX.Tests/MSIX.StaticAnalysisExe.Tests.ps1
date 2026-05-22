@@ -1,0 +1,42 @@
+﻿BeforeAll {
+    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+}
+AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
+
+Describe 'Get-MsixStaticAnalysis robustness vs Application Executable shapes' -Tag 'Static' {
+
+    # Regression: a package whose Application Executable attribute is a
+    # bare leaf filename ("notepad++.exe", no path separator) blew up the
+    # whole investigation pipeline with:
+    #   Exception calling "Substring" with "2" argument(s): "length ('-1')
+    #   must be a non-negative value."
+    # The fix guards $exe.LastIndexOf('\') == -1 in BOTH places the
+    # writable-hint heuristic uses it.
+    #
+    # We don't have a real MSIX with that exact shape to point at in
+    # the test suite, so we exercise the source path with two static
+    # checks: (a) the guard variable $hasDir exists and (b) both
+    # references to LastIndexOf('\') sit behind it.
+
+    It "Source guards LastIndexOf('\') with a presence check before Substring" {
+        $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.Investigation.ps1')) -Raw
+
+        # Both usages must follow the $hasDir / $exe.Contains('\') guard.
+        $src | Should -Match '\$hasDir = \$exe\.Contains'
+
+        # The if-form Substring used to compute $appDir must read from
+        # $hasDir (the central guard), not call .Contains('\') a second
+        # time — that's how the bug crept in (only one call site
+        # guarded).
+        $src | Should -Match 'if \(\$hasDir\) \{ Join-Path \$workspace'
+
+        # The $base assignment must also be conditional on $hasDir.
+        $src | Should -Match '\$base = if \(\$hasDir\)'
+    }
+
+    It 'Recommendation falls back to no -Base when the executable is at the package root' {
+        $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.Investigation.ps1')) -Raw
+        # The else branch must emit a -Base-less form.
+        $src | Should -Match "Apply FileRedirectionFixup -Patterns"
+    }
+}

@@ -25,12 +25,21 @@ function Install-MsixMgr {
         msixmgrSetup.zip), unpacks under "$ToolsRoot\msixmgr", and exports
         $env:MSIX_MSIXMGR_PATH so subsequent calls find it.
 
-        SECURITY: the archive is first extracted into a temp staging folder and
-        every .exe / .dll inside is Authenticode-verified against the trusted-
-        publisher allowlist ($script:MsixTrustedPublishers — msixmgr is signed
-        by 'CN=Microsoft Corporation,') BEFORE anything is copied into
-        $Destination. A failed verification rolls the install back (the
-        destination folder is removed if this cmdlet created it).
+        SECURITY / msixmgr signature status: the upstream archive ships
+        with binaries that fail Authenticode verification against any
+        production-Microsoft allowlist — msixmgr.exe and msix.dll are
+        unsigned, and ApplyACLs.dll / CreateCIM.dll / WVDUtilities.dll are
+        signed by 'CN=Microsoft Testing PCA 2010' (test CA, not in the
+        Windows trusted-root store). Filed upstream:
+        https://github.com/microsoft/msix-packaging/issues/710 — at time of
+        writing the issue is open and the repo appears inactive.
+
+        Because the verification check fails on every install today, this
+        cmdlet defaults to SKIPPING Authenticode verification for msixmgr
+        specifically. Pass -VerifyAuthenticode to opt back in (e.g. once
+        Microsoft ships production-signed binaries upstream). The skip
+        applies ONLY to msixmgr — every other downloaded toolchain binary
+        (PSF, Procmon, DebugView, SDK BuildTools) is still verified.
 
     .PARAMETER Destination
         Where to extract. Defaults to "(Get-MsixToolsRoot)\msixmgr".
@@ -38,12 +47,25 @@ function Install-MsixMgr {
     .PARAMETER Force
         Re-download even if msixmgr is already installed.
 
+    .PARAMETER VerifyAuthenticode
+        Opt in to Authenticode verification of the msixmgr archive contents.
+        Default: $false (skip). Currently failing upstream — see DESCRIPTION
+        / microsoft/msix-packaging#710. Other toolchain downloaders verify
+        unconditionally.
+
     .OUTPUTS
         [pscustomobject] with Path, Updated, and (on fresh install) Source URL.
 
     .EXAMPLE
         # Install msixmgr so New-MsixAppAttachImage can produce VHDX / CIM images.
+        # Authenticode verification is skipped by default — see DESCRIPTION
+        # for why (upstream signing is broken).
         Install-MsixMgr
+
+    .EXAMPLE
+        # Opt back in to verification (will throw today until upstream
+        # microsoft/msix-packaging#710 ships production-signed binaries).
+        Install-MsixMgr -VerifyAuthenticode
 
     .EXAMPLE
         # Force a re-download (msixmgr updates infrequently).
@@ -52,7 +74,8 @@ function Install-MsixMgr {
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$Destination,
-        [switch]$Force
+        [switch]$Force,
+        [switch]$VerifyAuthenticode
     )
 
     if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'msixmgr' }
@@ -84,16 +107,21 @@ function Install-MsixMgr {
             New-Item $stage -ItemType Directory -Force | Out-Null
             Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
 
-            # H1: verify Authenticode signer before installing into $Destination.
-            # NOTE: As of 2026-05-20 the msixmgr ZIP from aka.ms/msixmgr contains
-            # unsigned binaries (msixmgr.exe, msix.dll) and test-signed DLLs
-            # (ApplyACLs.dll, CreateCIM.dll, WVDUtilities.dll signed by
-            # "Microsoft Testing PCA 2010" — not a trusted production CA).
-            # This causes the verification below to throw in high-assurance environments.
-            # Tracked upstream: https://github.com/microsoft/msix-packaging/issues/710
-            # When that issue is resolved and Microsoft ships production-signed binaries,
-            # remove this comment. Until then the verification intentionally blocks use.
-            _MsixVerifyAuthenticodeFolder -Folder $stage -ToolName 'msixmgr'
+            # Authenticode verification of the msixmgr archive.
+            # The upstream archive at aka.ms/msixmgr ships unsigned binaries
+            # (msixmgr.exe, msix.dll) and binaries signed by 'Microsoft
+            # Testing PCA 2010' (ApplyACLs.dll, CreateCIM.dll, WVDUtilities.dll)
+            # — neither passes verification against the production-Microsoft
+            # allowlist. Filed upstream as microsoft/msix-packaging#710; the
+            # repo has been inactive. We default to skipping verification
+            # ONLY for msixmgr and surface that loudly via Write-Warning so
+            # operators in high-assurance environments can decide to manually
+            # vet the bits. Pass -VerifyAuthenticode to opt back in.
+            if ($VerifyAuthenticode) {
+                _MsixVerifyAuthenticodeFolder -Folder $stage -ToolName 'msixmgr'
+            } else {
+                Write-Warning 'Skipping Authenticode verification for msixmgr (upstream signing is broken: microsoft/msix-packaging#710). Pass -VerifyAuthenticode to re-enable. This skip applies ONLY to msixmgr — every other downloaded toolchain binary is still verified.'
+            }
 
             New-Item $Destination -ItemType Directory -Force | Out-Null
             Copy-Item (Join-Path $stage '*') $Destination -Recurse -Force
@@ -152,14 +180,18 @@ function Update-MsixMgr {
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$Destination,
-        [int]$MaxAgeDays = 60
+        [int]$MaxAgeDays = 60,
+        # Pass-through to Install-MsixMgr; see that cmdlet's help for why
+        # Authenticode verification is opt-in for msixmgr specifically
+        # (upstream signing is broken — microsoft/msix-packaging#710).
+        [switch]$VerifyAuthenticode
     )
     if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'msixmgr' }
     $marker = Join-Path $Destination 'msixmgr.installed'
 
     if (-not (Test-Path $marker)) {
         if ($PSCmdlet.ShouldProcess($Destination, 'Install missing msixmgr')) {
-            return Install-MsixMgr -Destination $Destination
+            return Install-MsixMgr -Destination $Destination -VerifyAuthenticode:$VerifyAuthenticode
         }
         return
     }
@@ -168,7 +200,7 @@ function Update-MsixMgr {
     if ($age.TotalDays -gt $MaxAgeDays) {
         Write-MsixLog Info "msixmgr is $([int]$age.TotalDays) days old; refreshing."
         if ($PSCmdlet.ShouldProcess($Destination, 'Refresh msixmgr')) {
-            return Install-MsixMgr -Destination $Destination -Force
+            return Install-MsixMgr -Destination $Destination -Force -VerifyAuthenticode:$VerifyAuthenticode
         }
         return
     }

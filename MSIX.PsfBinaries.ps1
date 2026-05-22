@@ -90,13 +90,23 @@ function _MsixVerifyAuthenticodeFolder {
         folder (recursively). Throws on the first untrusted / unsigned binary.
         Logs a warning if no .exe/.dll were found at all (caller decides whether
         that's acceptable - e.g. for archives that bundle only data).
+
+        NOTE on the filter: we use the file's .Extension property (exact match)
+        rather than -Include '*.exe','*.dll'. The wildcard form can spuriously
+        match side-by-side assembly manifests like 'app.exe.manifest' in some
+        PowerShell versions because the FileSystem provider's wildcard engine
+        treats '*.exe' more loosely than the .Extension equality check.
+        .manifest files are XML — not Authenticode-signable — so accidentally
+        feeding them to Get-AuthenticodeSignature produced bogus "not signed"
+        failures and aborted toolchain installs.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [string]$Folder,
         [Parameter(Mandatory)] [string]$ToolName
     )
-    $files = @(Get-ChildItem -LiteralPath $Folder -Recurse -Include '*.exe','*.dll' -File -ErrorAction SilentlyContinue)
+    $files = @(Get-ChildItem -LiteralPath $Folder -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in '.exe', '.dll' })
     if ($files.Count -eq 0) {
         Write-MsixLog Warning "No .exe/.dll under $Folder to verify ($ToolName)"
         return

@@ -32,6 +32,7 @@
         'ConvertFrom-MsixTraceLine',
         'ConvertFrom-MsixTraceToFinding',
         'ConvertFrom-MsixYamlAccelerator',
+        'ConvertTo-MsixSarif',
         'ConvertTo-MsixReportHtml',
         'Copy-MsixHostAppDataIntoPackage',
         'Dismount-MsixAppAttachImage',

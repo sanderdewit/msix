@@ -251,7 +251,12 @@ function Get-MsixStaticAnalysis {
         Justification = '$hasRegVirt is consumed later inside a switch ($f.Category) "RegLegacyFixups" branch; PSSA''s scope analyser misses it across the inner foreach.')]
     param(
         [Parameter(Mandatory)]
-        [string]$PackagePath
+        [string]$PackagePath,
+
+        # Emit results as a SARIF 2.1.0 document instead of pscustomobject[].
+        # Pipe into Out-File / ConvertTo-Json to land a .sarif file that
+        # GitHub Code Scanning / Azure DevOps / Defender for DevOps can ingest.
+        [switch]$Sarif
     )
 
     $toolsRoot = Get-MsixToolsRoot
@@ -428,6 +433,9 @@ function Get-MsixStaticAnalysis {
             }
         }
 
+        if ($Sarif) {
+            return ConvertTo-MsixSarif -Findings $findings -PackagePath $PackagePath -Tool 'Get-MsixStaticAnalysis'
+        }
         return $findings
 
     } finally {

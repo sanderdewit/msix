@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.70.4'
+    ModuleVersion     = '0.70.5'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, PSADT-style standard scripts, TMEditX-style heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -30,6 +30,7 @@
         'Add-MsixVcRuntimeBundle',
         'Assert-MsixProcessSuccess',
         'Compare-MsixPackage',
+        'Compare-MsixTrace',
         'ConvertFrom-MsixTraceLine',
         'ConvertFrom-MsixTraceToFinding',
         'ConvertFrom-MsixYamlAccelerator',
@@ -38,6 +39,7 @@
         'ConvertTo-MsixSarif',
         'ConvertTo-MsixReportHtml',
         'Copy-MsixHostAppDataIntoPackage',
+        'Export-MsixRemediationPlan',
         'Dismount-MsixAppAttachImage',
         'Find-MsixPlaybook',
         'Get-MsixAliasCandidate',
@@ -84,6 +86,7 @@
         'Get-MsixUpdaterCandidate',
         'Get-MsixVcRuntimeReference',
         'Import-MsixAccelerator',
+        'Import-MsixRemediationPlan',
         'Import-MsixSparseShellExtension',
         'Initialize-MsixToolchain',
         'Install-MsixAppRuntime',
@@ -95,6 +98,7 @@
         'Invoke-MsixAccelerator',
         'Invoke-MsixAutoFix',
         'Invoke-MsixAutoFixFromAnalysis',
+        'Invoke-MsixAutoFixLoop',
         'Invoke-MsixCommand',
         'Invoke-MsixContainerCommand',
         'Invoke-MsixInvestigation',
@@ -102,6 +106,7 @@
         'Invoke-MsixPipeline',
         'Invoke-MsixPlaybook',
         'Invoke-MsixProcess',
+        'Invoke-MsixRemediationPlan',
         'Invoke-MsixProcMonCapture',
         'Invoke-MsixSelfSignAndDebug',
         'Invoke-MsixSigning',
@@ -110,6 +115,7 @@
         'New-MsixAppAttachImage',
         'New-MsixFinding',
         'New-MsixManifestDocument',
+        'New-MsixRemediationPlan',
         'New-MsixMfrLocalRule',
         'New-MsixMfrTraditionalRule',
         'New-MsixPsfArgument',
@@ -156,6 +162,7 @@
         'Test-MsixAppAttachImage',
         'Test-MsixManifest',
         'Test-MsixPsfConfig',
+        'Test-MsixRemediationPlan',
         'Test-MsixSignature',
         'Update-MsixAppRuntime',
         'Update-MsixDebugView',
@@ -215,6 +222,43 @@
                             'TMEditX','Enterprise','CICD','Pester','PSADT')
             ProjectUri  = 'https://github.com/microsoft/MSIX-PackageSupportFramework'
             ReleaseNotes = @'
+## v0.70.5
+
+### Tier-2 remediation orchestration: #30 + #31 + #32
+- Compare-MsixTrace (#31): before/after correlation of two runtime
+  trace captures (DebugView .log/.txt or ProcMon .pml). Classifies
+  every observed failure row as Resolved / Persisted / Introduced
+  based on a (Function x Path x Result) match key. -Sarif emits a
+  three-run SARIF 2.1.0 document so regressions show up as errors,
+  fixes show up as notes.
+- New/Export/Import/Test/Invoke-MsixRemediationPlan (#32):
+  serialise a remediation plan to YAML, route through change-control,
+  and replay it deterministically against a later package build.
+  Strict cmdlet-safety guard (only MSIX module cmdlets may appear in
+  appliedFixes), identity + SHA-256 fingerprint drift detection,
+  single-sign-at-end semantics matching Invoke-MsixPlaybook.
+  YAML emitter/parser is dependency-free and scalar-only - same
+  security stance as the accelerator YAML.
+- Invoke-MsixAutoFixLoop (#30): multi-pass remediation pipeline.
+  Per-pass artefacts under $env:TEMP\msix-autofix-loop-<runId>\pass-N\,
+  optional Compare-MsixTrace integration for NoRegressions stop
+  condition, MinConfidence gate from the evidence model, signs once
+  at the end. Closes the loop on chained MSIX issues where fixing
+  one problem reveals the next.
+
+### PowerShell 5.1 compatibility
+- Removed PS7-only null-coalescing operator (??) from Merge-MsixFinding
+  and Invoke-MsixAutoFixLoop.
+- Stripped em-dashes from string literals in MSIX.RemediationPlan.ps1
+  and MSIX.AutoFixLoop.ps1: the UTF-8 byte 0x94 was read as a curly
+  double-quote terminator under CP-1252 when files lack a BOM, which
+  is the default on Windows PowerShell 5.1.
+
+### Quality bar
+- Pester: 351 pass / 0 fail / 1 skip on PowerShell 7
+  (27 new tests for the Tier-2 features).
+- PSScriptAnalyzer (scoped to MSIX module): 0 findings.
+
 ## v0.70.4
 
 ### Tier-1 foundation: unified evidence model + confidence scoring (#29)

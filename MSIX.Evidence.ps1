@@ -396,7 +396,8 @@ function Merge-MsixFinding {
             }
             if (-not $f) { continue }
 
-            $key = ('{0}|{1}' -f $f.Category, ($f.AppId ?? ''))
+            $appId = if ($null -ne $f.AppId) { $f.AppId } else { '' }
+            $key = ('{0}|{1}' -f $f.Category, $appId)
             if (-not $byKey.ContainsKey($key)) {
                 $byKey[$key] = $f
                 continue

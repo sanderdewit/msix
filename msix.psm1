@@ -29,6 +29,9 @@
 . "$PSScriptRoot\MSIX.Playbooks.ps1"
 . "$PSScriptRoot\MSIX.Sarif.ps1"
 . "$PSScriptRoot\MSIX.Evidence.ps1"
+. "$PSScriptRoot\MSIX.TraceDelta.ps1"
+. "$PSScriptRoot\MSIX.RemediationPlan.ps1"
+. "$PSScriptRoot\MSIX.AutoFixLoop.ps1"
 #endregion
 
 
@@ -199,6 +202,16 @@ Export-ModuleMember -Function @(
     'ConvertTo-MsixFinding'
     'Merge-MsixFinding'
     'ConvertTo-MsixLegacyFinding'
+    # Trace delta analysis (#31)
+    'Compare-MsixTrace'
+    # Remediation plan round-trip (#32)
+    'New-MsixRemediationPlan'
+    'Export-MsixRemediationPlan'
+    'Import-MsixRemediationPlan'
+    'Test-MsixRemediationPlan'
+    'Invoke-MsixRemediationPlan'
+    # Multi-pass auto-fix loop (#30)
+    'Invoke-MsixAutoFixLoop'
     # Auto-detection scanners (v0.11)
     'Get-MsixFontCandidate'
     'Get-MsixDesktopShortcutCandidate'

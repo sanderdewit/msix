@@ -5,6 +5,35 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.70.5 - Tier-2 remediation orchestration (#30 + #31 + #32)
+
+- Compare-MsixTrace (#31): before/after correlation of two runtime trace
+  captures (DebugView .log/.txt or ProcMon .pml). Classifies failure rows
+  as Resolved / Persisted / Introduced via (Function x Path x Result)
+  match key. `-Sarif` emits a 3-run SARIF 2.1.0 document so regressions
+  surface as errors and fixes surface as notes.
+- New/Export/Import/Test/Invoke-MsixRemediationPlan (#32): serialise a
+  remediation plan to YAML, route through change-control, replay
+  deterministically against a later build. Strict cmdlet-safety guard
+  (only MSIX module cmdlets in appliedFixes), identity + SHA-256
+  fingerprint drift detection, single-sign-at-end semantics. YAML
+  emitter/parser is dependency-free and scalar-only (same security
+  stance as the accelerator YAML).
+- Invoke-MsixAutoFixLoop (#30): multi-pass remediation pipeline.
+  Per-pass artefacts under `$env:TEMP\msix-autofix-loop-<runId>\pass-N\`,
+  optional Compare-MsixTrace integration for the NoRegressions stop
+  condition, MinConfidence gate from the evidence model, signs once at
+  the end. Closes the loop on chained MSIX issues where fixing one
+  problem reveals the next.
+- PowerShell 5.1 compatibility: removed null-coalescing operator (??)
+  from Merge-MsixFinding and Invoke-MsixAutoFixLoop. Stripped em-dashes
+  from string literals in the new files - UTF-8 byte 0x94 was being
+  read as a curly double-quote terminator under CP-1252 in Windows
+  PowerShell 5.1 (no BOM by default).
+- Pester: 351 pass / 0 fail / 1 skip on PowerShell 7 (27 new tests for
+  the Tier-2 features). PSScriptAnalyzer (scoped to MSIX module): 0
+  findings.
+
 ## v0.70.4 - Tier-1 evidence model + PSSA cleanup
 
 - Unified evidence model + confidence scoring (#29). New

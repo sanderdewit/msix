@@ -6,15 +6,15 @@ BeforeAll {
             [Parameter(Mandatory)]
             [string] $Value
         )
-    
+
         $secure = [System.Security.SecureString]::new()
-    
+
         foreach ($char in $Value.ToCharArray()) {
             $secure.AppendChar($char)
         }
-    
+
         $secure.MakeReadOnly()
-    
+
         return $secure
     }
 }
@@ -23,10 +23,10 @@ AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
 Describe 'Get-MsixDebugRecommendation' -Tag 'Recommendations' {
 
-    It 'Emits a friendly no-issue message when Findings is empty' {
+    It 'Emits a friendlyno-issue message when Findings is empty' {
         $stub = [pscustomobject]@{ PackagePath = 'x.msix'; Findings = @() }
         $out = Get-MsixDebugRecommendation -Report $stub
-        ($out -join "`n") | Should -Match 'No issues detected'
+        ($out -join "`n") | Should -Match 'no issues detected'
     }
 
     It 'Renders an Add-MsixPsfV2 line for FileRedirectionFixup findings' {
@@ -42,7 +42,7 @@ Describe 'Get-MsixDebugRecommendation' -Tag 'Recommendations' {
         }
         $out = Get-MsixDebugRecommendation -Report $stub
         ($out -join "`n") | Should -Match 'Add-MsixPsfV2'
-        ($out -join "`n") | Should -Match 'New-MsixPsfFileRedirectionConfig'
+        ($out -join "`n") | Should -Match 'new-MsixPsfFileRedirectionConfig'
         ($out -join "`n") | Should -Match "-Base 'logs/'"
     }
 
@@ -67,19 +67,19 @@ Describe 'Get-MsixDebugRecommendation' -Tag 'Recommendations' {
             PackagePath = 'x.msix'
             Findings    = @([pscustomobject]@{ Severity='Warning'; Category='FileRedirectionFixup'; Symptom='x'; AppId='A'; Recommendation="-Base 'a/'"; Evidence='b' })
         }
-        $secret = 'P@s-DoNotLeak-Token'
+        $secret = 'P@s-DonotLeak-Token'
         $secure = ConvertTo-TestSecureString -Value $secret
         $out = Get-MsixDebugRecommendation -Report $stub -Pfx 'C:\c.pfx' -PfxPassword $secure
         $joined = ($out -join "`n")
         # -Pfx path is interpolated verbatim
         $joined | Should -Match 'C:\\c\.pfx'
-        # The literal secret must NEVER reach the output
-        $joined | Should -Not -Match ([regex]::Escape($secret))
+        # The literal secret mustnEVER reach the output
+        $joined | Should -not -Match ([regex]::Escape($secret))
         # The placeholder must direct the operator to re-supply via Read-Host
         $joined | Should -Match 'Read-Host -AsSecureString'
     }
 
-    It 'Numbers each recommendation' {
+    It 'numbers each recommendation' {
         $stub = [pscustomobject]@{
             PackagePath = 'x.msix'
             Findings    = @(

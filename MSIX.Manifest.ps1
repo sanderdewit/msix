@@ -408,6 +408,8 @@ function Get-MsixManifestApplication {
             ForEach-Object { $_.GetAttribute('Id') }
     #>
     [CmdletBinding(DefaultParameterSetName = 'First')]
+    [OutputType([System.Xml.XmlNode], ParameterSetName = ('First','ById'))]
+    [OutputType([System.Xml.XmlNode[]], ParameterSetName = 'All')]
     param(
         [Parameter(Mandatory, Position = 0)]
         $Manifest,
@@ -427,16 +429,16 @@ function Get-MsixManifestApplication {
         $nodes = Select-MsixManifestNodes -Manifest $manifestDocument -XPath '//f:Application'
 
         if ($nodes -and $nodes.Count -gt 0) {
-            return @($nodes)
+            return [System.Xml.XmlNode[]]@($nodes)
         }
 
         # Fallback: namespace-agnostic XPath (handles non-standard manifests)
         $nodes = $manifestDocument.Document.SelectNodes('//*[local-name()="Application"]')
         if ($nodes -and $nodes.Count -gt 0) {
-            return @($nodes)
+            return [System.Xml.XmlNode[]]@($nodes)
         }
 
-        return @()
+        return [System.Xml.XmlNode[]]@()
     }
 
     if ($AppId) {

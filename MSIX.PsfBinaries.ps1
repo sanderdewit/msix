@@ -1139,7 +1139,7 @@ function Get-MsixRequiredAppRuntimeChannel {
             $matches[1]
         }
     }
-    return @($channels | Sort-Object -Unique)
+    return [string[]]@($channels | Sort-Object -Unique)
 }
 
 

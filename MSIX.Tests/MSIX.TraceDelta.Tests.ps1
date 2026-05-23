@@ -1,8 +1,8 @@
-BeforeAll {
+﻿BeforeAll {
     Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
 
     # Minimal trace log line emitter for use in tests.
-    function New-TraceLog {
+    function Write-TraceLogFixture {
         param([psobject[]]$Rows)
         $lines = @($Rows | ForEach-Object {
             "[00:00:01.000 1234:AB1] $($_.Function): $($_.Path) -> $($_.Result)"
@@ -16,7 +16,7 @@ BeforeAll {
     $script:TmpFiles = [System.Collections.Generic.List[string]]::new()
 
     function NewLog([psobject[]]$Rows) {
-        $p = New-TraceLog -Rows $Rows
+        $p = Write-TraceLogFixture -Rows $Rows
         $script:TmpFiles.Add($p)
         return $p
     }

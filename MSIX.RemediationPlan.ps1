@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # Remediation plan round-trip
 # -----------------------------------------------------------------------------
 # Serialise, validate, and replay a structured remediation plan so operators
@@ -264,7 +264,7 @@ function New-MsixRemediationPlan {
     .OUTPUTS
         [pscustomobject] with PSTypeName 'MsixRemediationPlan'.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
@@ -437,10 +437,10 @@ function Import-MsixRemediationPlan {
     $fixesList = @($fixes | Where-Object { $_ } | ForEach-Object {
         $fx = $_
         $cmdlet = if ($fx -is [hashtable]) { $fx['cmdlet'] } else { $fx.cmdlet }
-        $args   = if ($fx -is [hashtable]) { $fx['args']   } else { $fx.args   }
+        $argMap = if ($fx -is [hashtable]) { $fx['args']   } else { $fx.args   }
         [ordered]@{
             cmdlet = $cmdlet
-            args   = if ($args) { $args } else { @{} }
+            args   = if ($argMap) { $argMap } else { @{} }
         }
     })
 

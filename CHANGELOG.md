@@ -5,6 +5,23 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.70.4 - Tier-1 evidence model + PSSA cleanup
+
+- Unified evidence model + confidence scoring (#29). New
+  MSIX.Evidence.ps1 with New-MsixFinding / Add-MsixEvidence /
+  Merge-MsixFinding / Get-MsixFindingConfidence /
+  ConvertTo-MsixFinding / ConvertTo-MsixLegacyFinding.
+- Invoke-MsixAutoFixFromAnalysis: new -MinConfidence gate (default 0.85).
+  Legacy findings without EvidenceItems are treated as confident so the
+  migration is incremental.
+- SARIF emitter passes evidenceItems[] + confidence through to
+  result.properties when populated.
+- PSSA: Get-MsixManifestApplication gets per-parameter-set OutputType +
+  XmlNode[] return-site casts; Get-MsixRequiredAppRuntimeChannel returns
+  [string[]]; trailing whitespace stripped from Recommendations test.
+  Scoped PSSA findings: 0. Pester: 325 / 0 / 1.
+- Closes #28, #29.
+
 ## v0.70.0
 See `MSIX.psd1` (PrivateData.PSData.ReleaseNotes) for the v0.70.0 notes.
 

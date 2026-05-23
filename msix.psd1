@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.70.3'
+    ModuleVersion     = '0.70.4'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, PSADT-style standard scripts, TMEditX-style heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -215,6 +215,29 @@
                             'TMEditX','Enterprise','CICD','Pester','PSADT')
             ProjectUri  = 'https://github.com/microsoft/MSIX-PackageSupportFramework'
             ReleaseNotes = @'
+## v0.70.4
+
+### Tier-1 foundation: unified evidence model + confidence scoring (#29)
+- New MSIX.Evidence.ps1: New-MsixFinding / Add-MsixEvidence /
+  Merge-MsixFinding / Get-MsixFindingConfidence /
+  ConvertTo-MsixFinding (legacy adapter) / ConvertTo-MsixLegacyFinding.
+- Invoke-MsixAutoFixFromAnalysis: new -MinConfidence gate (default 0.85).
+  Legacy findings without EvidenceItems are treated as confident so the
+  migration is incremental and nothing regresses.
+- SARIF emitter surfaces evidenceItems[] and confidence in
+  result.properties when the analyzer populated them.
+- Unblocks #30 (Invoke-MsixAutoFixLoop), #31 (Compare-MsixTrace),
+  #32 (Export/Import/Invoke-MsixRemediationPlan).
+
+### PSSA cleanup
+- Get-MsixManifestApplication: per-parameter-set OutputType (XmlNode
+  for First/ById, XmlNode[] for All), plus return-site casts so PSSA's
+  static type inference matches.
+- Get-MsixRequiredAppRuntimeChannel: returns [string[]] (was Object[]).
+- Tests: trailing whitespace stripped from Recommendations test file.
+- PSScriptAnalyzer (scoped to MSIX module): 0 findings.
+- Pester: 325 pass / 0 fail / 1 skip.
+
 ## v0.70.0
 
 ### Security hardening

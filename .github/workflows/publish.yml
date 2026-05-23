@@ -20,9 +20,14 @@ jobs:
           # installed module needs, and the markdown bloat trips the
           # PSGallery 10,600-char ReleaseNotes limit indirectly when it
           # gets folded into NuGet metadata.
+          # Publish-Module requires the staging directory name to match the
+          # module name (the .psd1 file's basename). Our manifest is msix.psd1,
+          # so the folder must literally be called `msix` - otherwise we get
+          # "no valid module was found with that path".
           $src   = $env:GITHUB_WORKSPACE
-          $stage = Join-Path $env:RUNNER_TEMP 'msix-publish'
-          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          $stageRoot = Join-Path $env:RUNNER_TEMP 'msix-publish'
+          $stage     = Join-Path $stageRoot 'msix'
+          if (Test-Path $stageRoot) { Remove-Item $stageRoot -Recurse -Force }
           New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
           # Whitelist: only ship what the installed module actually needs at

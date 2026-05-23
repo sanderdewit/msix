@@ -27,6 +27,8 @@
 . "$PSScriptRoot\MSIX.Compare.ps1"
 . "$PSScriptRoot\MSIX.Functions.ps1"
 . "$PSScriptRoot\MSIX.Playbooks.ps1"
+. "$PSScriptRoot\MSIX.Sarif.ps1"
+. "$PSScriptRoot\MSIX.Evidence.ps1"
 #endregion
 
 
@@ -188,6 +190,15 @@ Export-ModuleMember -Function @(
     'Get-MsixPlaybook'
     'Find-MsixPlaybook'
     'Invoke-MsixPlaybook'
+    # SARIF emitter
+    'ConvertTo-MsixSarif'
+    # Evidence graph
+    'New-MsixFinding'
+    'Add-MsixEvidence'
+    'Get-MsixFindingConfidence'
+    'ConvertTo-MsixFinding'
+    'Merge-MsixFinding'
+    'ConvertTo-MsixLegacyFinding'
     # Auto-detection scanners (v0.11)
     'Get-MsixFontCandidate'
     'Get-MsixDesktopShortcutCandidate'

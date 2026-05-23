@@ -2012,6 +2012,15 @@ function Invoke-MsixAutoFixFromAnalysis {
     .PARAMETER LoaderPaths
         Required when a ManifestFix:LoaderSearchPathOverride finding is in the report.
 
+    .PARAMETER MinConfidence
+        Confidence floor (0.0–1.0). Findings whose Confidence is below
+        this threshold are kept in the report but NOT auto-fixed. Default
+        0.85. Drops to the legacy "every finding auto-fixes" behaviour
+        when you pass 0.0. Findings emitted by analyzers that haven't
+        been migrated to the evidence model yet (no EvidenceItems) are
+        treated as confident — that way nothing regresses while the
+        migration is incremental.
+
     .PARAMETER IgnoreUpdaters
         When set, omit the RemoveUpdaters stage from the plan even if the
         report contains UpdaterArtifact findings. Use to keep package
@@ -2056,6 +2065,12 @@ function Invoke-MsixAutoFixFromAnalysis {
         [switch]$IgnorePluginDirectories,
         [switch]$LegacyPluginFix,
         [switch]$IgnoreNestedPackages,
+        # Confidence threshold below which a finding is NOT auto-fixed.
+        # Findings between [MinConfidenceReport, MinConfidence) still
+        # appear in the printed plan as "recommendation only".
+        # Default 0.85 (high-confidence autofix only).
+        [ValidateRange(0.0, 1.0)]
+        [double]$MinConfidence = 0.85,
         [switch]$DryRun,
         [string]$OutputPath,
         [Alias('NoSign')]
@@ -2067,11 +2082,37 @@ function Invoke-MsixAutoFixFromAnalysis {
     if (-not $PackagePath) { $PackagePath = $Report.PackagePath }
     if (-not $PackagePath) { throw 'PackagePath could not be inferred from the report.' }
 
-    # Categorise the findings into a stable plan
+    # Normalise the report's findings into the evidence-graph shape.
+    # Legacy analyzers that emitted plain pscustomobjects get promoted on
+    # the fly (synthetic evidence based on Severity). Same-category +
+    # same-AppId findings collapse into one with combined evidence so
+    # we don't repeat fixers when multiple analyzers agreed.
+    $rawFindings    = @($Report.Findings)
+    $mergedFindings = if ($rawFindings.Count -gt 0) {
+        Merge-MsixFinding -Findings $rawFindings
+    } else { @() }
+
+    # MinConfidence gate. Three classes:
+    #   - PromotedFromLegacy : always pass. These come from analyzers that
+    #     pre-date the evidence model and were classified by severity only.
+    #     Gating them on confidence would silently regress every existing
+    #     analyzer's behaviour.
+    #   - No EvidenceItems   : always pass. Defensive — shouldn't happen
+    #     post-merge but never drop a finding just because it has zero
+    #     evidence items.
+    #   - New-shape with explicit EvidenceItems : must clear MinConfidence.
+    $confidentFindings = @($mergedFindings | Where-Object {
+        $items = @($_.EvidenceItems)
+        ($_.PSObject.Properties.Match('PromotedFromLegacy').Count -gt 0 -and $_.PromotedFromLegacy) -or `
+        ($items.Count -eq 0) -or `
+        ([double]$_.Confidence -ge $MinConfidence)
+    })
+
+    # Categorise the autofixable findings into a stable plan
     $plan = New-Object System.Collections.Generic.List[object]
 
     $byCat = @{}
-    foreach ($f in @($Report.Findings)) {
+    foreach ($f in @($confidentFindings)) {
         if ($f -and $f.Category) { $byCat[$f.Category] = $true }
     }
 

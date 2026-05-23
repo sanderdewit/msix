@@ -175,6 +175,29 @@ function ConvertTo-MsixSarif {
             $location['logicalLocations'] = $logicalLocations
         }
 
+        # Pull the evidence graph through if the analyzer emitted one
+        # (every finding promoted through Merge-MsixFinding has it).
+        # Surface as result.properties.evidence[] + result.properties.confidence
+        # so reviewers can pivot to per-source provenance in dashboards.
+        $evidenceItems = $null
+        $confidence    = $null
+        if ($f.PSObject.Properties.Match('EvidenceItems').Count -gt 0 -and $f.EvidenceItems) {
+            $evidenceItems = @($f.EvidenceItems)
+        }
+        if ($f.PSObject.Properties.Match('Confidence').Count -gt 0) {
+            $confidence = [double]$f.Confidence
+        }
+
+        $props = @{
+            severity        = [string]$f.Severity
+            category        = [string]$f.Category
+            appId           = if ($f.AppId)    { [string]$f.AppId }    else { $null }
+            evidence        = if ($f.Evidence) { [string]$f.Evidence } else { $null }
+            recommendation  = [string]$f.Recommendation
+        }
+        if ($null -ne $confidence)    { $props['confidence']    = $confidence }
+        if ($null -ne $evidenceItems) { $props['evidenceItems'] = $evidenceItems }
+
         @{
             ruleId   = "MSIX.$($f.Category)"
             level    = $level
@@ -182,13 +205,7 @@ function ConvertTo-MsixSarif {
                 text = [string]$f.Symptom
             }
             locations  = @($location)
-            properties = @{
-                severity        = [string]$f.Severity
-                category        = [string]$f.Category
-                appId           = if ($f.AppId)    { [string]$f.AppId }    else { $null }
-                evidence        = if ($f.Evidence) { [string]$f.Evidence } else { $null }
-                recommendation  = [string]$f.Recommendation
-            }
+            properties = $props
         }
     }
 

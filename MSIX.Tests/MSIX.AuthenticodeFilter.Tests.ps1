@@ -90,25 +90,51 @@ Describe 'Install-MsixMgr Authenticode opt-out' -Tag 'PsfBinaries' {
         $p.ParameterType.FullName | Should -Be 'System.Management.Automation.SwitchParameter'
     }
 
-    It 'Source: Install-MsixMgr only verifies when -VerifyAuthenticode is supplied' {
+    It 'Source: Install-MsixMgr opts out of Authenticode verification via the toolchain helper (issue #36 refactor)' {
+        # Post-issue-#36, Install-MsixMgr is a thin wrapper that delegates to
+        # _MsixInstallArchiveTool. The security-relevant guard is that the
+        # WRAPPER passes its -VerifyAuthenticode switch into the helper AND
+        # supplies the upstream-issue warning text — otherwise the skip
+        # would be silent and the test would no longer enforce its intent.
         $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.AppAttach.ps1')) -Raw
-        # The verify call must be guarded by an if ($VerifyAuthenticode) check.
-        $src | Should -Match "if \(\`$VerifyAuthenticode\) \{[^}]*_MsixVerifyAuthenticodeFolder"
-        # And there must be a Write-Warning on the skip path mentioning the
-        # upstream issue so the bypass isn''t silent.
-        $src | Should -Match 'Write-Warning.+msixmgr.+710'
+        # Wrapper must forward the switch (so verification stays opt-in).
+        $src | Should -Match '-VerifyAuthenticode\s+\(\[bool\]\$VerifyAuthenticode\)'
+        # And the skip warning must mention msixmgr + the upstream issue
+        # number so the bypass cannot be silent.
+        $src | Should -Match 'SkipVerificationWarning.+msixmgr.+710'
     }
 
-    It 'Source: every NON-msixmgr toolchain downloader still verifies unconditionally' {
-        # The skip must be scoped to Install-MsixMgr / Update-MsixMgr. The
-        # other downloaders (PSF, Procmon, DebugView, SDK BuildTools) must
-        # still call _MsixVerifyAuthenticodeFolder without a switch guard.
+    It 'Source: helper gates verification on the -VerifyAuthenticode parameter (issue #36)' {
+        # The skip is now centralised in _MsixInstallArchiveTool. The helper
+        # must still gate the verify call AND emit a warning on the skip path.
         $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.PsfBinaries.ps1')) -Raw
-        $verifyCalls = [regex]::Matches($src, '_MsixVerifyAuthenticodeFolder -Folder')
-        $verifyCalls.Count | Should -BeGreaterOrEqual 3
-        # None of those calls in PsfBinaries.ps1 should be wrapped in a
-        # 'if ($VerifyAuthenticode)' opt-in — that would silently weaken
-        # security for the trusted downloaders.
-        $src | Should -Not -Match 'if \(\$VerifyAuthenticode\)\s*\{\s*_MsixVerifyAuthenticodeFolder'
+        $src | Should -Match 'if \(\$VerifyAuthenticode\)\s*\{[^}]*_MsixVerifyAuthenticodeFolder'
+        $src | Should -Match 'Write-Warning\s+\$SkipVerificationWarning'
+    }
+
+    It 'Source: every NON-msixmgr toolchain downloader still verifies (default ON)' {
+        # The skip must be scoped to Install-MsixMgr / Update-MsixMgr.
+        # ProcMon and DebugView are thin wrappers around the helper and
+        # DELIBERATELY do NOT pass -VerifyAuthenticode, so they inherit the
+        # helper's default of $true. PSF and SDK installers remain bespoke
+        # and call _MsixVerifyAuthenticodeFolder directly without any guard.
+        $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.PsfBinaries.ps1')) -Raw
+
+        # Bespoke installers (PSF, SDK) call the verify helper directly.
+        $directCalls = [regex]::Matches($src, '_MsixVerifyAuthenticodeFolder -Folder')
+        $directCalls.Count | Should -BeGreaterOrEqual 3   # helper itself + PSF + SDK
+
+        # Only the toolchain helper (in this file) is allowed to gate the
+        # verify call on the switch -- searching the whole file is fine
+        # because the helper is the only legitimate site.
+        $guardedCalls = [regex]::Matches($src, 'if \(\$VerifyAuthenticode\)\s*\{')
+        $guardedCalls.Count | Should -Be 1
+
+        # ProcMon and DebugView wrappers must NOT mention VerifyAuthenticode
+        # at all (they inherit the helper's $true default).
+        $procmonBlock = ($src -split 'function Install-MsixProcMon \{')[1] -split '\n\}'
+        $procmonBlock[0] | Should -Not -Match 'VerifyAuthenticode'
+        $dbgBlock     = ($src -split 'function Install-MsixDebugView \{')[1] -split '\n\}'
+        $dbgBlock[0]     | Should -Not -Match 'VerifyAuthenticode'
     }
 }

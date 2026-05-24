@@ -171,6 +171,214 @@ function _MsixGitHubLatest {
 }
 
 
+# =============================================================================
+# Toolchain-installer scaffolding (issue #36)
+# -----------------------------------------------------------------------------
+# Every Install-Msix* / Update-Msix* in the module that targets a single-zip
+# Sysinternals-style download (Procmon, DebugView, msixmgr, ...) used to
+# repeat ~90 lines of marker-check + temp-dir + download + Authenticode +
+# copy + rollback. The two helpers below centralise that scaffolding so each
+# wrapper drops to ~15 lines and bug fixes apply in one place.
+#
+# Installers with version-aware idempotency (PSF tag from GitHub, SDK version
+# from NuGet, AppRuntime multi-channel cache) DO NOT use these helpers because
+# their acquire / idempotency semantics differ enough that forcing them in
+# would create a leaky abstraction. They remain bespoke and are documented as
+# such alongside the helper.
+# =============================================================================
+
+function _MsixInstallArchiveTool {
+    <#
+    .SYNOPSIS
+        Internal helper: download a zip, Authenticode-verify, stage-copy, then
+        write a date-stamped marker. Used by Install-MsixProcMon /
+        Install-MsixDebugView / Install-MsixMgr.
+
+    .DESCRIPTION
+        Common scaffolding for "download a single zip from a stable URL and
+        unpack it under Destination" installers. Idempotent via a marker file
+        (re-runs are no-ops unless -Force). Rolls back the Destination folder
+        if the install fails AND the folder didn't exist before the call.
+
+        Authenticode verification is on by default. msixmgr is the one tool in
+        the module that opts out (upstream signing is broken — see
+        microsoft/msix-packaging#710) and supplies a custom warning via
+        -SkipVerificationWarning.
+
+        Output object exactly matches what the legacy bespoke installers
+        returned: @{ Path; Updated; Source }. The Updated=$true on the
+        ShouldProcess-skipped (WhatIf) path is preserved as legacy behaviour.
+
+    .PARAMETER ToolName
+        Logical name for error / log messages (e.g. 'Process Monitor').
+
+    .PARAMETER Destination
+        Where to extract the archive.
+
+    .PARAMETER MarkerFile
+        Full path to the idempotency marker file (e.g. "$dest\procmon.installed").
+
+    .PARAMETER Url
+        Download URL.
+
+    .PARAMETER ArchiveFileName
+        Filename to use when saving the download to the temp folder. Used by
+        Expand-Archive to choose its extraction logic from the extension.
+
+    .PARAMETER VerifyAuthenticode
+        Default $true. Set to $false for tools whose upstream signing is
+        broken — supply -SkipVerificationWarning to surface why.
+
+    .PARAMETER SkipVerificationWarning
+        Warning text emitted via Write-Warning when -VerifyAuthenticode is
+        $false. Required in that case so operators are not silently shipped
+        unverified binaries.
+
+    .PARAMETER IdempotencyLogMessage
+        Override the "already installed" log line. Defaults to
+        "$ToolName already installed at $Destination. Use -Force to reinstall."
+
+    .PARAMETER PostInstall
+        Script block invoked after the copy succeeds, signature: { param($dest) ... }.
+        Use this to set an env-var hint and log the resolved exe path.
+
+    .PARAMETER Force
+        Re-run the install even when the marker is present.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)] [string]$ToolName,
+        [Parameter(Mandatory)] [string]$Destination,
+        [Parameter(Mandatory)] [string]$MarkerFile,
+        [Parameter(Mandatory)] [string]$Url,
+        [Parameter(Mandatory)] [string]$ArchiveFileName,
+        [bool]$VerifyAuthenticode = $true,
+        [string]$SkipVerificationWarning,
+        [string]$IdempotencyLogMessage,
+        [scriptblock]$PostInstall,
+        [switch]$Force
+    )
+
+    if (-not $IdempotencyLogMessage) {
+        $IdempotencyLogMessage = "$ToolName already installed at $Destination. Use -Force to reinstall."
+    }
+
+    if ((Test-Path -LiteralPath $MarkerFile) -and -not $Force) {
+        Write-MsixLog Info $IdempotencyLogMessage
+        return [pscustomobject]@{ Path = $Destination; Updated = $false }
+    }
+
+    # ShouldProcess-skipped path: preserve legacy behaviour of returning
+    # Updated=$true + the source URL even when nothing was actually done.
+    if (-not $PSCmdlet.ShouldProcess($Destination, "Install $ToolName")) {
+        return [pscustomobject]@{ Path = $Destination; Updated = $true; Source = $Url }
+    }
+
+    $tmpRoot = Join-Path $env:TEMP ("{0}-{1}" -f ([System.IO.Path]::GetFileNameWithoutExtension($ArchiveFileName).ToLowerInvariant()), ([guid]::NewGuid().ToString('N').Substring(0,8)))
+    $stage   = Join-Path $tmpRoot 'extracted'
+    $archive = Join-Path $tmpRoot $ArchiveFileName
+    New-Item $tmpRoot -ItemType Directory -Force | Out-Null
+    New-Item $stage   -ItemType Directory -Force | Out-Null
+
+    $destinationExisted = Test-Path -LiteralPath $Destination
+    try {
+        _MsixDownloadFile -Url $Url -Destination $archive
+        Expand-Archive -LiteralPath $archive -DestinationPath $stage -Force
+
+        if ($VerifyAuthenticode) {
+            _MsixVerifyAuthenticodeFolder -Folder $stage -ToolName $ToolName
+        } elseif ($SkipVerificationWarning) {
+            Write-Warning $SkipVerificationWarning
+        }
+
+        New-Item $Destination -ItemType Directory -Force | Out-Null
+        Copy-Item (Join-Path $stage '*') $Destination -Recurse -Force
+        (Get-Date -Format o) | Set-Content -LiteralPath $MarkerFile -Encoding ascii
+
+        if ($PostInstall) { & $PostInstall $Destination }
+    } catch {
+        Write-MsixLog Error "$ToolName install rolled back: $_"
+        if (-not $destinationExisted) {
+            Remove-Item -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        throw
+    } finally {
+        Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    return [pscustomobject]@{
+        Path    = $Destination
+        Updated = $true
+        Source  = $Url
+    }
+}
+
+
+function _MsixUpdateToolByAge {
+    <#
+    .SYNOPSIS
+        Internal helper: age-based updater. Re-runs an install action only
+        when the marker timestamp is older than -MaxAgeDays. Used by
+        Update-MsixProcMon / Update-MsixDebugView / Update-MsixMgr /
+        Update-MsixAppRuntime.
+
+    .DESCRIPTION
+        Reads the ISO-8601 timestamp from -MarkerFile (written by
+        _MsixInstallArchiveTool) and compares against MaxAgeDays. Calls
+        -InstallFresh when no marker exists, -InstallForce when the marker
+        is too old, or returns a fresh no-op summary otherwise.
+
+        Whole-function ShouldProcess (matches the previous behaviour of
+        Update-MsixProcMon / Update-MsixDebugView / Update-MsixAppRuntime).
+
+    .PARAMETER ToolName
+        Logical name used in age log lines.
+
+    .PARAMETER Destination
+        Where the tool lives (used as the ShouldProcess target string).
+
+    .PARAMETER MarkerFile
+        Full path to the install marker file.
+
+    .PARAMETER MaxAgeDays
+        Refresh threshold in days.
+
+    .PARAMETER InstallFresh
+        Script block invoked when nothing is cached. Typically calls the
+        Install-Msix* with no -Force.
+
+    .PARAMETER InstallForce
+        Script block invoked when the marker is too old. Typically calls the
+        Install-Msix* with -Force.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)] [string]$ToolName,
+        [Parameter(Mandatory)] [string]$Destination,
+        [Parameter(Mandatory)] [string]$MarkerFile,
+        [Parameter(Mandatory)] [int]$MaxAgeDays,
+        [Parameter(Mandatory)] [scriptblock]$InstallFresh,
+        [Parameter(Mandatory)] [scriptblock]$InstallForce
+    )
+
+    if (-not $PSCmdlet.ShouldProcess($Destination, "Update $ToolName")) { return }
+
+    if (-not (Test-Path -LiteralPath $MarkerFile)) {
+        return & $InstallFresh
+    }
+    $stamp = [datetime](Get-Content -LiteralPath $MarkerFile -Raw).Trim()
+    $age   = (Get-Date) - $stamp
+    if ($age.TotalDays -gt $MaxAgeDays) {
+        Write-MsixLog Info "$ToolName is $([int]$age.TotalDays) days old; refreshing."
+        return & $InstallForce
+    }
+    Write-MsixLog Info "$ToolName is fresh ($([int]$age.TotalDays) days old; threshold $MaxAgeDays)."
+    return [pscustomobject]@{ Path = $Destination; Updated = $false }
+}
+
+
 function Install-MsixPsfBinary {
     <#
     .SYNOPSIS
@@ -418,59 +626,24 @@ function Install-MsixProcMon {
         [string]$Destination,
         [switch]$Force
     )
-
     if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'procmon' }
-
-    $marker = Join-Path $Destination 'procmon.installed'
-    if ((Test-Path $marker) -and -not $Force) {
-        Write-MsixLog Info "Process Monitor already installed at $Destination. Use -Force to reinstall."
-        return [pscustomobject]@{ Path = $Destination; Updated = $false }
-    }
-
-    $tmp = Join-Path $env:TEMP "procmon-$([guid]::NewGuid().ToString('N').Substring(0,8))"
-    New-Item $tmp -ItemType Directory -Force | Out-Null
-    $zip = Join-Path $tmp 'ProcessMonitor.zip'
-
-    if ($PSCmdlet.ShouldProcess($Destination, 'Install Process Monitor')) {
-        $destinationExisted = Test-Path $Destination
-        # Stage extraction into a temp folder so a bad signature doesn't pollute Destination.
-        $stage = Join-Path $tmp 'extracted'
-        try {
-            _MsixDownloadFile -Url $script:ProcmonZipUrl -Destination $zip
-            New-Item $stage -ItemType Directory -Force | Out-Null
-            Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
-
-            # H1: verify Authenticode signer before installing into $Destination.
-            _MsixVerifyAuthenticodeFolder -Folder $stage -ToolName 'Procmon'
-
-            New-Item $Destination -ItemType Directory -Force | Out-Null
-            Copy-Item (Join-Path $stage '*') $Destination -Recurse -Force
-            (Get-Date -Format o) | Set-Content $marker -Encoding ascii
-
-            # Make Resolve-MsixProcMonPath find it via env-var hint
-            $exe = Join-Path $Destination 'Procmon.exe'
+    _MsixInstallArchiveTool `
+        -ToolName 'Process Monitor' `
+        -Destination $Destination `
+        -MarkerFile (Join-Path $Destination 'procmon.installed') `
+        -Url $script:ProcmonZipUrl `
+        -ArchiveFileName 'ProcessMonitor.zip' `
+        -Force:$Force `
+        -PostInstall {
+            param($dest)
+            $exe = Join-Path $dest 'Procmon.exe'
             if (Test-Path $exe) {
                 $env:MSIX_PROCMON_PATH = $exe
                 Write-MsixLog Info "Process Monitor installed at $exe"
             } else {
-                Write-MsixLog Warning "Procmon.exe not found after extraction; check $Destination"
+                Write-MsixLog Warning "Procmon.exe not found after extraction; check $dest"
             }
-        } catch {
-            Write-MsixLog Error "Procmon install rolled back: $_"
-            if (-not $destinationExisted) {
-                Remove-Item -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            throw
-        } finally {
-            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
-    }
-
-    return [pscustomobject]@{
-        Path    = $Destination
-        Updated = $true
-        Source  = $script:ProcmonZipUrl
-    }
 }
 
 
@@ -507,22 +680,14 @@ function Update-MsixProcMon {
         [string]$Destination,
         [int]$MaxAgeDays = 30
     )
-
     if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'procmon' }
-    if (-not $PSCmdlet.ShouldProcess($Destination, 'Update Process Monitor')) { return }
-    $marker = Join-Path $Destination 'procmon.installed'
-
-    if (-not (Test-Path $marker)) {
-        return Install-MsixProcMon -Destination $Destination
-    }
-    $stamp = [datetime](Get-Content $marker -Raw).Trim()
-    $age   = (Get-Date) - $stamp
-    if ($age.TotalDays -gt $MaxAgeDays) {
-        Write-MsixLog Info "Procmon is $([int]$age.TotalDays) days old; refreshing."
-        return Install-MsixProcMon -Destination $Destination -Force
-    }
-    Write-MsixLog Info "Procmon is fresh ($([int]$age.TotalDays) days old; threshold $MaxAgeDays)."
-    return [pscustomobject]@{ Path = $Destination; Updated = $false }
+    _MsixUpdateToolByAge `
+        -ToolName 'Procmon' `
+        -Destination $Destination `
+        -MarkerFile (Join-Path $Destination 'procmon.installed') `
+        -MaxAgeDays $MaxAgeDays `
+        -InstallFresh { Install-MsixProcMon -Destination $Destination } `
+        -InstallForce { Install-MsixProcMon -Destination $Destination -Force }
 }
 
 
@@ -562,59 +727,25 @@ function Install-MsixDebugView {
         [string]$Destination,
         [switch]$Force
     )
-
     if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'debugview' }
-
-    $marker = Join-Path $Destination 'debugview.installed'
-    if ((Test-Path $marker) -and -not $Force) {
-        Write-MsixLog Info "DebugView already installed at $Destination. Use -Force to reinstall."
-        return [pscustomobject]@{ Path = $Destination; Updated = $false }
-    }
-
-    $tmp = Join-Path $env:TEMP "debugview-$([guid]::NewGuid().ToString('N').Substring(0,8))"
-    New-Item $tmp -ItemType Directory -Force | Out-Null
-    $zip = Join-Path $tmp 'DebugView.zip'
-
-    if ($PSCmdlet.ShouldProcess($Destination, 'Install DebugView')) {
-        $destinationExisted = Test-Path $Destination
-        $stage = Join-Path $tmp 'extracted'
-        try {
-            _MsixDownloadFile -Url $script:DebugViewZipUrl -Destination $zip
-            New-Item $stage -ItemType Directory -Force | Out-Null
-            Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
-
-            # H1: verify Authenticode signer before installing into $Destination.
-            _MsixVerifyAuthenticodeFolder -Folder $stage -ToolName 'DebugView'
-
-            New-Item $Destination -ItemType Directory -Force | Out-Null
-            Copy-Item (Join-Path $stage '*') $Destination -Recurse -Force
-            (Get-Date -Format o) | Set-Content $marker -Encoding ascii
-
-            # Make Resolve-MsixDebugViewPath find it via env-var hint
-            $exe = Join-Path $Destination 'Dbgview64.exe'
-            if (-not (Test-Path $exe)) { $exe = Join-Path $Destination 'Dbgview.exe' }
+    _MsixInstallArchiveTool `
+        -ToolName 'DebugView' `
+        -Destination $Destination `
+        -MarkerFile (Join-Path $Destination 'debugview.installed') `
+        -Url $script:DebugViewZipUrl `
+        -ArchiveFileName 'DebugView.zip' `
+        -Force:$Force `
+        -PostInstall {
+            param($dest)
+            $exe = Join-Path $dest 'Dbgview64.exe'
+            if (-not (Test-Path $exe)) { $exe = Join-Path $dest 'Dbgview.exe' }
             if (Test-Path $exe) {
                 $env:MSIX_DEBUGVIEW_PATH = $exe
                 Write-MsixLog Info "DebugView installed at $exe"
             } else {
-                Write-MsixLog Warning "Dbgview.exe / Dbgview64.exe not found after extraction; check $Destination"
+                Write-MsixLog Warning "Dbgview.exe / Dbgview64.exe not found after extraction; check $dest"
             }
-        } catch {
-            Write-MsixLog Error "DebugView install rolled back: $_"
-            if (-not $destinationExisted) {
-                Remove-Item -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            throw
-        } finally {
-            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
-    }
-
-    return [pscustomobject]@{
-        Path    = $Destination
-        Updated = $true
-        Source  = $script:DebugViewZipUrl
-    }
 }
 
 
@@ -647,20 +778,13 @@ function Update-MsixDebugView {
         [int]$MaxAgeDays = 30
     )
     if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'debugview' }
-    if (-not $PSCmdlet.ShouldProcess($Destination, 'Update DebugView')) { return }
-    $marker = Join-Path $Destination 'debugview.installed'
-
-    if (-not (Test-Path $marker)) {
-        return Install-MsixDebugView -Destination $Destination
-    }
-    $stamp = [datetime](Get-Content $marker -Raw).Trim()
-    $age   = (Get-Date) - $stamp
-    if ($age.TotalDays -gt $MaxAgeDays) {
-        Write-MsixLog Info "DebugView is $([int]$age.TotalDays) days old; refreshing."
-        return Install-MsixDebugView -Destination $Destination -Force
-    }
-    Write-MsixLog Info "DebugView is fresh ($([int]$age.TotalDays) days old; threshold $MaxAgeDays)."
-    return [pscustomobject]@{ Path = $Destination; Updated = $false }
+    _MsixUpdateToolByAge `
+        -ToolName 'DebugView' `
+        -Destination $Destination `
+        -MarkerFile (Join-Path $Destination 'debugview.installed') `
+        -MaxAgeDays $MaxAgeDays `
+        -InstallFresh { Install-MsixDebugView -Destination $Destination } `
+        -InstallForce { Install-MsixDebugView -Destination $Destination -Force }
 }
 
 
@@ -1172,21 +1296,14 @@ function Update-MsixAppRuntime {
         [string]$Destination,
         [int]$MaxAgeDays = 45
     )
-    if (-not $PSCmdlet.ShouldProcess($Destination, 'Update Windows App Runtime cache')) { return }
     if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'runtime' }
-    $marker = Join-Path $Destination 'runtime.installed'
-
-    if (-not (Test-Path $marker)) {
-        return Install-MsixAppRuntime -Destination $Destination
-    }
-    $stamp = [datetime](Get-Content $marker -Raw).Trim()
-    $age   = (Get-Date) - $stamp
-    if ($age.TotalDays -gt $MaxAgeDays) {
-        Write-MsixLog Info "AppRuntime cache is $([int]$age.TotalDays) days old; refreshing."
-        return Install-MsixAppRuntime -Destination $Destination -Force
-    }
-    Write-MsixLog Info "AppRuntime cache is fresh ($([int]$age.TotalDays) days; threshold $MaxAgeDays)."
-    return [pscustomobject]@{ Path = $Destination; Updated = $false }
+    _MsixUpdateToolByAge `
+        -ToolName 'AppRuntime cache' `
+        -Destination $Destination `
+        -MarkerFile (Join-Path $Destination 'runtime.installed') `
+        -MaxAgeDays $MaxAgeDays `
+        -InstallFresh { Install-MsixAppRuntime -Destination $Destination } `
+        -InstallForce { Install-MsixAppRuntime -Destination $Destination -Force }
 }
 
 

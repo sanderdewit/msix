@@ -89,7 +89,8 @@ Describe 'Plugin / extension-point detection + autofix' -Tag 'Plugins' {
 
     Context 'Source-level regression guards' {
         It 'Get-MsixHeuristicFindings emits PluginDirectory findings' {
-            $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.Heuristics.ps1')) -Raw
+            # Issue #38: Get-MsixHeuristicFinding moved to MSIX.Scanners.ps1.
+            $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.Scanners.ps1')) -Raw
             $src | Should -Match "Category = 'PluginDirectory'"
             $src | Should -Match 'Get-MsixPluginExtensionPoint -PackagePath'
         }

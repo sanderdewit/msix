@@ -71,85 +71,35 @@ function Install-MsixMgr {
         # Force a re-download (msixmgr updates infrequently).
         Install-MsixMgr -Force
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '',
+        Justification = 'ShouldProcess is invoked inside _MsixInstallArchiveTool which receives -WhatIf through CmdletBinding inheritance. PSSA cannot trace the call across the helper boundary.')]
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$Destination,
         [switch]$Force,
         [switch]$VerifyAuthenticode
     )
-
     if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'msixmgr' }
 
-    $marker = Join-Path $Destination 'msixmgr.installed'
-    if ((Test-Path $marker) -and -not $Force) {
-        Write-MsixLog Info "msixmgr already installed at $Destination. Use -Force to reinstall."
-        return [pscustomobject]@{ Path = $Destination; Updated = $false }
-    }
-
-    $tmp = Join-Path $env:TEMP "msixmgr-$([guid]::NewGuid().ToString('N').Substring(0,8))"
-    New-Item $tmp -ItemType Directory -Force | Out-Null
-    $zip = Join-Path $tmp 'msixmgrSetup.zip'
-
-    if ($PSCmdlet.ShouldProcess($Destination, 'Install msixmgr')) {
-        $destinationExisted = Test-Path $Destination
-        # Stage extraction into a temp folder so a bad signature doesn't pollute Destination.
-        $stage = Join-Path $tmp 'extracted'
-        try {
-            Write-MsixLog Info "Downloading $script:MsixMgrZipUrl"
-            $oldPref = $ProgressPreference
-            $ProgressPreference = 'SilentlyContinue'
-            try {
-                Invoke-WebRequest -Uri $script:MsixMgrZipUrl -OutFile $zip -UseBasicParsing -ErrorAction Stop
-            } finally {
-                $ProgressPreference = $oldPref
-            }
-
-            New-Item $stage -ItemType Directory -Force | Out-Null
-            Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
-
-            # Authenticode verification of the msixmgr archive.
-            # The upstream archive at aka.ms/msixmgr ships unsigned binaries
-            # (msixmgr.exe, msix.dll) and binaries signed by 'Microsoft
-            # Testing PCA 2010' (ApplyACLs.dll, CreateCIM.dll, WVDUtilities.dll)
-            # — neither passes verification against the production-Microsoft
-            # allowlist. Filed upstream as microsoft/msix-packaging#710; the
-            # repo has been inactive. We default to skipping verification
-            # ONLY for msixmgr and surface that loudly via Write-Warning so
-            # operators in high-assurance environments can decide to manually
-            # vet the bits. Pass -VerifyAuthenticode to opt back in.
-            if ($VerifyAuthenticode) {
-                _MsixVerifyAuthenticodeFolder -Folder $stage -ToolName 'msixmgr'
-            } else {
-                Write-Warning 'Skipping Authenticode verification for msixmgr (upstream signing is broken: microsoft/msix-packaging#710). Pass -VerifyAuthenticode to re-enable. This skip applies ONLY to msixmgr — every other downloaded toolchain binary is still verified.'
-            }
-
-            New-Item $Destination -ItemType Directory -Force | Out-Null
-            Copy-Item (Join-Path $stage '*') $Destination -Recurse -Force
-            (Get-Date -Format o) | Set-Content $marker -Encoding ascii
-
-            $exe = Get-ChildItem $Destination -Recurse -Filter 'msixmgr.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+    _MsixInstallArchiveTool `
+        -ToolName 'msixmgr' `
+        -Destination $Destination `
+        -MarkerFile (Join-Path $Destination 'msixmgr.installed') `
+        -Url $script:MsixMgrZipUrl `
+        -ArchiveFileName 'msixmgrSetup.zip' `
+        -VerifyAuthenticode ([bool]$VerifyAuthenticode) `
+        -SkipVerificationWarning 'Skipping Authenticode verification for msixmgr (upstream signing is broken: microsoft/msix-packaging#710). Pass -VerifyAuthenticode to re-enable. This skip applies ONLY to msixmgr — every other downloaded toolchain binary is still verified.' `
+        -Force:$Force `
+        -PostInstall {
+            param($dest)
+            $exe = Get-ChildItem $dest -Recurse -Filter 'msixmgr.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($exe) {
                 $env:MSIX_MSIXMGR_PATH = $exe.FullName
                 Write-MsixLog Info "msixmgr installed: $($exe.FullName)"
             } else {
-                Write-MsixLog Warning "msixmgr.exe not found after extraction; check $Destination"
+                Write-MsixLog Warning "msixmgr.exe not found after extraction; check $dest"
             }
-        } catch {
-            Write-MsixLog Error "msixmgr install rolled back: $_"
-            if (-not $destinationExisted) {
-                Remove-Item -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            throw
-        } finally {
-            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
-    }
-
-    return [pscustomobject]@{
-        Path    = $Destination
-        Updated = $true
-        Source  = $script:MsixMgrZipUrl
-    }
 }
 
 
@@ -177,6 +127,10 @@ function Update-MsixMgr {
         # Keep msixmgr fresh on a CI agent.
         Update-MsixMgr
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '',
+        Justification = 'ShouldProcess is invoked inside _MsixUpdateToolByAge which receives -WhatIf through CmdletBinding inheritance.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'VerifyAuthenticode',
+        Justification = 'Captured by the -InstallFresh / -InstallForce script blocks via lexical closure; PSSA cannot trace scriptblock captures.')]
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$Destination,
@@ -187,25 +141,13 @@ function Update-MsixMgr {
         [switch]$VerifyAuthenticode
     )
     if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'msixmgr' }
-    $marker = Join-Path $Destination 'msixmgr.installed'
-
-    if (-not (Test-Path $marker)) {
-        if ($PSCmdlet.ShouldProcess($Destination, 'Install missing msixmgr')) {
-            return Install-MsixMgr -Destination $Destination -VerifyAuthenticode:$VerifyAuthenticode
-        }
-        return
-    }
-    $stamp = [datetime](Get-Content $marker -Raw).Trim()
-    $age   = (Get-Date) - $stamp
-    if ($age.TotalDays -gt $MaxAgeDays) {
-        Write-MsixLog Info "msixmgr is $([int]$age.TotalDays) days old; refreshing."
-        if ($PSCmdlet.ShouldProcess($Destination, 'Refresh msixmgr')) {
-            return Install-MsixMgr -Destination $Destination -Force -VerifyAuthenticode:$VerifyAuthenticode
-        }
-        return
-    }
-    Write-MsixLog Info "msixmgr is fresh ($([int]$age.TotalDays) days old; threshold $MaxAgeDays)."
-    return [pscustomobject]@{ Path = $Destination; Updated = $false }
+    _MsixUpdateToolByAge `
+        -ToolName 'msixmgr' `
+        -Destination $Destination `
+        -MarkerFile (Join-Path $Destination 'msixmgr.installed') `
+        -MaxAgeDays $MaxAgeDays `
+        -InstallFresh { Install-MsixMgr -Destination $Destination -VerifyAuthenticode:$VerifyAuthenticode } `
+        -InstallForce { Install-MsixMgr -Destination $Destination -Force -VerifyAuthenticode:$VerifyAuthenticode }
 }
 
 

@@ -78,7 +78,8 @@ Describe 'Issue #28: registry cleanup + idempotent ManifestFix detection' -Tag '
         }
 
         It 'Remove-MsixUninstallerArtifact source calls the recursive helper' {
-            $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.Heuristics.ps1')) -Raw
+            # Issue #38: function moved from MSIX.Heuristics.ps1 to MSIX.PackageMutators.ps1.
+            $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.PackageMutators.ps1')) -Raw
             $idx = $src.IndexOf('function Remove-MsixUninstallerArtifact')
             $nextIdx = $src.IndexOf("`nfunction ", $idx + 1)
             if ($nextIdx -lt 0) { $nextIdx = $src.Length }

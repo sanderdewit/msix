@@ -114,7 +114,9 @@ MSIX\
 ├── MSIX.Scripts.ps1           PSADT-flavoured standard scripts + Set-MsixScriptSignature
 ├── MSIX.AppIsolation.ps1      Win32 App Isolation (rescap capabilities, opt-in)
 ├── MSIX.Investigation.ps1     Static + procmon analysis + recommendations
-├── MSIX.Heuristics.ps1        TMEditX-style auto-fixers + Invoke-MsixAutoFix(FromAnalysis)
+├── MSIX.Scanners.ps1          Read-only Get-Msix*Candidate/*Entry/HeuristicFinding
+├── MSIX.PackageMutators.ps1   Add-MsixCapability + Remove-Msix*Artifact + payload Add-*
+├── MSIX.AutoFix.ps1           Invoke-MsixAutoFix + Invoke-MsixAutoFixFromAnalysis
 ├── MSIX.Detection.ps1         Read-only scanners (fonts, shortcuts, capability hints)
 ├── MSIX.Debug.ps1             Start-MsixDebugSession + sandbox bootstrap
 ├── MSIX.AppData.ps1           Container / orphan / merged-fs helpers

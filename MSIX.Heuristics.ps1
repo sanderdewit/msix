@@ -137,6 +137,12 @@ function Add-MsixCapability {
             -Capabilities runFullTrust,internetClient `
             -Pfx cert.pfx -PfxPassword $pw
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '',
+        Justification = 'ShouldProcess is invoked inside _MsixMutatePackage; PSSA cannot trace it through the scriptblock dispatch (issue #37).')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Names',
+        Justification = 'Captured by the -Mutator scriptblock via GetNewClosure().')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Namespace',
+        Justification = 'Captured by the -Mutator scriptblock via GetNewClosure().')]
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
@@ -151,85 +157,54 @@ function Add-MsixCapability {
         [string]$UnsignedOutputPath
     )
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
-    $workspace = New-MsixWorkspace $fileinfo.BaseName
-    try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+    $null = _MsixMutatePackage -PackagePath $PackagePath -Operation 'cap' `
+        -OutputPath $OutputPath -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+        -UnsignedOutputPath $UnsignedOutputPath `
+        -NoChangeMessage 'No capabilities added.' `
+        -Mutator {
+            param($workspace)
+            $null = Test-MsixManifest "$workspace\AppxManifest.xml"
+            [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
 
-        $null = Test-MsixManifest "$workspace\AppxManifest.xml"
-        [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
-
-        $caps = $manifest.Package.Capabilities
-        if (-not $caps) {
-            $caps = $manifest.CreateElement('Capabilities', $manifest.Package.NamespaceURI)
-            $null = $manifest.Package.AppendChild($caps)
-        }
-
-        $changed = $false
-
-        foreach ($name in $Names) {
-            # Explicit -Namespace overrides the lookup table; otherwise use it.
-            $ns = if ($Namespace) { $Namespace } else { $script:KnownCapabilities[$name] }
-            # Idempotency: match by LocalName + Name attribute regardless of prefix
-            $existing = $caps.ChildNodes | Where-Object {
-                ($_.LocalName -eq 'Capability') -and ($_.'Name' -eq $name)
+            $caps = $manifest.Package.Capabilities
+            if (-not $caps) {
+                $caps = $manifest.CreateElement('Capabilities', $manifest.Package.NamespaceURI)
+                $null = $manifest.Package.AppendChild($caps)
             }
-            if ($existing) {
-                Write-MsixLog Info "Capability already present: $name"
-                continue
-            }
-            if ($ns -and $ns -ne 'standard') {
-                Add-MsixManifestNamespace $manifest $ns
-                $nsUri = Get-MsixManifestNamespaceUri $ns
-                $node  = $manifest.CreateElement("${ns}:Capability", $nsUri)
-            } else {
-                # 'standard' or unknown — plain <Capability>; warn if not in the known-good list
-                if (-not $ns) {
-                    Write-MsixLog Warning "Capability '$name' is not in the known-capabilities table (MSIX.Heuristics.ps1#KnownCapabilities). Creating a plain <Capability> element (standard namespace). If this is a uap/rescap capability, the install may fail at deployment time — verify against https://learn.microsoft.com/en-us/windows/uwp/packaging/app-capability-declarations and either add it to the lookup table or pass -Namespace explicitly."
+
+            $added = @()
+            foreach ($name in $Names) {
+                # Explicit -Namespace overrides the lookup table; otherwise use it.
+                $ns = if ($Namespace) { $Namespace } else { $script:KnownCapabilities[$name] }
+                # Idempotency: match by LocalName + Name attribute regardless of prefix
+                $existing = $caps.ChildNodes | Where-Object {
+                    ($_.LocalName -eq 'Capability') -and ($_.'Name' -eq $name)
                 }
-                $node = $manifest.CreateElement('Capability', $manifest.Package.NamespaceURI)
+                if ($existing) {
+                    Write-MsixLog Info "Capability already present: $name"
+                    continue
+                }
+                if ($ns -and $ns -ne 'standard') {
+                    Add-MsixManifestNamespace $manifest $ns
+                    $nsUri = Get-MsixManifestNamespaceUri $ns
+                    $node  = $manifest.CreateElement("${ns}:Capability", $nsUri)
+                } else {
+                    if (-not $ns) {
+                        Write-MsixLog Warning "Capability '$name' is not in the known-capabilities table (MSIX.Heuristics.ps1#KnownCapabilities). Creating a plain <Capability> element (standard namespace). If this is a uap/rescap capability, the install may fail at deployment time — verify against https://learn.microsoft.com/en-us/windows/uwp/packaging/app-capability-declarations and either add it to the lookup table or pass -Namespace explicitly."
+                    }
+                    $node = $manifest.CreateElement('Capability', $manifest.Package.NamespaceURI)
+                }
+                $node.SetAttribute('Name', $name)
+                $null = $caps.AppendChild($node)
+                Write-MsixLog Info "Capability added: $name"
+                $added += $name
             }
-            $node.SetAttribute('Name', $name)
-            $null = $caps.AppendChild($node)
-            Write-MsixLog Info "Capability added: $name"
-            $changed = $true
-        }
 
-        if (-not $changed) { return }
+            if (-not $added) { return $null }
 
-        if ($PSCmdlet.ShouldProcess("$workspace\AppxManifest.xml", 'Save manifest')) {
             Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
-        }
-
-        # Atomic repack — pack to a scratch path, sign, then Move-Item to the
-        # target on success. A signing failure must NEVER leave the user with
-        # an unsigned modified copy of their signed package.
-        $target  = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $scratch = Join-Path $env:TEMP ("msix-cap-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($target)))
-        $packOk = $false
-        try {
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
-            Assert-MsixProcessSuccess $r 'MakeAppx pack'
-            $packOk = $true
-            if (-not $SkipSigning) {
-                Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword
-            }
-            Move-Item -LiteralPath $scratch -Destination $target -Force
-        } catch {
-            if ($packOk -and $UnsignedOutputPath) {
-                Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction SilentlyContinue
-                Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
-            }
-            throw
-        } finally {
-            if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue }
-        }
-
-    } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
-    }
+            @{ CapabilitiesAdded = $added }
+        }.GetNewClosure()
 }
 #endregion
 
@@ -553,6 +528,10 @@ function Remove-MsixUninstallerArtifact {
         [pscustomobject] with FilesRemoved (string[]), KeysRemoved (string[]),
         and Output (final package path). Returns nothing when nothing matched.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UninstallKeyFilter',
+        Justification = 'Captured by the -Mutator scriptblock via GetNewClosure() (issue #37).')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'KeepRegistry',
+        Justification = 'Captured by the -Mutator scriptblock via GetNewClosure() (issue #37).')]
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
@@ -573,55 +552,52 @@ function Remove-MsixUninstallerArtifact {
         )
     }
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
-    $workspace = New-MsixWorkspace $fileinfo.BaseName
-    try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+    _MsixMutatePackage -PackagePath $PackagePath -Operation 'uninstrm' `
+        -OutputPath $OutputPath -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+        -UnsignedOutputPath $UnsignedOutputPath `
+        -NoChangeMessage 'No uninstaller artefacts found.' `
+        -Mutator {
+            param($workspace)
 
-        # ── Strip files ────────────────────────────────────────────────────
-        $removedFiles = @()
-        Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object {
-                $name = $_.Name
-                ($PathPatterns | Where-Object { $name -match $_ }).Count -gt 0
-            } |
-            ForEach-Object {
-                if ($PSCmdlet.ShouldProcess($_.FullName, 'Remove uninstaller artefact')) {
+            # ── Strip files ────────────────────────────────────────────────
+            $removedFiles = @()
+            Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $name = $_.Name
+                    ($PathPatterns | Where-Object { $name -match $_ }).Count -gt 0
+                } |
+                ForEach-Object {
                     Remove-Item $_.FullName -Force
                     $removedFiles += $_.FullName.Substring($workspace.Length + 1)
                 }
-            }
 
-        # ── Strip Registry.dat Uninstall\* entries ────────────────────────
-        $removedKeys = @()
-        $datPath = Join-Path $workspace 'Registry.dat'
-        if (-not $KeepRegistry -and (Test-Path $datPath)) {
-            # Parse + mutate the hive via offreg.dll (no elevation required).
-            # ORSaveHive cannot overwrite, so we save to a sibling path and replace.
-            $newDat = "$datPath.new"
-            if (Test-Path -LiteralPath $newDat) { Remove-Item -LiteralPath $newDat -Force }
+            # ── Strip Registry.dat Uninstall\* entries ────────────────────
+            $removedKeys = @()
+            $datPath = Join-Path $workspace 'Registry.dat'
+            if (-not $KeepRegistry -and (Test-Path $datPath)) {
+                # Parse + mutate the hive via offreg.dll (no elevation required).
+                # ORSaveHive cannot overwrite, so we save to a sibling path and replace.
+                $newDat = "$datPath.new"
+                if (Test-Path -LiteralPath $newDat) { Remove-Item -LiteralPath $newDat -Force }
 
-            $hive = _MsixOpenOfflineHive -Path $datPath
-            $modified = $false
-            try {
-                foreach ($branch in @(
-                    'REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
-                    'REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
-                )) {
-                    $branchKey = _MsixOfflineOpenKey -Parent $hive -SubKey $branch
-                    if ($branchKey -eq [IntPtr]::Zero) { continue }
-                    try {
-                        $children = _MsixOfflineEnumSubKeys -Key $branchKey
-                    } finally {
-                        _MsixOfflineCloseKey -Key $branchKey
-                    }
-                    foreach ($child in $children) {
-                        $name = _MsixOfflineGetValue -Parent $hive -SubKey "$branch\$child" -Name 'DisplayName'
-                        if (-not $name -or ($name -match $UninstallKeyFilter)) {
-                            $logical = "$branch\$child"
-                            if ($PSCmdlet.ShouldProcess($logical, "Remove Uninstall key '$name'")) {
+                $hive = _MsixOpenOfflineHive -Path $datPath
+                $modified = $false
+                try {
+                    foreach ($branch in @(
+                        'REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+                        'REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+                    )) {
+                        $branchKey = _MsixOfflineOpenKey -Parent $hive -SubKey $branch
+                        if ($branchKey -eq [IntPtr]::Zero) { continue }
+                        try {
+                            $children = _MsixOfflineEnumSubKeys -Key $branchKey
+                        } finally {
+                            _MsixOfflineCloseKey -Key $branchKey
+                        }
+                        foreach ($child in $children) {
+                            $name = _MsixOfflineGetValue -Parent $hive -SubKey "$branch\$child" -Name 'DisplayName'
+                            if (-not $name -or ($name -match $UninstallKeyFilter)) {
+                                $logical = "$branch\$child"
                                 # Uninstall\<app> often has Component subkeys
                                 # (per-feature MSI references etc.). ORDeleteKey
                                 # is NOT recursive — calling it on a key that
@@ -640,61 +616,27 @@ function Remove-MsixUninstallerArtifact {
                             }
                         }
                     }
+                    if ($modified) {
+                        if (-not (_MsixOfflineSaveHive -Hive $hive -Path $newDat)) {
+                            Write-MsixLog Warning 'ORSaveHive failed; Registry.dat is unchanged.'
+                            $modified = $false
+                        }
+                    }
+                } finally {
+                    _MsixCloseOfflineHive -Hive $hive
                 }
                 if ($modified) {
-                    if (-not (_MsixOfflineSaveHive -Hive $hive -Path $newDat)) {
-                        Write-MsixLog Warning 'ORSaveHive failed; Registry.dat is unchanged.'
-                        $modified = $false
-                    }
+                    Move-Item -LiteralPath $newDat -Destination $datPath -Force
+                } elseif (Test-Path -LiteralPath $newDat) {
+                    Remove-Item -LiteralPath $newDat -Force -ErrorAction SilentlyContinue
                 }
-            } finally {
-                _MsixCloseOfflineHive -Hive $hive
             }
-            if ($modified) {
-                Move-Item -LiteralPath $newDat -Destination $datPath -Force
-            } elseif (Test-Path -LiteralPath $newDat) {
-                Remove-Item -LiteralPath $newDat -Force -ErrorAction SilentlyContinue
-            }
-        }
 
-        if (-not $removedFiles -and -not $removedKeys) {
-            Write-MsixLog Info 'No uninstaller artefacts found.'
-            return
-        }
-        if ($removedFiles) { Write-MsixLog Info "Files removed:    $($removedFiles -join ', ')" }
-        if ($removedKeys)  { Write-MsixLog Info "Reg keys removed: $($removedKeys -join ', ')" }
-
-        # Atomic repack — pack to a scratch path, sign, then Move-Item to the
-        # target on success. A signing failure must NEVER leave the user with
-        # an unsigned modified copy of their signed package.
-        $target  = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $scratch = Join-Path $env:TEMP ("msix-uninstrm-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($target)))
-        $packOk = $false
-        try {
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
-            Assert-MsixProcessSuccess $r 'MakeAppx pack'
-            $packOk = $true
-            if (-not $SkipSigning) {
-                Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword
-            }
-            Move-Item -LiteralPath $scratch -Destination $target -Force
-            return [pscustomobject]@{
-                FilesRemoved = $removedFiles
-                KeysRemoved  = $removedKeys
-                Output       = $target
-            }
-        } catch {
-            if ($packOk -and $UnsignedOutputPath) {
-                Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction SilentlyContinue
-                Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
-            }
-            throw
-        } finally {
-            if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue }
-        }
-    } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
-    }
+            if (-not $removedFiles -and -not $removedKeys) { return $null }
+            if ($removedFiles) { Write-MsixLog Info "Files removed:    $($removedFiles -join ', ')" }
+            if ($removedKeys)  { Write-MsixLog Info "Reg keys removed: $($removedKeys -join ', ')" }
+            @{ FilesRemoved = $removedFiles; KeysRemoved = $removedKeys }
+        }.GetNewClosure()
 }
 
 function Remove-MsixUpdaterArtifact {
@@ -790,82 +732,48 @@ function Remove-MsixUpdaterArtifact {
     }
     $excludePatterns = @('^psf', '^msvc', '^vcruntime', '^api-ms-win-', '^msix')
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
-    $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-updrm"
-    try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+    _MsixMutatePackage -PackagePath $PackagePath -Operation 'updrm' `
+        -WorkspaceSuffix '-updrm' `
+        -OutputPath $OutputPath -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+        -UnsignedOutputPath $UnsignedOutputPath `
+        -NoChangeMessage 'No updater artefacts found.' `
+        -Mutator {
+            param($workspace)
 
-        # ── Strip updater binaries ─────────────────────────────────────────
-        $removedFiles = @()
-        Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object {
-                $name = $_.Name
-                $skip = $false
-                foreach ($ex in $excludePatterns) {
-                    if ($name -match $ex) { $skip = $true; break }
-                }
-                if ($skip) { return $false }
-                ($PathPatterns | Where-Object { $name -match $_ }).Count -gt 0
-            } |
-            ForEach-Object {
-                if ($PSCmdlet.ShouldProcess($_.FullName, 'Remove updater artefact')) {
+            # ── Strip updater binaries ─────────────────────────────────────
+            $removedFiles = @()
+            Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $name = $_.Name
+                    $skip = $false
+                    foreach ($ex in $excludePatterns) {
+                        if ($name -match $ex) { $skip = $true; break }
+                    }
+                    if ($skip) { return $false }
+                    ($PathPatterns | Where-Object { $name -match $_ }).Count -gt 0
+                } |
+                ForEach-Object {
                     Remove-Item $_.FullName -Force
                     $removedFiles += $_.FullName.Substring($workspace.Length + 1)
                 }
-            }
 
-        # ── Strip scheduled-task XMLs ──────────────────────────────────────
-        $removedTasks = @()
-        Get-ChildItem $workspace -Recurse -File -Filter '*.xml' -ErrorAction SilentlyContinue |
-            Where-Object {
-                $rel = $_.FullName.Substring($workspace.Length + 1).ToLowerInvariant()
-                ($rel -match '(^|\\)tasks\\') -or ($rel -match '\\vfs\\windows\\tasks\\')
-            } |
-            ForEach-Object {
-                if ($PSCmdlet.ShouldProcess($_.FullName, 'Remove scheduled-task XML')) {
+            # ── Strip scheduled-task XMLs ──────────────────────────────────
+            $removedTasks = @()
+            Get-ChildItem $workspace -Recurse -File -Filter '*.xml' -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $rel = $_.FullName.Substring($workspace.Length + 1).ToLowerInvariant()
+                    ($rel -match '(^|\\)tasks\\') -or ($rel -match '\\vfs\\windows\\tasks\\')
+                } |
+                ForEach-Object {
                     Remove-Item $_.FullName -Force
                     $removedTasks += $_.FullName.Substring($workspace.Length + 1)
                 }
-            }
 
-        if (-not $removedFiles -and -not $removedTasks) {
-            Write-MsixLog Info 'No updater artefacts found.'
-            return
-        }
-        if ($removedFiles) { Write-MsixLog Info "Files removed: $($removedFiles -join ', ')" }
-        if ($removedTasks) { Write-MsixLog Info "Tasks removed: $($removedTasks -join ', ')" }
-
-        # Atomic repack — pack to a scratch path, sign, then move into place.
-        $target  = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $scratch = Join-Path $env:TEMP ("msix-updrm-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($target)))
-        $packOk = $false
-        try {
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
-            Assert-MsixProcessSuccess $r 'MakeAppx pack'
-            $packOk = $true
-            if (-not $SkipSigning) {
-                Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword
-            }
-            Move-Item -LiteralPath $scratch -Destination $target -Force
-            return [pscustomobject]@{
-                FilesRemoved = $removedFiles
-                TasksRemoved = $removedTasks
-                Output       = $target
-            }
-        } catch {
-            if ($packOk -and $UnsignedOutputPath) {
-                Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction SilentlyContinue
-                Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
-            }
-            throw
-        } finally {
-            if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue }
-        }
-    } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
-    }
+            if (-not $removedFiles -and -not $removedTasks) { return $null }
+            if ($removedFiles) { Write-MsixLog Info "Files removed: $($removedFiles -join ', ')" }
+            if ($removedTasks) { Write-MsixLog Info "Tasks removed: $($removedTasks -join ', ')" }
+            @{ FilesRemoved = $removedFiles; TasksRemoved = $removedTasks }
+        }.GetNewClosure()
 }
 
 function Remove-MsixShellRegistryArtifact {
@@ -938,64 +846,64 @@ function Remove-MsixShellRegistryArtifact {
         return
     }
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
-    $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-shellreg"
-    try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+    _MsixMutatePackage -PackagePath $PackagePath -Operation 'shellreg' `
+        -WorkspaceSuffix '-shellreg' `
+        -OutputPath $OutputPath -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+        -UnsignedOutputPath $UnsignedOutputPath `
+        -NoChangeMessage 'No matching legacy shell registry entries found.' `
+        -Mutator {
+            param($workspace)
 
-        $datPath = Join-Path $workspace 'Registry.dat'
-        if (-not (Test-Path $datPath)) {
-            Write-MsixLog Info 'No Registry.dat in package — nothing to clean.'
-            return
-        }
-
-        # Targets to walk under Classes — the same set Get-MsixShellContextMenuEntry uses.
-        $targets = @('*', 'Directory', 'Directory\Background', 'AllFilesystemObjects')
-
-        # Build a CLSID set for fast membership testing (lower-cased, both bare
-        # and braced forms accepted in inputs).
-        $clsidSet = New-Object 'System.Collections.Generic.HashSet[string]'
-        foreach ($e in $Entries) {
-            if ($e.Clsid) {
-                $bare = $e.Clsid.ToString().Trim().Trim('{', '}').ToLowerInvariant()
-                $null = $clsidSet.Add($bare)
+            $datPath = Join-Path $workspace 'Registry.dat'
+            if (-not (Test-Path $datPath)) {
+                Write-MsixLog Info 'No Registry.dat in package — nothing to clean.'
+                return $null
             }
-        }
-        if ($clsidSet.Count -eq 0) {
-            Write-MsixLog Warning 'None of the supplied entries had a Clsid; nothing to clean (resolve CLSIDs via Get-MsixShellContextMenuEntry).'
-            return
-        }
 
-        $newDat = "$datPath.new"
-        if (Test-Path -LiteralPath $newDat) { Remove-Item -LiteralPath $newDat -Force }
+            # Targets to walk under Classes — the same set Get-MsixShellContextMenuEntry uses.
+            $targets = @('*', 'Directory', 'Directory\Background', 'AllFilesystemObjects')
 
-        $removedKeys = @()
-        $hive = _MsixOpenOfflineHive -Path $datPath
-        $modified = $false
-        try {
-            foreach ($prefix in @(
-                'REGISTRY\MACHINE\SOFTWARE\Classes',
-                'REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Classes'
-            )) {
-                foreach ($target in $targets) {
-                    # ── shellex\ContextMenuHandlers\<name> — delete iff (default) value matches our CLSID
-                    $shexBase = "$prefix\$target\shellex\ContextMenuHandlers"
-                    $shexKey  = _MsixOfflineOpenKey -Parent $hive -SubKey $shexBase
-                    if ($shexKey -ne [IntPtr]::Zero) {
-                        try {
-                            $handlers = _MsixOfflineEnumSubKeys -Key $shexKey
-                        } finally {
-                            _MsixOfflineCloseKey -Key $shexKey
-                        }
-                        foreach ($handler in $handlers) {
-                            $logical = "$shexBase\$handler"
-                            $value   = _MsixOfflineGetValue -Parent $hive -SubKey $logical -Name ''
-                            if (-not $value) { continue }
-                            $bare = $value.ToString().Trim().Trim('{', '}').ToLowerInvariant()
-                            if ($clsidSet.Contains($bare)) {
-                                if ($PSCmdlet.ShouldProcess($logical, 'Remove legacy shellex handler')) {
+            # Build a CLSID set for fast membership testing (lower-cased, both bare
+            # and braced forms accepted in inputs).
+            $clsidSet = New-Object 'System.Collections.Generic.HashSet[string]'
+            foreach ($e in $Entries) {
+                if ($e.Clsid) {
+                    $bare = $e.Clsid.ToString().Trim().Trim('{', '}').ToLowerInvariant()
+                    $null = $clsidSet.Add($bare)
+                }
+            }
+            if ($clsidSet.Count -eq 0) {
+                Write-MsixLog Warning 'None of the supplied entries had a Clsid; nothing to clean (resolve CLSIDs via Get-MsixShellContextMenuEntry).'
+                return $null
+            }
+
+            $newDat = "$datPath.new"
+            if (Test-Path -LiteralPath $newDat) { Remove-Item -LiteralPath $newDat -Force }
+
+            $removedKeys = @()
+            $hive = _MsixOpenOfflineHive -Path $datPath
+            $modified = $false
+            try {
+                foreach ($prefix in @(
+                    'REGISTRY\MACHINE\SOFTWARE\Classes',
+                    'REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Classes'
+                )) {
+                    foreach ($target in $targets) {
+                        # ── shellex\ContextMenuHandlers\<name> — delete iff (default) value matches our CLSID
+                        $shexBase = "$prefix\$target\shellex\ContextMenuHandlers"
+                        $shexKey  = _MsixOfflineOpenKey -Parent $hive -SubKey $shexBase
+                        if ($shexKey -ne [IntPtr]::Zero) {
+                            try {
+                                $handlers = _MsixOfflineEnumSubKeys -Key $shexKey
+                            } finally {
+                                _MsixOfflineCloseKey -Key $shexKey
+                            }
+                            foreach ($handler in $handlers) {
+                                $logical = "$shexBase\$handler"
+                                $value   = _MsixOfflineGetValue -Parent $hive -SubKey $logical -Name ''
+                                if (-not $value) { continue }
+                                $bare = $value.ToString().Trim().Trim('{', '}').ToLowerInvariant()
+                                if ($clsidSet.Contains($bare)) {
                                     if (_MsixOfflineDeleteKeyRecursive -Parent $hive -SubKey $logical) {
                                         $removedKeys += $logical
                                         $modified = $true
@@ -1007,25 +915,23 @@ function Remove-MsixShellRegistryArtifact {
                                 }
                             }
                         }
-                    }
-                    if ($modified -eq $false -and $removedKeys.Count -gt 0) { break }
+                        if ($modified -eq $false -and $removedKeys.Count -gt 0) { break }
 
-                    # ── shell\<verb> — delete iff ExplorerCommandHandler matches our CLSID
-                    $shellBase = "$prefix\$target\shell"
-                    $shellKey  = _MsixOfflineOpenKey -Parent $hive -SubKey $shellBase
-                    if ($shellKey -ne [IntPtr]::Zero) {
-                        try {
-                            $verbs = _MsixOfflineEnumSubKeys -Key $shellKey
-                        } finally {
-                            _MsixOfflineCloseKey -Key $shellKey
-                        }
-                        foreach ($verb in $verbs) {
-                            $logical = "$shellBase\$verb"
-                            $ech     = _MsixOfflineGetValue -Parent $hive -SubKey $logical -Name 'ExplorerCommandHandler'
-                            if (-not $ech) { continue }
-                            $bare = $ech.ToString().Trim().Trim('{', '}').ToLowerInvariant()
-                            if ($clsidSet.Contains($bare)) {
-                                if ($PSCmdlet.ShouldProcess($logical, 'Remove legacy shell verb')) {
+                        # ── shell\<verb> — delete iff ExplorerCommandHandler matches our CLSID
+                        $shellBase = "$prefix\$target\shell"
+                        $shellKey  = _MsixOfflineOpenKey -Parent $hive -SubKey $shellBase
+                        if ($shellKey -ne [IntPtr]::Zero) {
+                            try {
+                                $verbs = _MsixOfflineEnumSubKeys -Key $shellKey
+                            } finally {
+                                _MsixOfflineCloseKey -Key $shellKey
+                            }
+                            foreach ($verb in $verbs) {
+                                $logical = "$shellBase\$verb"
+                                $ech     = _MsixOfflineGetValue -Parent $hive -SubKey $logical -Name 'ExplorerCommandHandler'
+                                if (-not $ech) { continue }
+                                $bare = $ech.ToString().Trim().Trim('{', '}').ToLowerInvariant()
+                                if ($clsidSet.Contains($bare)) {
                                     if (_MsixOfflineDeleteKeyRecursive -Parent $hive -SubKey $logical) {
                                         $removedKeys += $logical
                                         $modified = $true
@@ -1039,57 +945,27 @@ function Remove-MsixShellRegistryArtifact {
                         }
                     }
                 }
+                if ($modified) {
+                    if (-not (_MsixOfflineSaveHive -Hive $hive -Path $newDat)) {
+                        Write-MsixLog Warning 'ORSaveHive failed; Registry.dat is unchanged.'
+                        $modified = $false
+                    }
+                }
+            } finally {
+                _MsixCloseOfflineHive -Hive $hive
             }
             if ($modified) {
-                if (-not (_MsixOfflineSaveHive -Hive $hive -Path $newDat)) {
-                    Write-MsixLog Warning 'ORSaveHive failed; Registry.dat is unchanged.'
-                    $modified = $false
-                }
+                Move-Item -LiteralPath $newDat -Destination $datPath -Force
+            } elseif (Test-Path -LiteralPath $newDat) {
+                Remove-Item -LiteralPath $newDat -Force -ErrorAction SilentlyContinue
             }
-        } finally {
-            _MsixCloseOfflineHive -Hive $hive
-        }
-        if ($modified) {
-            Move-Item -LiteralPath $newDat -Destination $datPath -Force
-        } elseif (Test-Path -LiteralPath $newDat) {
-            Remove-Item -LiteralPath $newDat -Force -ErrorAction SilentlyContinue
-        }
 
-        if (-not $removedKeys -or $removedKeys.Count -eq 0) {
-            Write-MsixLog Info 'No matching legacy shell registry entries found.'
-            return
-        }
-        Write-MsixLog Info "Legacy shell registry entries removed: $($removedKeys.Count)"
-        $removedKeys | ForEach-Object { Write-MsixLog Info "  $_" }
+            if (-not $removedKeys -or $removedKeys.Count -eq 0) { return $null }
 
-        # Repack — share the atomic pack/sign/move path used by the manifest mutators.
-        $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $scratch = Join-Path $env:TEMP ("msix-shellreg-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($target)))
-        $packOk = $false
-        try {
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
-            Assert-MsixProcessSuccess $r 'MakeAppx pack'
-            $packOk = $true
-            if (-not $SkipSigning) {
-                Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword
-            }
-            Move-Item -LiteralPath $scratch -Destination $target -Force
-            return [pscustomobject]@{
-                KeysRemoved = $removedKeys
-                Output      = $target
-            }
-        } catch {
-            if ($packOk -and $UnsignedOutputPath) {
-                Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction SilentlyContinue
-                Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
-            }
-            throw
-        } finally {
-            if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue }
-        }
-    } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
-    }
+            Write-MsixLog Info "Legacy shell registry entries removed: $($removedKeys.Count)"
+            $removedKeys | ForEach-Object { Write-MsixLog Info "  $_" }
+            @{ KeysRemoved = $removedKeys }
+        }.GetNewClosure()
 }
 #endregion
 

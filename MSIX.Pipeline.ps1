@@ -253,3 +253,181 @@
         Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
+
+
+# =============================================================================
+# In-place package mutator scaffolding (issue #37)
+# -----------------------------------------------------------------------------
+# Every heuristic mutator (Add-MsixCapability + Remove-Msix*Artifact in
+# MSIX.Heuristics.ps1) repeats the same unpack -> mutate -> atomic-repack-
+# sign-move skeleton. The helper below centralises it so:
+#
+#   1. The atomic-repack-sign-move semantics (issue #34) are enforced by
+#      construction -- no future wrapper can accidentally skip the scratch
+#      step and overwrite the user's signed package on signing failure.
+#   2. Adding a new mutator drops to ~30 lines of payload logic.
+#   3. Bug fixes to the unpack / cleanup / signing-error-handling paths
+#      apply in one place instead of four.
+# =============================================================================
+
+function _MsixMutatePackage {
+    <#
+    .SYNOPSIS
+        Internal helper: unpack an .msix, hand the workspace to a caller-
+        supplied script block, atomic-repack-sign-move the result.
+
+    .DESCRIPTION
+        Standard scaffolding used by every in-place package mutator in
+        MSIX.Heuristics.ps1.
+
+        Flow:
+          1. Resolve $toolsRoot and the package fileinfo.
+          2. New-MsixWorkspace -> isolated GUID temp folder.
+          3. MakeAppx unpack into the workspace.
+          4. Invoke -Mutator { param($workspace) ... }. The mutator returns:
+               * `$null` (or `$false`, or an empty hashtable's literal `@{}`)
+                 -> "nothing to do". Helper logs -NoChangeMessage, returns `$null`,
+                 nothing is repacked or signed.
+               * A [hashtable] / [pscustomobject] of summary fields ->
+                 "package was mutated, please repack". Helper packs to a
+                 scratch path, signs at scratch, Move-Item to target on
+                 success. Returns the mutator's summary merged with
+                 { Output = $target }.
+          5. On signing failure (and only after a successful pack), if
+             -UnsignedOutputPath was supplied, the scratch is copied there
+             for inspection. The user's -PackagePath is byte-equal to
+             before the call.
+          6. The workspace is always cleaned up in a finally.
+
+    .PARAMETER PackagePath
+        .msix to mutate.
+
+    .PARAMETER Mutator
+        Script block invoked with the workspace path as positional arg 0.
+        See DESCRIPTION for the return-value contract.
+
+    .PARAMETER Operation
+        Short label used in the scratch filename (e.g. 'cap', 'uninstrm',
+        'updrm', 'shellreg'). Helps with debugging when multiple mutators
+        are operating in parallel.
+
+    .PARAMETER WorkspaceSuffix
+        Optional suffix for New-MsixWorkspace's directory name. Default
+        is the package base name plus '-' plus $Operation. Some legacy
+        mutators used different suffixes so we expose this for parity.
+
+    .PARAMETER NoChangeMessage
+        Log line emitted at Info level when -Mutator reports no work.
+        Default: "No changes for $Operation."
+
+    .PARAMETER OutputPath
+        Where to write the repacked package. Defaults to overwriting
+        -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the final Invoke-MsixSigning pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, copy the unsigned scratch package here for
+        inspection. The user's -PackagePath is left byte-equal in this
+        failure case (provided the helper got past the pack step).
+
+    .OUTPUTS
+        $null when -Mutator reported no changes. Otherwise a
+        [pscustomobject] carrying every key the mutator returned plus an
+        Output = <final-path> property.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)] [string]$PackagePath,
+        [Parameter(Mandatory)] [scriptblock]$Mutator,
+        [Parameter(Mandatory)] [string]$Operation,
+        [string]$WorkspaceSuffix,
+        [string]$NoChangeMessage,
+        [string]$OutputPath,
+        [Alias('NoSign')] [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
+    )
+
+    if (-not $NoChangeMessage) { $NoChangeMessage = "No changes for $Operation." }
+
+    $toolsRoot = Get-MsixToolsRoot
+    $fileinfo  = Get-Item $PackagePath
+    $wsName    = if ($WorkspaceSuffix) { "$($fileinfo.BaseName)$WorkspaceSuffix" } else { "$($fileinfo.BaseName)-$Operation" }
+    $workspace = New-MsixWorkspace $wsName
+
+    try {
+        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+
+        $summary = & $Mutator $workspace
+
+        # No-change contract: $null / $false / empty collection -> bail.
+        $hasChanges = $false
+        if ($null -ne $summary -and $summary -isnot [bool]) {
+            if ($summary -is [System.Collections.IDictionary]) {
+                $hasChanges = $summary.Count -gt 0 -or $summary.PSObject.Properties['__forcePack']
+            } elseif ($summary -is [pscustomobject]) {
+                $hasChanges = ($summary.PSObject.Properties | Where-Object MemberType -eq 'NoteProperty' | Measure-Object).Count -gt 0
+            } else {
+                # Any non-collection truthy value also counts as "changed" so
+                # mutators with no per-call summary (e.g. Add-MsixCapability)
+                # can return $true.
+                $hasChanges = [bool]$summary
+            }
+        } elseif ($summary -is [bool]) {
+            $hasChanges = $summary
+        }
+
+        if (-not $hasChanges) {
+            Write-MsixLog Info $NoChangeMessage
+            return $null
+        }
+
+        # ── Atomic repack ──────────────────────────────────────────────────
+        $target  = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
+        $scratch = Join-Path $env:TEMP ("msix-{0}-{1}{2}" -f $Operation, ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($target)))
+        $packOk = $false
+        try {
+            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+            Assert-MsixProcessSuccess $r 'MakeAppx pack'
+            $packOk = $true
+            if (-not $SkipSigning) {
+                Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword
+            }
+            Move-Item -LiteralPath $scratch -Destination $target -Force
+        } catch {
+            if ($packOk -and $UnsignedOutputPath) {
+                Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction SilentlyContinue
+                Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
+            }
+            throw
+        } finally {
+            if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue }
+        }
+
+        # Merge mutator's summary + Output into a single pscustomobject.
+        $out = [ordered]@{}
+        if ($summary -is [System.Collections.IDictionary]) {
+            foreach ($k in $summary.Keys) { $out[$k] = $summary[$k] }
+        } elseif ($summary -is [pscustomobject]) {
+            foreach ($p in $summary.PSObject.Properties | Where-Object MemberType -eq 'NoteProperty') {
+                $out[$p.Name] = $p.Value
+            }
+        }
+        $out['Output'] = $target
+        return [pscustomobject]$out
+
+    } finally {
+        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}

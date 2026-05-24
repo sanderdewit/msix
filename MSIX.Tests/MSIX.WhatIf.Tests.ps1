@@ -68,16 +68,30 @@ Describe '-UnsignedOutputPath forwarded by every mutator' -Tag 'WhatIf' {
     }
 }
 
-Describe 'Atomic pack-sign-move enforced in heuristic mutators (issue #34)' -Tag 'WhatIf' {
-    # Source-level guard: every heuristic mutator must follow the
-    # "pack to scratch -> sign scratch -> Move-Item on success" pattern.
-    # Without this, a signing failure leaves the user with an unsigned
-    # modified copy of their signed package.
-    BeforeDiscovery {
-        $script:HeuristicsSrc = Get-Content (Join-Path $PSScriptRoot '..\MSIX.Heuristics.ps1') -Raw
-    }
+Describe 'Atomic pack-sign-move enforced in heuristic mutators (issues #34 + #37)' -Tag 'WhatIf' {
+    # After issue #37 the atomic pack-sign-move pattern lives in ONE place:
+    # _MsixMutatePackage in MSIX.Pipeline.ps1. Two-part guard:
+    #   1. The helper itself carries the atomic pattern (so it cannot be
+    #      regressed without also rewriting the helper).
+    #   2. Every heuristic mutator delegates to that helper (so no mutator
+    #      can sneak around it via its own pack/sign sequence).
     BeforeAll {
         $script:HeuristicsSrc = Get-Content (Join-Path $PSScriptRoot '..\MSIX.Heuristics.ps1') -Raw
+        $script:PipelineSrc   = Get-Content (Join-Path $PSScriptRoot '..\MSIX.Pipeline.ps1')   -Raw
+    }
+
+    It '_MsixMutatePackage in MSIX.Pipeline.ps1 carries the atomic scratch + sign + Move pattern' {
+        $idx = $script:PipelineSrc.IndexOf('function _MsixMutatePackage {')
+        $idx | Should -BeGreaterThan -1
+        $window = $script:PipelineSrc.Substring($idx)
+        # Pack to scratch
+        $window | Should -Match '\$scratch\s*=\s*Join-Path'
+        # Sign at scratch (when SkipSigning is false)
+        $window | Should -Match 'Invoke-MsixSigning\s+-PackagePath\s+\$scratch'
+        # Move to $target on success
+        $window | Should -Match 'Move-Item\s+-LiteralPath\s+\$scratch\s+-Destination\s+\$target\s+-Force'
+        # UnsignedOutputPath recovery path on signing failure
+        $window | Should -Match 'UnsignedOutputPath'
     }
 
     $cases = @(
@@ -87,23 +101,20 @@ Describe 'Atomic pack-sign-move enforced in heuristic mutators (issue #34)' -Tag
         'Remove-MsixShellRegistryArtifact'
     ) | ForEach-Object { @{ Fn = $_ } }
 
-    It 'carries scratch + atomic move + UnsignedOutputPath for <Fn>' -TestCases $cases {
+    It '<Fn> delegates to _MsixMutatePackage AND exposes -UnsignedOutputPath' -TestCases $cases {
         param($Fn)
         $idx = $script:HeuristicsSrc.IndexOf("function $Fn {")
         $idx | Should -BeGreaterThan -1
         $window = $script:HeuristicsSrc.Substring($idx, [Math]::Min(15000, $script:HeuristicsSrc.Length - $idx))
-        # Cuts off at the next top-level `function ` so we don't accidentally
-        # match scaffolding from the following function in the file.
         $nextFn = $window.IndexOf("`nfunction ", 10)
         if ($nextFn -gt 0) { $window = $window.Substring(0, $nextFn) }
 
-        # The package is packed to a scratch path...
-        $window | Should -Match '\$scratch\s*=\s*Join-Path'
-        # ...signed at the scratch (when SkipSigning is false)...
-        $window | Should -Match 'Invoke-MsixSigning\s+-PackagePath\s+\$scratch'
-        # ...and only moved to $target on success.
-        $window | Should -Match 'Move-Item\s+-LiteralPath\s+\$scratch\s+-Destination\s+\$target\s+-Force'
-        # And the function exposes -UnsignedOutputPath for failure recovery.
+        # The mutator must route its pack/sign through the helper...
+        $window | Should -Match '_MsixMutatePackage\s'
+        # ...and surface -UnsignedOutputPath to callers for failure recovery.
         $window | Should -Match 'UnsignedOutputPath'
+        # And it must NOT redefine its own scratch-pack sequence (that would
+        # bypass the helper's atomic semantics).
+        $window | Should -Not -Match 'Invoke-MsixSigning\s+-PackagePath\s+\$scratch'
     }
 }

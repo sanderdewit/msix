@@ -129,6 +129,43 @@ Describe 'Compare-MsixTrace' -Tag 'TraceDelta' {
         }
     }
 
+    Context 'Raw-row counts surface uncategorised regressions (issue #35)' {
+        # ConvertFrom-MsixTraceToFinding only categorises paths under
+        # System32 / WindowsApps / HKLM, or LoadLibrary failures.  A failure
+        # on any other path (e.g. C:\ProgramData\Vendor) used to silently
+        # disappear from the summary. The Row counts must report it.
+        It 'Summary exposes ResolvedRowCount, PersistedRowCount, IntroducedRowCount' {
+            $base = NewLog @()
+            $cand = NewLog @()
+            $diff = Compare-MsixTrace -Baseline $base -Candidate $cand
+            $diff.Summary.PSObject.Properties.Name | Should -Contain 'ResolvedRowCount'
+            $diff.Summary.PSObject.Properties.Name | Should -Contain 'PersistedRowCount'
+            $diff.Summary.PSObject.Properties.Name | Should -Contain 'IntroducedRowCount'
+        }
+
+        It 'IntroducedRowCount > IntroducedCount when candidate has a new uncategorised failure' {
+            # C:\ProgramData\... does not match WindowsApps / System32 / HKLM
+            # so ConvertFrom-MsixTraceToFinding drops it, but the diff
+            # bookkeeping must still count the raw row.
+            $uncatRow = FsRow 'C:\ProgramData\Vendor\App\state.bin'
+            $base = NewLog @()
+            $cand = NewLog @($uncatRow)
+
+            $diff = Compare-MsixTrace -Baseline $base -Candidate $cand
+            $diff.Summary.IntroducedRowCount | Should -BeGreaterThan 0
+            $diff.Summary.IntroducedCount    | Should -Be 0
+        }
+
+        It 'Row counts and finding counts agree when every row maps to a category' {
+            $row  = FsRow 'C:\Program Files\WindowsApps\app\new.tmp'
+            $base = NewLog @()
+            $cand = NewLog @($row)
+
+            $diff = Compare-MsixTrace -Baseline $base -Candidate $cand
+            $diff.Summary.IntroducedRowCount | Should -Be $diff.Summary.IntroducedCount
+        }
+    }
+
     Context '-Sarif output' {
         It 'Returns a SARIF document with three runs when -Sarif is set' {
             $row  = FsRow 'C:\Program Files\WindowsApps\app\a.tmp'

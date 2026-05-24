@@ -116,6 +116,11 @@ function Add-MsixCapability {
     .PARAMETER PfxPassword
         SecureString password for the .pfx.
 
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package at this path
+        for inspection. The user's -PackagePath is left byte-equal to before
+        the call in this scenario.
+
     .EXAMPLE
         # Add runFullTrust and internetClient (idempotent — safe to re-run)
         Add-MsixCapability -PackagePath app.msix `
@@ -142,7 +147,8 @@ function Add-MsixCapability {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [SecureString]$PfxPassword
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
     )
 
     $toolsRoot = Get-MsixToolsRoot
@@ -197,12 +203,28 @@ function Add-MsixCapability {
             Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
         }
 
-        $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $target, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx pack'
-
-        if (-not $SkipSigning) {
-            Invoke-MsixSigning -PackagePath $target -Pfx $Pfx -PfxPassword $PfxPassword
+        # Atomic repack — pack to a scratch path, sign, then Move-Item to the
+        # target on success. A signing failure must NEVER leave the user with
+        # an unsigned modified copy of their signed package.
+        $target  = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
+        $scratch = Join-Path $env:TEMP ("msix-cap-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($target)))
+        $packOk = $false
+        try {
+            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+            Assert-MsixProcessSuccess $r 'MakeAppx pack'
+            $packOk = $true
+            if (-not $SkipSigning) {
+                Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword
+            }
+            Move-Item -LiteralPath $scratch -Destination $target -Force
+        } catch {
+            if ($packOk -and $UnsignedOutputPath) {
+                Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction SilentlyContinue
+                Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
+            }
+            throw
+        } finally {
+            if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue }
         }
 
     } finally {
@@ -512,6 +534,11 @@ function Remove-MsixUninstallerArtifact {
     .PARAMETER PfxPassword
         SecureString password for the .pfx.
 
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package at this path
+        for inspection. The user's -PackagePath is left byte-equal to before
+        the call in this scenario.
+
     .EXAMPLE
         # Full cleanup: strip files + registry, then sign (idempotent)
         Remove-MsixUninstallerArtifact -PackagePath app.msix `
@@ -536,7 +563,8 @@ function Remove-MsixUninstallerArtifact {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [SecureString]$PfxPassword
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
     )
     if (-not $PathPatterns) {
         $PathPatterns = @(
@@ -636,17 +664,33 @@ function Remove-MsixUninstallerArtifact {
         if ($removedFiles) { Write-MsixLog Info "Files removed:    $($removedFiles -join ', ')" }
         if ($removedKeys)  { Write-MsixLog Info "Reg keys removed: $($removedKeys -join ', ')" }
 
-        $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $target, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx pack'
-
-        if (-not $SkipSigning) {
-            Invoke-MsixSigning -PackagePath $target -Pfx $Pfx -PfxPassword $PfxPassword
-        }
-        return [pscustomobject]@{
-            FilesRemoved = $removedFiles
-            KeysRemoved  = $removedKeys
-            Output       = $target
+        # Atomic repack — pack to a scratch path, sign, then Move-Item to the
+        # target on success. A signing failure must NEVER leave the user with
+        # an unsigned modified copy of their signed package.
+        $target  = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
+        $scratch = Join-Path $env:TEMP ("msix-uninstrm-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($target)))
+        $packOk = $false
+        try {
+            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+            Assert-MsixProcessSuccess $r 'MakeAppx pack'
+            $packOk = $true
+            if (-not $SkipSigning) {
+                Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword
+            }
+            Move-Item -LiteralPath $scratch -Destination $target -Force
+            return [pscustomobject]@{
+                FilesRemoved = $removedFiles
+                KeysRemoved  = $removedKeys
+                Output       = $target
+            }
+        } catch {
+            if ($packOk -and $UnsignedOutputPath) {
+                Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction SilentlyContinue
+                Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
+            }
+            throw
+        } finally {
+            if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue }
         }
     } finally {
         Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue

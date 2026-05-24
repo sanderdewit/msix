@@ -276,13 +276,27 @@ function Compare-MsixTrace {
     $baseCount = [math]::Max($resolvedFindings.Count + $persistedFindings.Count, 1)
     $improvPct = [math]::Round($resolvedFindings.Count / $baseCount * 100, 1)
 
+    # Raw-row counts are reported alongside the categorised-finding counts so
+    # uncategorised regressions (failures on paths ConvertFrom-MsixTraceToFinding
+    # doesn't map to a known fixup category — anything outside System32 /
+    # WindowsApps / HKLM / LoadLibrary) don't silently disappear from the
+    # summary. A user reading IntroducedCount=0 alongside IntroducedRowCount=3
+    # immediately sees the asymmetry and knows to inspect the raw rows.
     $summary = [pscustomobject]@{
-        BaselineRowCount  = $baseRows.Count
-        CandidateRowCount = $candRows.Count
-        ResolvedCount     = $resolvedFindings.Count
-        PersistedCount    = $persistedFindings.Count
-        IntroducedCount   = $introducedFindings.Count
-        ImprovementPct    = $improvPct
+        BaselineRowCount    = $baseRows.Count
+        CandidateRowCount   = $candRows.Count
+        ResolvedCount       = $resolvedFindings.Count
+        PersistedCount      = $persistedFindings.Count
+        IntroducedCount     = $introducedFindings.Count
+        ResolvedRowCount    = $resolvedRows.Count
+        PersistedRowCount   = $persistedRows.Count
+        IntroducedRowCount  = $introducedRows.Count
+        ImprovementPct      = $improvPct
+    }
+
+    if ($summary.IntroducedRowCount -gt $summary.IntroducedCount) {
+        $uncat = $summary.IntroducedRowCount - $summary.IntroducedCount
+        Write-MsixLog Warning ("TraceDelta: {0} introduced row(s) did not map to any known fixup category and are NOT reflected in IntroducedCount. Inspect the raw trace for paths outside System32 / WindowsApps / HKLM / LoadLibrary." -f $uncat)
     }
 
     Write-MsixLog Info ("TraceDelta: resolved={0}  persisted={1}  introduced={2}  improvement={3}%%" `

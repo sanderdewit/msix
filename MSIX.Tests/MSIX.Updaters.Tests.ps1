@@ -1,6 +1,12 @@
 ﻿BeforeAll {
     Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
-    $script:HeuristicsPath = (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.Heuristics.ps1')).Path
+    # Issue #38: heuristics split into MSIX.Scanners.ps1, MSIX.PackageMutators.ps1,
+    # and MSIX.AutoFix.ps1. The source-level guards downstream operate over the
+    # union of the three files; concatenate so the assertions don't have to know
+    # which split a given function lives in.
+    $script:HeuristicsPaths = @(
+        'MSIX.Scanners.ps1','MSIX.PackageMutators.ps1','MSIX.AutoFix.ps1'
+    ) | ForEach-Object { (Resolve-Path (Join-Path $PSScriptRoot "..\$_")).Path }
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
@@ -91,14 +97,18 @@ Describe 'Updater artefact detection + removal' -Tag 'Updaters' {
     Context 'Source-level regression guard' {
 
         BeforeAll {
-            $script:src = Get-Content -Raw -LiteralPath $script:HeuristicsPath
+            # Concatenate all three post-#38 source files so the assertions
+            # below stay agnostic to which split a function landed in.
+            $script:src = ($script:HeuristicsPaths | ForEach-Object {
+                Get-Content -Raw -LiteralPath $_
+            }) -join "`n"
         }
 
-        It 'MSIX.Heuristics.ps1 defines Get-MsixUpdaterCandidate' {
+        It 'Get-MsixUpdaterCandidate is defined in the heuristics family' {
             $script:src | Should -Match 'function\s+Get-MsixUpdaterCandidate'
         }
 
-        It 'MSIX.Heuristics.ps1 defines Remove-MsixUpdaterArtifact' {
+        It 'Remove-MsixUpdaterArtifact is defined in the heuristics family' {
             $script:src | Should -Match 'function\s+Remove-MsixUpdaterArtifact'
         }
 

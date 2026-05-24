@@ -76,8 +76,10 @@ Describe 'Atomic pack-sign-move enforced in heuristic mutators (issues #34 + #37
     #   2. Every heuristic mutator delegates to that helper (so no mutator
     #      can sneak around it via its own pack/sign sequence).
     BeforeAll {
-        $script:HeuristicsSrc = Get-Content (Join-Path $PSScriptRoot '..\MSIX.Heuristics.ps1') -Raw
-        $script:PipelineSrc   = Get-Content (Join-Path $PSScriptRoot '..\MSIX.Pipeline.ps1')   -Raw
+        # Issue #38: heuristics split into three files. The mutators live in
+        # MSIX.PackageMutators.ps1 now.
+        $script:HeuristicsSrc = Get-Content (Join-Path $PSScriptRoot '..\MSIX.PackageMutators.ps1') -Raw
+        $script:PipelineSrc   = Get-Content (Join-Path $PSScriptRoot '..\MSIX.Pipeline.ps1')        -Raw
     }
 
     It '_MsixMutatePackage in MSIX.Pipeline.ps1 carries the atomic scratch + sign + Move pattern' {

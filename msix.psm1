@@ -23,7 +23,12 @@
 . "$PSScriptRoot\MSIX.Detection.ps1"
 . "$PSScriptRoot\MSIX.ManifestExtensions.ps1"
 . "$PSScriptRoot\MSIX.OfflineRegistry.ps1"
-. "$PSScriptRoot\MSIX.Heuristics.ps1"
+# Heuristic family — split from the original MSIX.Heuristics.ps1 in issue #38.
+# Order matters: PackageMutators uses $script:KnownCapabilities + the
+# offline-registry helpers from Scanners; AutoFix invokes both.
+. "$PSScriptRoot\MSIX.Scanners.ps1"
+. "$PSScriptRoot\MSIX.PackageMutators.ps1"
+. "$PSScriptRoot\MSIX.AutoFix.ps1"
 . "$PSScriptRoot\MSIX.Compare.ps1"
 . "$PSScriptRoot\MSIX.Functions.ps1"
 . "$PSScriptRoot\MSIX.Playbooks.ps1"

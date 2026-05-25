@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.70.5'
+    ModuleVersion     = '0.70.6'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, PSADT-style standard scripts, TMEditX-style heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -222,6 +222,50 @@
                             'TMEditX','Enterprise','CICD','Pester','PSADT')
             ProjectUri  = 'https://github.com/microsoft/MSIX-PackageSupportFramework'
             ReleaseNotes = @'
+## v0.70.6
+
+### Correctness fixes from the post-v0.70.5 code review
+- Atomic pack-sign-move in Add-MsixCapability + Remove-MsixUninstaller-
+  Artifact (#34). Both used to pack straight to $PackagePath and then
+  sign; a signing failure left the user with an unsigned modified copy
+  of their signed package. Both now pack to a scratch path, sign at
+  the scratch, and Move-Item to the target only on success.
+  -UnsignedOutputPath preserves the scratch on signing failure.
+- Compare-MsixTrace.Summary now exposes ResolvedRowCount /
+  PersistedRowCount / IntroducedRowCount alongside the categorised
+  finding counts (#35). Uncategorised regressions on paths outside
+  System32 / WindowsApps / HKLM / LoadLibrary used to silently
+  disappear from the summary; a Warning fires when IntroducedRow-
+  Count > IntroducedCount.
+
+### Refactors (no public API change)
+- _MsixInstallArchiveTool + _MsixUpdateToolByAge helpers (#36) collapse
+  six near-identical toolchain installers (Procmon, DebugView, msixmgr)
+  + four age-based updaters (Procmon, DebugView, msixmgr, AppRuntime)
+  to thin wrappers. Bespoke installers with version-aware idempotency
+  (PSF / SDK BuildTools / AppRuntime multi-channel) remain self-
+  contained because forcing them into the helper would create a leaky
+  abstraction.
+- _MsixMutatePackage helper (#37) centralises the unpack -> mutate ->
+  atomic-pack-sign-move pattern for the four heuristic mutators
+  (Add-MsixCapability, Remove-MsixUninstallerArtifact,
+  Remove-MsixUpdaterArtifact, Remove-MsixShellRegistryArtifact). The
+  H1 atomic semantics from #34 are now enforced by construction.
+- MSIX.Heuristics.ps1 (2764 lines) split into MSIX.Scanners.ps1,
+  MSIX.PackageMutators.ps1, and MSIX.AutoFix.ps1 (#38). All ten
+  plural-noun back-compat aliases carried forward.
+
+### Subtle behaviour change
+- Update-MsixMgr now previews 'Update msixmgr' uniformly under -WhatIf
+  instead of 'Install missing msixmgr' / 'Refresh msixmgr' depending
+  on state. Matches the pattern already used by Update-MsixProcMon /
+  Update-MsixDebugView / Update-MsixAppRuntime.
+
+### Quality bar
+- Pester (PowerShell 7): 364 pass / 0 fail / 1 skip
+  (was 351 in v0.70.5; +13 new regression guards).
+- PSScriptAnalyzer (scoped to MSIX module): 0 findings.
+
 ## v0.70.5
 
 ### Tier-2 remediation orchestration: #30 + #31 + #32

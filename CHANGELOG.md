@@ -5,6 +5,69 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.70.6 - Atomic pack-sign hardening + heuristics refactor (#34, #35, #36, #37, #38)
+
+### Correctness fixes (post-v0.70.5 review)
+
+- **#34 — atomic pack-sign-move in `Add-MsixCapability` + `Remove-MsixUninstaller-
+  Artifact`**. Both functions used to pack straight to `$PackagePath` and then
+  sign; a signing failure left the user with an unsigned modified copy of
+  their signed package. Both now pack to a scratch path, sign at the scratch,
+  and `Move-Item` to the target only on success. `-UnsignedOutputPath`
+  preserves the scratch on signing failure for inspection. The other two
+  mutators (`Remove-MsixUpdaterArtifact`, `Remove-MsixShellRegistryArtifact`)
+  were already atomic.
+- **#35 — `Compare-MsixTrace.Summary` undercount fix**. Surfaces
+  `ResolvedRowCount` / `PersistedRowCount` / `IntroducedRowCount` alongside
+  the categorised finding counts. `ConvertFrom-MsixTraceToFinding` only maps
+  paths under System32 / WindowsApps / HKLM / `LoadLibrary*` failures;
+  regressions on any other path used to silently disappear from the summary.
+  A `Write-MsixLog Warning` fires when `IntroducedRowCount > IntroducedCount`
+  so the asymmetry is visible at runtime.
+
+### Refactors (no public API change)
+
+- **#36 — toolchain installer scaffolding**. New `_MsixInstallArchiveTool` +
+  `_MsixUpdateToolByAge` helpers collapse six near-identical installers
+  (Procmon, DebugView, msixmgr) and four age-based updaters (Procmon,
+  DebugView, msixmgr, AppRuntime) into thin wrappers. Bespoke installers
+  with version-aware idempotency (`Install-MsixPsfBinary`,
+  `Install-MsixSdkTool`, `Install-MsixAppRuntime`) remain self-contained.
+  msixmgr's Authenticode opt-out is preserved (upstream signing is broken;
+  see microsoft/msix-packaging#710) and surfaces a `Write-Warning`.
+- **#37 — `_MsixMutatePackage` helper**. Lives in `MSIX.Pipeline.ps1`. All
+  four heuristic mutators (`Add-MsixCapability`, `Remove-MsixUninstaller-
+  Artifact`, `Remove-MsixUpdaterArtifact`, `Remove-MsixShellRegistry-
+  Artifact`) delegate to it. The atomic pack-sign-move pattern from #34 is
+  now enforced by construction — a future mutator that bypassed the helper
+  would have to redefine its own scratch + sign block, which the WhatIf
+  regression guard forbids.
+- **#38 — split `MSIX.Heuristics.ps1`** (2764 lines) into three files:
+  - `MSIX.Scanners.ps1` — read-only `Get-Msix*Candidate` / `*Entry` /
+    `HeuristicFinding` family + offline-registry path helpers.
+  - `MSIX.PackageMutators.ps1` — `Add-MsixCapability`, `Remove-Msix*Artifact`,
+    `Add-MsixSplashScreen`, `Update-MsixPackageVersion`, plus
+    `$script:KnownCapabilities` + `Get-MsixKnownCapability`.
+  - `MSIX.AutoFix.ps1` — `Invoke-MsixAutoFix` + `Invoke-MsixAutoFixFromAnalysis`.
+
+  All ten plural-noun back-compat aliases (`Get-MsixUninstallerCandidates`,
+  `Get-MsixHeuristicFindings`, etc.) carried forward. Six test files
+  updated to track the new file paths.
+
+### Subtle behaviour change
+
+- `Update-MsixMgr` now previews `Update msixmgr` uniformly under `-WhatIf`
+  instead of `Install missing msixmgr` / `Refresh msixmgr` depending on
+  state. Matches the pattern already used by `Update-MsixProcMon` /
+  `Update-MsixDebugView` / `Update-MsixAppRuntime`.
+
+### Quality bar
+
+- Pester (PowerShell 7): **364 pass / 0 fail / 1 skip** (was 351 in v0.70.5;
+  +13 new regression guards covering atomic semantics, raw-row counts, and
+  the helper-pattern contract).
+- PSScriptAnalyzer (scoped to MSIX module, Error+Warning): **0 findings**.
+
 ## v0.70.5 - Tier-2 remediation orchestration (#30 + #31 + #32)
 
 - Compare-MsixTrace (#31): before/after correlation of two runtime trace

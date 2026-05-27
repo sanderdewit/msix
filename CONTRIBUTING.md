@@ -115,6 +115,50 @@ Test files may use PS7-only syntax because Pester runs them under
   PFX password lands on the process command line.
 - See PR #16 for the architecture rationale.
 
+## Cmdlet calls -- always use named parameters
+
+Every cmdlet invocation in module source MUST pass its arguments by
+explicit parameter name. Positional arguments are forbidden in source,
+even when they happen to be correct today.
+
+```powershell
+# WRONG -- positional
+Resolve-Path $Path
+Start-Process $exe
+Out-File $configPath -Encoding utf8
+
+# RIGHT -- named
+Resolve-Path -LiteralPath $Path
+Start-Process -FilePath $exe
+Out-File -LiteralPath $configPath -Encoding utf8
+```
+
+### Why
+
+- **Positional binding is fragile.** A future cmdlet update can shuffle
+  parameter sets, and a positional argument that bound to `-Path`
+  yesterday can quietly bind to `-Filter` or `-Include` tomorrow.
+  Named arguments don't move under your feet.
+- **`-LiteralPath` is impossible to add later in some forms.** When
+  the first positional argument binds to `-Path`, it's already wildcard-
+  expanded by the time the cmdlet runs. The bug class that #45 and #46
+  hunted (`Get-Item $pkg` returning `$null` for `C:\drop\app[v1.2].msix`)
+  is a positional-binding bug -- not a wildcard bug per se.
+- **Reviewability.** A reader scanning a 200-line function shouldn't
+  have to remember which cmdlet's third positional is which. Named
+  parameters document the call at the call site.
+
+### Convention
+
+- Every cmdlet -- built-in or user-defined -- gets named parameters in
+  source. There is no "harmless positional" exception (we found we
+  couldn't agree on what's harmless during review).
+- Splat hashtables (`@params`) are encouraged for cmdlets with 4+ args.
+- Aliases for cmdlets are forbidden (`gci`, `?`, `%`); the full
+  cmdlet name + named parameters is the rule.
+- The path-specific section below codifies the most enforceable
+  subset of this rule with a CI guard.
+
 ## Filesystem paths -- use `-LiteralPath`
 
 Every call to a PowerShell provider cmdlet (`Get-Item`, `Get-ChildItem`,

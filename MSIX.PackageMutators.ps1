@@ -309,7 +309,7 @@ function Remove-MsixUninstallerArtifact {
 
             # ── Strip files ────────────────────────────────────────────────
             $removedFiles = @()
-            Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
+            Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
                 Where-Object {
                     $name = $_.Name
                     ($PathPatterns | Where-Object { $name -match $_ }).Count -gt 0
@@ -490,7 +490,7 @@ function Remove-MsixUpdaterArtifact {
 
             # ── Strip updater binaries ─────────────────────────────────────
             $removedFiles = @()
-            Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
+            Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
                 Where-Object {
                     $name = $_.Name
                     $skip = $false
@@ -507,7 +507,7 @@ function Remove-MsixUpdaterArtifact {
 
             # ── Strip scheduled-task XMLs ──────────────────────────────────
             $removedTasks = @()
-            Get-ChildItem $workspace -Recurse -File -Filter '*.xml' -ErrorAction SilentlyContinue |
+            Get-ChildItem -LiteralPath $workspace -Recurse -File -Filter '*.xml' -ErrorAction SilentlyContinue |
                 Where-Object {
                     $rel = $_.FullName.Substring($workspace.Length + 1).ToLowerInvariant()
                     ($rel -match '(^|\\)tasks\\') -or ($rel -match '\\vfs\\windows\\tasks\\')
@@ -767,7 +767,16 @@ function Add-MsixSplashScreen {
             -PsfFixups @(New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log') `
             -SplashImagePath .\splash.png -SplashAppId App `
             -Pfx cert.pfx -PfxPassword $pw
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package at this path
+        for inspection. The user's -PackagePath is left byte-equal to before
+        the call in this scenario.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '',
+        Justification = 'ShouldProcess is invoked inside _MsixMutatePackage; PSSA cannot trace it through the scriptblock dispatch (issue #40).')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'AppId',
+        Justification = 'Captured by the -Mutator scriptblock via GetNewClosure().')]
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
@@ -782,48 +791,40 @@ function Add-MsixSplashScreen {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [SecureString]$PfxPassword
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
     )
-    if (-not (Test-Path $ImagePath)) { throw "Splash image not found: $ImagePath" }
+    if (-not (Test-Path -LiteralPath $ImagePath)) { throw "Splash image not found: $ImagePath" }
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
-    $workspace = New-MsixWorkspace $fileinfo.BaseName
-    try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+    $null = _MsixMutatePackage -PackagePath $PackagePath -Operation 'splash' `
+        -OutputPath $OutputPath -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+        -UnsignedOutputPath $UnsignedOutputPath `
+        -NoChangeMessage 'No splash screen changes required.' `
+        -Mutator {
+            param($workspace)
 
-        # Find config.json — should be next to PsfLauncher
-        $cfgPaths = @(Get-ChildItem $workspace -Recurse -Filter 'config.json' -ErrorAction SilentlyContinue)
-        if (-not $cfgPaths) { throw 'config.json not found; run Add-MsixPsfV2 first.' }
-        $cfgPath = $cfgPaths[0].FullName
-        $cfgDir  = Split-Path $cfgPath -Parent
+            # Find config.json — should be next to PsfLauncher
+            $cfgPaths = @(Get-ChildItem -LiteralPath $workspace -Recurse -Filter 'config.json' -ErrorAction SilentlyContinue)
+            if (-not $cfgPaths) { throw 'config.json not found; run Add-MsixPsfV2 first.' }
+            $cfgPath = $cfgPaths[0].FullName
+            $cfgDir  = Split-Path -LiteralPath $cfgPath -Parent
 
-        # Copy splash next to config.json
-        $imageLeaf = (Get-Item $ImagePath).Name
-        Copy-Item $ImagePath $cfgDir -Force
+            # Copy splash next to config.json
+            $imageLeaf = (Get-Item -LiteralPath $ImagePath).Name
+            Copy-Item -LiteralPath $ImagePath -Destination $cfgDir -Force
 
-        # Patch config.json
-        $cfg = Get-Content $cfgPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-        foreach ($app in @($cfg.applications)) {
-            if ($app.id -ne $AppId) { continue }
-            if (-not $app.startScript) {
-                $app | Add-Member -NotePropertyName startScript -NotePropertyValue ([pscustomobject]@{}) -Force
+            # Patch config.json
+            $cfg = Get-Content -LiteralPath $cfgPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            foreach ($app in @($cfg.applications)) {
+                if ($app.id -ne $AppId) { continue }
+                if (-not $app.startScript) {
+                    $app | Add-Member -NotePropertyName startScript -NotePropertyValue ([pscustomobject]@{}) -Force
+                }
+                $app.startScript | Add-Member -NotePropertyName splashImage -NotePropertyValue $imageLeaf -Force
             }
-            $app.startScript | Add-Member -NotePropertyName splashImage -NotePropertyValue $imageLeaf -Force
-        }
-        $cfg | ConvertTo-Json -Depth 15 | Set-Content $cfgPath -Encoding utf8
-
-        $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $target, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx pack'
-
-        if (-not $SkipSigning) {
-            Invoke-MsixSigning -PackagePath $target -Pfx $Pfx -PfxPassword $PfxPassword
-        }
-    } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
-    }
+            $cfg | ConvertTo-Json -Depth 15 | Set-Content -LiteralPath $cfgPath -Encoding utf8
+            @{ SplashImage = $imageLeaf; AppId = $AppId }
+        }.GetNewClosure()
 }
 #endregion
 #region Version bump --------------------------------------------------------
@@ -843,7 +844,20 @@ function Update-MsixPackageVersion {
     .PARAMETER NewVersion
         Explicit version string overriding -Component. Use this for
         date-based versions etc.
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package at this path
+        for inspection. The user's -PackagePath is left byte-equal to before
+        the call in this scenario.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '',
+        Justification = 'ShouldProcess is invoked inside _MsixMutatePackage; PSSA cannot trace it through the scriptblock dispatch (issue #40).')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Component',
+        Justification = 'Captured by the -Mutator scriptblock via GetNewClosure().')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'KeepLastZero',
+        Justification = 'Captured by the -Mutator scriptblock via GetNewClosure().')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'NewVersion',
+        Justification = 'Captured by the -Mutator scriptblock via GetNewClosure().')]
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
@@ -859,54 +873,40 @@ function Update-MsixPackageVersion {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [SecureString]$PfxPassword
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
     )
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
-    $workspace = New-MsixWorkspace $fileinfo.BaseName
-    try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+    $result = _MsixMutatePackage -PackagePath $PackagePath -Operation 'vbump' `
+        -OutputPath $OutputPath -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+        -UnsignedOutputPath $UnsignedOutputPath `
+        -NoChangeMessage 'Version unchanged.' `
+        -Mutator {
+            param($workspace)
+            $null = Test-MsixManifest "$workspace\AppxManifest.xml"
+            [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
+            $current = [version]$manifest.Package.Identity.Version
 
-        $null = Test-MsixManifest "$workspace\AppxManifest.xml"
-        [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
-        $current = [version]$manifest.Package.Identity.Version
-
-        if ($NewVersion) {
-            $next = [version]$NewVersion
-        } else {
-            switch ($Component) {
-                'Major'    { $next = [version]"$([int]$current.Major + 1).0.0.0" }
-                'Minor'    { $next = [version]"$($current.Major).$([int]$current.Minor + 1).0.0" }
-                'Build'    { $next = [version]"$($current.Major).$($current.Minor).$([int]$current.Build + 1).0" }
-                'Revision' { $next = [version]"$($current.Major).$($current.Minor).$($current.Build).$([int]$current.Revision + 1)" }
-            }
-            if ($KeepLastZero) {
-                # Force the last component to 0 (already done above for Major/Minor/Build)
-                if ($Component -eq 'Revision') {
+            if ($NewVersion) {
+                $next = [version]$NewVersion
+            } else {
+                switch ($Component) {
+                    'Major'    { $next = [version]"$([int]$current.Major + 1).0.0.0" }
+                    'Minor'    { $next = [version]"$($current.Major).$([int]$current.Minor + 1).0.0" }
+                    'Build'    { $next = [version]"$($current.Major).$($current.Minor).$([int]$current.Build + 1).0" }
+                    'Revision' { $next = [version]"$($current.Major).$($current.Minor).$($current.Build).$([int]$current.Revision + 1)" }
+                }
+                if ($KeepLastZero -and $Component -eq 'Revision') {
                     $next = [version]"$($current.Major).$($current.Minor).$([int]$current.Build + 1).0"
                 }
             }
-        }
-        $manifest.Package.Identity.Version = $next.ToString(4)
-        Write-MsixLog Info "Version: $current -> $next"
-
-        if ($PSCmdlet.ShouldProcess("$workspace\AppxManifest.xml", 'Save manifest')) {
+            $manifest.Package.Identity.Version = $next.ToString(4)
+            Write-MsixLog Info "Version: $current -> $next"
             Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
-        }
+            @{ PreviousVersion = $current.ToString(4); NewVersion = $next.ToString(4) }
+        }.GetNewClosure()
 
-        $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $target, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx pack'
-
-        if (-not $SkipSigning) {
-            Invoke-MsixSigning -PackagePath $target -Pfx $Pfx -PfxPassword $PfxPassword
-        }
-        return $next.ToString(4)
-    } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    if ($result) { return $result.NewVersion }
 }
 #endregion
 

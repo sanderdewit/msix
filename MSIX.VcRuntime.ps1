@@ -119,7 +119,7 @@ function Get-MsixVcRuntimeReference {
             Missing     = $missing
         }
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -316,7 +316,7 @@ function Add-MsixVcRuntimeBundle {
         return [pscustomobject]@{ PackagePath = $target; Bundled = $copied; Architecture = $Architecture }
 
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 

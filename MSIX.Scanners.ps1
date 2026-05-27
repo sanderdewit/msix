@@ -56,7 +56,7 @@ function Get-MsixUninstallerCandidate {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
-        Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
+        Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object {
                 $name = $_.Name
                 ($patterns | Where-Object { $name -match $_ }).Count -gt 0
@@ -69,7 +69,7 @@ function Get-MsixUninstallerCandidate {
                 }
             }
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -133,7 +133,7 @@ function Get-MsixUpdaterCandidate {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
-        Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
+        Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
             ForEach-Object {
                 $leaf = $_.Name
                 $rel  = $_.FullName.Substring($workspace.Length + 1)
@@ -174,7 +174,7 @@ function Get-MsixUpdaterCandidate {
                 }
             }
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -257,7 +257,7 @@ function Get-MsixUninstallRegistryEntry {
             _MsixCloseOfflineHive -Hive $hive
         }
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -320,7 +320,7 @@ function Get-MsixRunKeyEntry {
         }
         return $hits | Sort-Object Hive,Match -Unique
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 #endregion
@@ -548,7 +548,7 @@ function Get-MsixShellContextMenuEntry {
             if (-not $seen[$key]) { $seen[$key] = $true; $true } else { $false }
         })
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 #endregion
@@ -660,7 +660,7 @@ function Get-MsixComServerEntry {
             if (-not $seen[$key]) { $seen[$key] = $true; $true } else { $false }
         })
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 #endregion
@@ -731,7 +731,7 @@ function Get-MsixAliasCandidate {
             }
         }
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 #endregion
@@ -1089,7 +1089,7 @@ function Get-MsixHeuristicFinding {
                 }
             }
         } finally {
-            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
     } catch {
         Write-MsixLog Debug "Manifest-fix heuristic failed: $_"

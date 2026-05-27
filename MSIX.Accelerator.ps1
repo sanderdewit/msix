@@ -70,7 +70,7 @@ function ConvertFrom-MsixYamlAccelerator {
     # authors publish them), so we parse with a tiny purpose-built scalar
     # parser instead. Do not "improve" this by routing through a real YAML
     # library.
-    $text   = Get-Content $Path -Raw
+    $text   = Get-Content -LiteralPath $Path -Raw
     $result = @{}
 
     # Match: <indent><key>: <value>   (one line, no nested mappings).

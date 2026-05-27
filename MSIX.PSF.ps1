@@ -564,6 +564,11 @@ function Add-MsixPsfV2 {
         SecureString password for the PFX file (required when -Pfx is
         specified).
 
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package at this path
+        for inspection. The user's -PackagePath is left byte-equal to before
+        the call in this scenario.
+
     .EXAMPLE
         # File-redirection fixup: redirect log writes to a package-relative folder
         $fixup = New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log'
@@ -618,13 +623,14 @@ function Add-MsixPsfV2 {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [SecureString]$PfxPassword
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
     )
 
     $toolsRoot = Get-MsixToolsRoot
     if (-not $PsfSourcePath) { $PsfSourcePath = Join-Path $toolsRoot 'psf' }
 
-    $fileinfo = Get-Item $PackagePath
+    $fileinfo = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace $fileinfo.BaseName
 
     try {
@@ -828,20 +834,36 @@ function Add-MsixPsfV2 {
             }
         }
 
-        # --- Repack ---
+        # --- Atomic repack-sign-move (issue #40) ---
+        # Pack to a scratch path, sign at scratch, Move-Item to the target
+        # only on success. A signing failure must NEVER leave the user with
+        # an unsigned modified copy of their signed package.
         $repackTarget = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        Write-MsixLog Info "Repacking: $repackTarget"
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $repackTarget, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx pack'
-
-        if ($SkipSigning) {
-            Write-MsixLog Info "Skipping signing (use Invoke-MsixSigning later, or chain another PSF call)."
-        } else {
-            Invoke-MsixSigning -PackagePath $repackTarget -Pfx $Pfx -PfxPassword $PfxPassword
+        $scratch      = Join-Path $env:TEMP ("msix-psfv2-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($repackTarget)))
+        Write-MsixLog Info "Repacking (via scratch): $repackTarget"
+        $packOk = $false
+        try {
+            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+            Assert-MsixProcessSuccess $r 'MakeAppx pack'
+            $packOk = $true
+            if ($SkipSigning) {
+                Write-MsixLog Info "Skipping signing (use Invoke-MsixSigning later, or chain another PSF call)."
+            } else {
+                Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword
+            }
+            Move-Item -LiteralPath $scratch -Destination $repackTarget -Force
+        } catch {
+            if ($packOk -and $UnsignedOutputPath) {
+                Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction SilentlyContinue
+                Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
+            }
+            throw
+        } finally {
+            if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue }
         }
 
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 

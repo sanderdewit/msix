@@ -135,7 +135,7 @@ function Invoke-MsixAutoFix {
     # original is preserved; subsequent stages then read from OutputPath.
     $current = $PackagePath
     if ($OutputPath -and -not $DryRun) {
-        Copy-Item $PackagePath $OutputPath -Force
+        Copy-Item -LiteralPath $PackagePath -Destination $OutputPath -Force
         $current = $OutputPath
     }
 
@@ -727,7 +727,7 @@ function Invoke-MsixAutoFixFromAnalysis {
     # Stage execution — write to OutputPath if asked, otherwise overwrite in-place
     $current = $PackagePath
     if ($OutputPath -and ($OutputPath -ne $PackagePath)) {
-        Copy-Item $PackagePath $OutputPath -Force
+        Copy-Item -LiteralPath $PackagePath -Destination $OutputPath -Force
         $current = $OutputPath
     }
 

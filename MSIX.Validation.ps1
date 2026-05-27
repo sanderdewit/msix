@@ -84,7 +84,7 @@ function Test-MsixPsfConfig {
     }
 
     try {
-        $json = Get-Content $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $json = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     } catch {
         throw "PSF config is not valid JSON: $_"
     }

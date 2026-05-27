@@ -1,0 +1,49 @@
+{
+  "$schema": "./signers.schema.json",
+  "version": 1,
+  "description": "Authenticode trusted-publisher allowlist for the MSIX module. Loaded at module import time by _MsixLoadTrustedPublishers in MSIX.PsfBinaries.ps1. Each entry's subjectPrefix is compared against the leaf cert's X.509 Subject of every .exe/.dll downloaded into the toolchain via _MsixVerifyAuthenticodeFolder. See CONTRIBUTING.md (Trusted-publisher governance) for the criteria and review process for new entries.",
+  "publishers": [
+    {
+      "subjectPrefix": "CN=Microsoft Corporation,",
+      "description": "Microsoft Corporation (Windows SDK BuildTools incl. signtool / MakeAppx / makepri, DesktopAppInstaller msixbundle, Windows App Runtime)",
+      "addedBy": "PR #16 (H1)",
+      "addedAt": "2026-05-19"
+    },
+    {
+      "subjectPrefix": "CN=Microsoft Windows,",
+      "description": "Microsoft Windows signing cert used by some Microsoft-shipped binaries",
+      "addedBy": "PR #16 (H1)",
+      "addedAt": "2026-05-19"
+    },
+    {
+      "subjectPrefix": "CN=Windows Phone,",
+      "description": "Windows Phone signing cert used by deployutil.exe and related deployment binaries",
+      "addedBy": "PR #16 (H1)",
+      "addedAt": "2026-05-19"
+    },
+    {
+      "subjectPrefix": "CN=Microsoft Windows Publisher,",
+      "description": "Microsoft Windows Publisher cert (used to sign Sysinternals Process Monitor and DebugView)",
+      "addedBy": "PR #16 (H1)",
+      "addedAt": "2026-05-19"
+    },
+    {
+      "subjectPrefix": "CN=Microsoft 3rd Party Application Component,",
+      "description": "Microsoft 3rd Party Application Component cert (used by some Sysinternals component DLLs)",
+      "addedBy": "PR #16 (H1)",
+      "addedAt": "2026-05-19"
+    },
+    {
+      "subjectPrefix": "CN=Tim Mangan,",
+      "description": "Tim Mangan -- maintainer of the TMurgent fork of the Package Support Framework",
+      "addedBy": "PR #16 (H1)",
+      "addedAt": "2026-05-19"
+    },
+    {
+      "subjectPrefix": "CN=TMurgent Technologies LLP,",
+      "description": "TMurgent Technologies LLP -- corporate cert used for some PSF releases",
+      "addedBy": "PR #16 (H1)",
+      "addedAt": "2026-05-19"
+    }
+  ]
+}

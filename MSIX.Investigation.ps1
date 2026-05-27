@@ -400,7 +400,7 @@ function Get-MsixStaticAnalysis {
                 '^.*maintenanceservice.*\.exe$', '^.*winsparkle.*\.(dll|exe)$'
             )
             $updaterExclude = @('^psf', '^msvc', '^vcruntime', '^api-ms-win-', '^msix')
-            Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
+            Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
                 ForEach-Object {
                     $leaf = $_.Name
                     foreach ($ex in $updaterExclude) { if ($leaf -match $ex) { return } }
@@ -439,7 +439,7 @@ function Get-MsixStaticAnalysis {
         return $findings
 
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 

@@ -83,7 +83,7 @@ function _CompareFileSets {
 
     $sha = [System.Security.Cryptography.SHA256]::Create()
     function _Snapshot([string]$root) {
-        Get-ChildItem $root -Recurse -File -ErrorAction SilentlyContinue |
+        Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue |
             ForEach-Object {
                 $rel = $_.FullName.Substring($root.Length + 1)
                 $hash = $null
@@ -251,7 +251,7 @@ function Compare-MsixPackage {
             SigningChanges  = $signingChanges
         }
     } finally {
-        Remove-Item $leftWs  -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-Item $rightWs -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $leftWs  -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $rightWs -Recurse -Force -ErrorAction SilentlyContinue
     }
 }

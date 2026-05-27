@@ -100,7 +100,10 @@ Describe 'Atomic pack-sign-move enforced in heuristic mutators (issues #34 + #37
         'Add-MsixCapability',
         'Remove-MsixUninstallerArtifact',
         'Remove-MsixUpdaterArtifact',
-        'Remove-MsixShellRegistryArtifact'
+        'Remove-MsixShellRegistryArtifact',
+        # Issue #40: additional mutators routed through _MsixMutatePackage.
+        'Add-MsixSplashScreen',
+        'Update-MsixPackageVersion'
     ) | ForEach-Object { @{ Fn = $_ } }
 
     It '<Fn> delegates to _MsixMutatePackage AND exposes -UnsignedOutputPath' -TestCases $cases {
@@ -118,5 +121,43 @@ Describe 'Atomic pack-sign-move enforced in heuristic mutators (issues #34 + #37
         # And it must NOT redefine its own scratch-pack sequence (that would
         # bypass the helper's atomic semantics).
         $window | Should -Not -Match 'Invoke-MsixSigning\s+-PackagePath\s+\$scratch'
+    }
+}
+
+Describe 'Inline atomic pack-sign-move in large bespoke mutators (issue #40)' -Tag 'WhatIf' {
+    # Add-MsixPsfV2 (MSIX.PSF.ps1), Update-MsixSigner (MSIX.Functions.ps1)
+    # and Remove-MsixDesktopShortcut (MSIX.Detection.ps1) cannot route through
+    # _MsixMutatePackage cleanly without a bigger rewrite, so they inline the
+    # scratch + sign + Move-Item pattern. The guards below pin the structural
+    # invariants so a future edit can't quietly regress to pack-direct-to-target.
+
+    $cases = @(
+        @{ Fn = 'Add-MsixPsfV2';            File = 'MSIX.PSF.ps1' }
+        @{ Fn = 'Update-MsixSigner';        File = 'MSIX.Functions.ps1' }
+        @{ Fn = 'Remove-MsixDesktopShortcut'; File = 'MSIX.Detection.ps1' }
+    )
+
+    It '<Fn> in <File> packs to scratch, signs scratch, Move-Item to target' -TestCases $cases {
+        param($Fn, $File)
+        $src = Get-Content -LiteralPath (Resolve-Path (Join-Path $PSScriptRoot "..\$File")) -Raw
+        $idx = $src.IndexOf("function $Fn ")
+        $idx | Should -BeGreaterThan -1
+        $window = $src.Substring($idx)
+        $nextFn = $window.IndexOf("`nfunction ", 10)
+        if ($nextFn -gt 0) { $window = $window.Substring(0, $nextFn) }
+
+        # Remove-MsixDesktopShortcut delegates to _MsixMutatePackage instead
+        # of inlining; accept either shape so the guard catches the right
+        # thing for each.
+        if ($Fn -eq 'Remove-MsixDesktopShortcut') {
+            $window | Should -Match '_MsixMutatePackage\s'
+            $window | Should -Match 'UnsignedOutputPath'
+        } else {
+            # Inline form: scratch + signed at scratch + Move-Item to target.
+            $window | Should -Match '\$scratch\s*=\s*Join-Path'
+            $window | Should -Match 'Invoke-MsixSigning\s+-PackagePath\s+\$scratch'
+            $window | Should -Match 'Move-Item\s+-LiteralPath\s+\$scratch'
+            $window | Should -Match 'UnsignedOutputPath'
+        }
     }
 }

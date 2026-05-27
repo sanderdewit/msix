@@ -36,7 +36,38 @@ $config.TestResult.OutputFormat = 'NUnitXml'
 
 if ($Tag) { $config.Filter.Tag = $Tag }
 
-$result = Invoke-Pester -Configuration $config
+# Issue #43: Invoke-Pester can throw AFTER executing the tests -- e.g. the
+# NUnit Write-NUnitEnvironmentInformation step calls Get-CimInstance, which
+# needs WMI privileges that some hardened agents revoke. When that happens
+# the previous wrapper exited 0 and printed blank pass/fail/skipped counts
+# because $result was never assigned. CI then reported "successful" even
+# though the test artifact was missing and we had zero confidence in the
+# release. Wrap in try/catch; treat any throw OR a missing result object
+# as a hard failure with a non-zero exit code distinct from "tests failed".
+$WrapperExitTestsFailed = 1
+$WrapperExitInfraFailure = 2
+
+try {
+    $result = Invoke-Pester -Configuration $config
+} catch {
+    Write-Host ''
+    Write-Host ('Pester wrapper: Invoke-Pester threw -- ' + $_.Exception.Message) -ForegroundColor Red
+    if ($_.ScriptStackTrace) {
+        Write-Host $_.ScriptStackTrace -ForegroundColor DarkRed
+    }
+    Write-Host ('Output (NUnit): ' + $OutputPath) -ForegroundColor DarkRed
+    Write-Host 'Treating as INFRASTRUCTURE FAILURE; pass/fail counts are NOT trustworthy.' -ForegroundColor Red
+    exit $WrapperExitInfraFailure
+}
+
+if (-not $result -or
+    -not $result.PSObject.Properties['PassedCount'] -or
+    -not $result.PSObject.Properties['FailedCount']) {
+    Write-Host ''
+    Write-Host 'Pester wrapper: Invoke-Pester returned no usable result object.' -ForegroundColor Red
+    Write-Host 'Treating as INFRASTRUCTURE FAILURE.' -ForegroundColor Red
+    exit $WrapperExitInfraFailure
+}
 
 Write-Host ''
 Write-Host "Passed: $($result.PassedCount)" -ForegroundColor Green
@@ -44,4 +75,5 @@ Write-Host "Failed: $($result.FailedCount)" -ForegroundColor Red
 Write-Host "Skipped: $($result.SkippedCount)" -ForegroundColor Yellow
 Write-Host "Output: $OutputPath"
 
-exit $result.FailedCount
+if ($result.FailedCount -gt 0) { exit $WrapperExitTestsFailed }
+exit 0

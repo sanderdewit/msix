@@ -457,10 +457,19 @@ $xxe = @'
 
 The `.github/workflows` Pester + PSScriptAnalyzer job covers:
 
-- All 198 Pester tests (security, idempotency, edge cases, WhatIf,
-  validation, etc.)
-- PSScriptAnalyzer on every `.ps1` and the `.psd1`
-- UTF-8 BOM check on `.Tests.ps1` files
+- The full Pester suite under `MSIX.Tests/` (security, idempotency,
+  edge cases, WhatIf, validation, helper-pattern guards, etc.) -- the
+  count grows release-on-release, so the authoritative number lives
+  in the test-runner output, not this document. As of v0.70.6 the
+  suite was 364 / 0 / 1; the next release will report its own count
+  in `CHANGELOG.md` and `msix.psd1`'s release notes.
+- PSScriptAnalyzer on every `.ps1` and the `.psd1` -- must be 0
+  Error + 0 Warning findings scoped to the MSIX module.
+- UTF-8 BOM check on `.Tests.ps1` files (the
+  `PSUseBOMForUnicodeEncodedFile` rule).
+- Module-contract test asserting `msix.psd1`'s `FunctionsToExport` /
+  `AliasesToExport` matches the actual runtime exports (issue #41,
+  so the manifest stays the single source of truth).
 
 Anything in this document that *can't* be expressed as a Pester test (real
 package installs, real signing services, real shell-extension activation)
@@ -472,8 +481,13 @@ should be run manually before each release.
 
 Before tagging a release:
 
-- [ ] All 198+ Pester tests green.
-- [ ] PSScriptAnalyzer reports zero warnings.
+- [ ] Full Pester suite green on PowerShell 7
+      (`pwsh MSIX.Tests/Invoke-MsixTests.ps1`). Record the actual
+      pass / fail / skip counts in the release notes; the suite grows
+      release-on-release so a hard-coded number here will lag.
+- [ ] PSScriptAnalyzer reports zero Error + zero Warning findings when
+      scoped to the MSIX module (`Invoke-ScriptAnalyzer -Path .
+      -Recurse -Severity Error,Warning`).
 - [ ] Scenarios 1, 4, 7, 8, 10, 11, 13 executed manually and pass.
 - [ ] Scenario 9 executed against the production Trusted Signing account.
 - [ ] `CHANGELOG.md` updated.

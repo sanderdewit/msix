@@ -289,7 +289,7 @@ function Test-MsixAgainstLimitation {
         return $hits | Sort-Object Id -Unique
 
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 

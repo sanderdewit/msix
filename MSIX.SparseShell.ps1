@@ -309,7 +309,7 @@ function Import-MsixSparseShellExtension {
             if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue }
         }
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
         if (Test-Path -LiteralPath $inner) { Remove-Item -LiteralPath $inner -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }

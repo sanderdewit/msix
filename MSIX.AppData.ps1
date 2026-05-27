@@ -111,7 +111,7 @@ function Get-MsixOrphanedAppData {
 
     $hints = @($PackageHints) + $installed | Where-Object { $_ }
 
-    Get-ChildItem $roaming -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+    Get-ChildItem -LiteralPath $roaming -Directory -ErrorAction SilentlyContinue | ForEach-Object {
         $folder = $_
         $matched = $false
         foreach ($h in $hints) {

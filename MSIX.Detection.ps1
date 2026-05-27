@@ -46,7 +46,7 @@ function Get-MsixFontCandidate {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
-        Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
+        Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Extension -in '.ttf','.otf','.ttc' } |
             ForEach-Object {
                 [pscustomobject]@{
@@ -56,7 +56,7 @@ function Get-MsixFontCandidate {
                 }
             }
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -100,7 +100,7 @@ function Get-MsixDesktopShortcutCandidate {
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         $patterns = @('VFS\\Common Desktop','VFS\\User Desktop','VFS\\Desktop')
-        Get-ChildItem $workspace -Recurse -File -Filter *.lnk -ErrorAction SilentlyContinue |
+        Get-ChildItem -LiteralPath $workspace -Recurse -File -Filter *.lnk -ErrorAction SilentlyContinue |
             Where-Object {
                 $rel = $_.FullName.Substring($workspace.Length + 1)
                 ($patterns | Where-Object { $rel -match $_ }).Count -gt 0
@@ -113,7 +113,7 @@ function Get-MsixDesktopShortcutCandidate {
                 }
             }
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -167,6 +167,8 @@ function Remove-MsixDesktopShortcut {
         [pscustomobject] with Removed (string[] of package-relative paths) and
         Output (final package path). Returns nothing when no shortcuts matched.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '',
+        Justification = 'ShouldProcess is invoked inside _MsixMutatePackage; PSSA cannot trace it through the scriptblock dispatch (issue #40).')]
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
@@ -174,47 +176,32 @@ function Remove-MsixDesktopShortcut {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [SecureString]$PfxPassword
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
     )
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
-    $workspace = New-MsixWorkspace $fileinfo.BaseName
-    try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
-
-        $patterns = @('VFS\\Common Desktop','VFS\\User Desktop','VFS\\Desktop')
-        $removed  = @()
-        Get-ChildItem $workspace -Recurse -File -Filter *.lnk -ErrorAction SilentlyContinue |
-            Where-Object {
-                $rel = $_.FullName.Substring($workspace.Length + 1)
-                ($patterns | Where-Object { $rel -match $_ }).Count -gt 0
-            } |
-            ForEach-Object {
-                if ($PSCmdlet.ShouldProcess($_.FullName, 'Remove desktop shortcut')) {
+    _MsixMutatePackage -PackagePath $PackagePath -Operation 'dshortcut' `
+        -OutputPath $OutputPath -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+        -UnsignedOutputPath $UnsignedOutputPath `
+        -NoChangeMessage 'No desktop shortcuts found in the package.' `
+        -Mutator {
+            param($workspace)
+            $patterns = @('VFS\\Common Desktop','VFS\\User Desktop','VFS\\Desktop')
+            $removed  = @()
+            Get-ChildItem -LiteralPath $workspace -Recurse -File -Filter *.lnk -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $rel = $_.FullName.Substring($workspace.Length + 1)
+                    ($patterns | Where-Object { $rel -match $_ }).Count -gt 0
+                } |
+                ForEach-Object {
                     $removed += $_.FullName.Substring($workspace.Length + 1)
-                    Remove-Item $_.FullName -Force
+                    Remove-Item -LiteralPath $_.FullName -Force
                 }
-            }
 
-        if (-not $removed) {
-            Write-MsixLog Info 'No desktop shortcuts found in the package.'
-            return
-        }
-        Write-MsixLog Info "Removed: $($removed -join ', ')"
-
-        $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $target, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx pack'
-
-        if (-not $SkipSigning) {
-            Invoke-MsixSigning -PackagePath $target -Pfx $Pfx -PfxPassword $PfxPassword
-        }
-        return [pscustomobject]@{ Removed = $removed; Output = $target }
-    } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
-    }
+            if (-not $removed) { return $null }
+            Write-MsixLog Info "Removed: $($removed -join ', ')"
+            @{ Removed = $removed }
+        }.GetNewClosure()
 }
 
 #endregion
@@ -271,7 +258,7 @@ function Get-MsixCapabilityHint {
 
         $hits = New-Object System.Collections.Generic.HashSet[string]
         $allDlls = $script:DllToCapability.Keys
-        Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
+        Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Extension -in '.exe','.dll' } |
             ForEach-Object {
                 try {
@@ -288,7 +275,7 @@ function Get-MsixCapabilityHint {
             }
         return @($hits) | Sort-Object -Unique
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 #endregion
@@ -326,7 +313,7 @@ function Get-MsixNestedPackageCandidate {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
-        Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue |
+        Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Extension -in '.msix','.appx','.msixbundle','.appxbundle' } |
             ForEach-Object {
                 [pscustomobject]@{
@@ -336,7 +323,7 @@ function Get-MsixNestedPackageCandidate {
                 }
             }
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 #endregion
@@ -482,7 +469,7 @@ function Get-MsixPluginExtensionPoint {
                 }
         }
     } finally {
-        Remove-Item $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 

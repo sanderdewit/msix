@@ -1,4 +1,4 @@
-name: Publish to PSGallery
+﻿name: Publish to PSGallery
 
 on:
   release:
@@ -36,6 +36,10 @@ jobs:
           Copy-Item (Join-Path $src 'msix.psd1') $stage -Force
           Copy-Item (Join-Path $src 'MSIX.psm1') $stage -Force
           Copy-Item (Join-Path $src 'MSIX.*.ps1') $stage -Force
+          # signers.json - trusted-publisher allowlist loaded at module import
+          # by _MsixLoadTrustedPublishers (issue #19). Without it the module
+          # refuses to start, so it MUST ship in the PSGallery package.
+          Copy-Item (Join-Path $src 'signers.json') $stage -Force
           if (Test-Path (Join-Path $src 'README.md'))   { Copy-Item (Join-Path $src 'README.md')   $stage -Force }
           if (Test-Path (Join-Path $src 'LICENSE'))     { Copy-Item (Join-Path $src 'LICENSE')     $stage -Force }
           if (Test-Path (Join-Path $src 'LICENSE.md'))  { Copy-Item (Join-Path $src 'LICENSE.md')  $stage -Force }

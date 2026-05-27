@@ -115,6 +115,103 @@ Test files may use PS7-only syntax because Pester runs them under
   PFX password lands on the process command line.
 - See PR #16 for the architecture rationale.
 
+## Filesystem paths -- use `-LiteralPath`
+
+Every call to a PowerShell provider cmdlet (`Get-Item`, `Get-ChildItem`,
+`Test-Path`, `Copy-Item`, `Move-Item`, `Remove-Item`, `Get-Content`,
+`Set-Content`, `Out-File`, ...) MUST pass user-supplied or generated
+paths via `-LiteralPath`, never positionally.
+
+### Why
+
+PowerShell's provider cmdlets default to *wildcard expansion* on
+positional path arguments. Vendor build systems and CI artifact stores
+can legitimately produce filenames containing `[`, `]`, `?`, or `*`,
+and the positional form silently re-interprets those characters as
+wildcards -- giving you either nothing back, or worse, the wrong file.
+
+```powershell
+# WRONG -- positional. If $pkg is "C:\drop\app[v1.2].msix" this
+# returns $null instead of the file, because [v1.2] is parsed as
+# a character class.
+$info = Get-Item $pkg
+
+# RIGHT -- -LiteralPath. Brackets are treated as characters.
+$info = Get-Item -LiteralPath $pkg
+```
+
+### Convention
+
+- `Copy-Item` / `Move-Item` take BOTH `-LiteralPath <src>` and
+  `-Destination <dst>` explicitly. Never positional.
+- For internal workspace paths (GUID-based folders the module created
+  itself), prefer `-LiteralPath` anyway for consistency. The runtime
+  cost is zero; the rule is easier to enforce when there are no
+  exceptions to remember.
+- A source-level regression guard in
+  `MSIX.Tests/MSIX.LiteralPath.Tests.ps1` fails the build on any
+  positional `Verb-Noun $variable` form for the watched cmdlets.
+
+## Trusted-publisher governance (signers.json)
+
+The Authenticode allowlist used by every toolchain installer
+(`_MsixVerifyAuthenticodeFolder` -> `_MsixVerifyAuthenticode`) lives in
+`signers.json` at the module root. The file is loaded at module import
+time by `_MsixLoadTrustedPublishers` in `MSIX.PsfBinaries.ps1`. Issue
+[#19](https://github.com/sanderdewit/msix/issues/19) moved this out of
+code so security teams can add publishers without re-shipping the
+module.
+
+### Adding a new publisher
+
+Open a PR that adds one object to the `publishers` array in
+`signers.json`. The object must have:
+
+- **`subjectPrefix`** *(required)*: the X.509 Subject prefix to match
+  with `-like "$prefix*"` against the leaf cert's `Subject` property.
+  Must start with `CN=` and end with `,` (the trailing comma stops a
+  prefix from accidentally matching a longer common name — e.g.
+  `CN=Microsoft Corp,` will not match `CN=Microsoft Corp Test`). The
+  PSScriptAnalyzer-style regression test in
+  `MSIX.Tests/MSIX.TrustedPublishers.Tests.ps1` enforces this format.
+- **`description`** *(required)*: human-readable rationale — which
+  binaries / which redistribution channel.
+- **`addedBy`** *(strongly recommended)*: PR number or release where the
+  entry was first introduced. Helps reviewers cross-check the audit
+  trail.
+- **`addedAt`** *(strongly recommended)*: ISO-8601 date the entry was
+  added.
+
+### Evidence required for review
+
+The PR description must include:
+
+1. A direct link to the publisher's officially-distributed signed
+   binary (URL must be HTTPS, must come from the publisher's own
+   domain — not a redistribution mirror).
+2. The expected leaf-cert thumbprint observed from running
+   `Get-AuthenticodeSignature <file>` against a freshly-downloaded
+   sample. Cross-check against the publisher's published thumbprint
+   if they publish one.
+3. The *exact* `Subject` string from that same signature. Confirm the
+   proposed `subjectPrefix` matches the start of that string up to
+   the first separating `,`.
+
+### Review
+
+PRs that modify `signers.json` must be reviewed by at least one
+maintainer with a security focus. The trust boundary the module
+enforces is only as strong as the membership of this list — adding an
+entry effectively says "every binary signed by this publisher is
+allowed to land in the toolchain on every host that runs the module."
+
+### Future hardening
+
+The file is intentionally unsigned today. A future change will
+Authenticode-sign `signers.json` itself and require
+`Get-AuthenticodeSignature -Status -eq 'Valid'` before the loader
+accepts the file. That work is tracked in #19's follow-ups.
+
 ## Manifest mutators
 
 - Use `Invoke-MsixManifestTransform` for pure in-memory transforms (testable

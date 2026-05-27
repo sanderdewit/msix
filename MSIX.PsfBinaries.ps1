@@ -21,18 +21,74 @@ $script:SdkToolsNuGet = 'Microsoft.Windows.SDK.BuildTools'   # publishes MakeApp
 # Authenticode verification of downloaded tool binaries (Wave 2a / H1)
 # -----------------------------------------------------------------------------
 # Trusted publisher Subject prefixes. Match against the leaf cert's Subject
-# (case-insensitive, StartsWith). New entries added here become trusted across
-# the entire toolchain.
+# (case-insensitive, StartsWith). New entries become trusted across the entire
+# toolchain.
+#
+# Source of truth: signers.json at the module root (loaded at import time by
+# _MsixLoadTrustedPublishers below). Issue #19 moved the list out of code so
+# security teams can add publishers without re-shipping the module. The file
+# is intentionally unsigned today; a future change will Authenticode-sign it
+# and require Get-AuthenticodeSignature -Status -eq 'Valid' before load.
 # =============================================================================
-$script:MsixTrustedPublishers = @(
-    'CN=Microsoft Corporation,',                    # Microsoft (incl. Windows SDK, signtool, MakeAppx, DesktopAppInstaller, Windows App Runtime)
-    'CN=Microsoft Windows,',                        # Some Microsoft signing certs
-    'CN=Windows Phone,',                        # deployutil.exe etc
-    'CN=Microsoft Windows Publisher,',              # Microsoft publisher (Procmon, DebugView via Sysinternals signing)
-    'CN=Microsoft 3rd Party Application Component,', # Sysinternals tools sometimes use this
-    'CN=Tim Mangan,',                               # PSF maintainer (TMurgent fork)
-    'CN=TMurgent Technologies LLP,'                # PSF maintainer corporate
-)
+
+function _MsixLoadTrustedPublishers {
+    <#
+    .SYNOPSIS
+        Loads the trusted-publisher allowlist from signers.json. Internal.
+    .DESCRIPTION
+        Reads $PSScriptRoot\signers.json, validates each entry's
+        subjectPrefix matches the standard X.509 form (starts with 'CN=',
+        ends with ','), returns the deduplicated prefix list as [string[]].
+
+        Throws on:
+          - missing signers.json (loud failure; toolchain installs cannot
+            verify downloads, so we refuse to run rather than silently
+            degrade to "no allowlist").
+          - malformed JSON.
+          - any entry whose subjectPrefix doesn't match ^CN=.+,$.
+          - zero valid entries (same reasoning as missing file).
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param([string]$Path)
+
+    if (-not $Path) { $Path = Join-Path $PSScriptRoot 'signers.json' }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "MSIX trusted-publisher allowlist not found at '$Path'. The module cannot Authenticode-verify downloaded toolchain binaries without it. Re-install the module or restore signers.json from source."
+    }
+
+    try {
+        $doc = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "Failed to parse trusted-publisher allowlist at '$Path': $($_.Exception.Message)"
+    }
+
+    if (-not $doc.publishers) {
+        throw "Trusted-publisher allowlist at '$Path' has no 'publishers' array."
+    }
+
+    $rx       = [regex]'^CN=.+,$'
+    $prefixes = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($entry in $doc.publishers) {
+        $p = [string]$entry.subjectPrefix
+        if (-not $p) {
+            throw "Trusted-publisher allowlist at '$Path' has an entry missing 'subjectPrefix'."
+        }
+        if (-not $rx.IsMatch($p)) {
+            throw "Trusted-publisher allowlist at '$Path' has an entry whose subjectPrefix does not match the X.509 form 'CN=...,': '$p'."
+        }
+        if (-not $prefixes.Contains($p)) { $prefixes.Add($p) }
+    }
+
+    if ($prefixes.Count -eq 0) {
+        throw "Trusted-publisher allowlist at '$Path' contains zero valid entries."
+    }
+
+    return [string[]]$prefixes
+}
+
+$script:MsixTrustedPublishers = _MsixLoadTrustedPublishers
+$script:MsixTrustedPublishersPath = Join-Path $PSScriptRoot 'signers.json'
 
 function _MsixVerifyAuthenticode {
     <#
@@ -479,7 +535,7 @@ function Install-MsixPsfBinary {
                 $destinationCreated = $true
             }
             # Copy every file from extracted layout into Destination flatly
-            Get-ChildItem $tmp -Recurse -File | Where-Object { $_.FullName -ne $zip } |
+            Get-ChildItem -LiteralPath $tmp -Recurse -File | Where-Object { $_.FullName -ne $zip } |
                 ForEach-Object { Copy-Item $_.FullName $Destination -Force }
 
             Set-Content -Path $marker -Value $tag -Encoding ascii
@@ -492,7 +548,7 @@ function Install-MsixPsfBinary {
             }
             throw
         } finally {
-            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -972,7 +1028,7 @@ function Install-MsixSdkTool {
             }
             throw
         } finally {
-            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -1192,34 +1248,67 @@ function Install-MsixAppRuntime {
 
     if (-not $PSCmdlet.ShouldProcess($Destination, "Install Windows App Runtime ($($Channels -join ', ')) + DesktopAppInstaller")) { return }
 
-    New-Item $Destination -ItemType Directory -Force | Out-Null
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
 
-    # DesktopAppInstaller msixbundle (only download if missing or -Force)
-    $bundlePath = Join-Path $Destination 'Microsoft.DesktopAppInstaller.msixbundle'
-    if ($Force -or -not (Test-Path $bundlePath)) {
-        _MsixDownloadFile -Url $script:DesktopAppInstallerUrl -Destination $bundlePath
-    }
+    # Issue #42: fail closed + Authenticode verify EVERY downloaded artifact
+    # before we touch the install marker. The previous flow swallowed per-
+    # channel download failures and still wrote the marker, so a sandbox
+    # could report the runtime cache as installed while required runtime
+    # installers were missing. It also skipped signature verification, so
+    # the bundle and channel installers could land from any redirect target
+    # without being checked against the trusted-publisher allowlist.
 
-    # Each WindowsAppRuntime channel installer
-    $runtimePaths = foreach ($ch in $Channels) {
-        $rt = Join-Path $Destination (_MsixAppRuntimeFileName $ch)
-        try {
-            _MsixDownloadFile -Url (_MsixAppRuntimeUrl $ch) -Destination $rt
-            $rt
-        } catch {
-            Write-MsixLog Warning "Channel $ch download failed: $($_.Exception.Message)"
+    # Track files we created in THIS call so we can clean them up on a
+    # failure mid-flight. Files that existed before the call are left alone.
+    $createdThisRun = New-Object 'System.Collections.Generic.List[string]'
+
+    try {
+        # ── DesktopAppInstaller msixbundle ────────────────────────────────
+        $bundlePath = Join-Path $Destination 'Microsoft.DesktopAppInstaller.msixbundle'
+        if ($Force -or -not (Test-Path -LiteralPath $bundlePath)) {
+            _MsixDownloadFile -Url $script:DesktopAppInstallerUrl -Destination $bundlePath
+            $createdThisRun.Add($bundlePath)
         }
-    }
+        _MsixVerifyAuthenticodeMsixBundle -Path $bundlePath -ToolName 'DesktopAppInstaller'
 
-    (Get-Date -Format o) | Set-Content $marker -Encoding ascii
-    Write-MsixLog Info "AppRuntime cached: $Destination"
+        # ── WindowsAppRuntime channel installers (one .exe per channel) ───
+        # Treat any download or verification failure as a hard failure --
+        # caller can pass -Channels with only the channels they truly need
+        # to scope the install.
+        $runtimePaths = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($ch in $Channels) {
+            $rt = Join-Path $Destination (_MsixAppRuntimeFileName $ch)
+            if ($Force -or -not (Test-Path -LiteralPath $rt)) {
+                _MsixDownloadFile -Url (_MsixAppRuntimeUrl $ch) -Destination $rt
+                $createdThisRun.Add($rt)
+            }
+            _MsixVerifyAuthenticode -Path $rt -ToolName "WindowsAppRuntime/$ch" | Out-Null
+            $runtimePaths.Add($rt)
+        }
 
-    return [pscustomobject]@{
-        Path                  = $Destination
-        Updated               = $true
-        Channels              = $Channels
-        DesktopAppInstaller   = $bundlePath
-        WindowsAppRuntimeExes = @($runtimePaths)
+        # Marker is the LAST step -- only written if every requested channel
+        # downloaded AND verified. A subsequent Get-MsixAppRuntimeVersion
+        # will then see Installed=$true with a confidence guarantee.
+        (Get-Date -Format o) | Set-Content -LiteralPath $marker -Encoding ascii
+        Write-MsixLog Info "AppRuntime cached + verified: $Destination"
+
+        return [pscustomobject]@{
+            Path                  = $Destination
+            Updated               = $true
+            Channels              = [string[]]$Channels
+            DesktopAppInstaller   = $bundlePath
+            WindowsAppRuntimeExes = [string[]]$runtimePaths
+        }
+    } catch {
+        # Roll back files we created in THIS call so a partial cache isn't
+        # left behind. Files that pre-existed are intentionally preserved.
+        foreach ($p in $createdThisRun) {
+            if (Test-Path -LiteralPath $p) {
+                Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+            }
+        }
+        Write-MsixLog Error "AppRuntime install rolled back: $($_.Exception.Message)"
+        throw
     }
 }
 
@@ -1313,36 +1402,62 @@ function Get-MsixAppRuntimeVersion {
         Reports the cached AppRuntime install timestamp and resolved paths.
 
     .DESCRIPTION
-        Inspects the `runtime.installed` marker plus the bundle and runtime exe
-        on disk and returns a summary object that Update-MsixAppRuntime /
-        Initialize-MsixToolchain consume.
+        Inspects the `runtime.installed` marker plus the bundle and every
+        WindowsAppRuntimeInstall-x64-<channel>.exe on disk and returns a
+        summary object that Update-MsixAppRuntime / Initialize-MsixToolchain
+        consume.
+
+        Issue #42: prior versions looked for a single non-existent
+        WindowsAppRuntimeInstall-x64.exe (no channel suffix), so the
+        WindowsAppRuntimeExe property was always `$null` once
+        Install-MsixAppRuntime started writing channel-specific filenames.
+        This cmdlet now enumerates the channel-specific files actually
+        present and returns the cached channel list.
 
     .PARAMETER Path
         Cache folder. Defaults to "(Get-MsixToolsRoot)\runtime".
 
     .OUTPUTS
         [pscustomobject] with Path, Installed, InstalledOn,
-        DesktopAppInstaller (bundle path or $null), WindowsAppRuntimeExe.
+        DesktopAppInstaller (bundle path or $null), Channels (string[],
+        zero-length when nothing is cached), and WindowsAppRuntimeExes
+        (string[], parallel to Channels).
 
     .EXAMPLE
         # Check whether the sandbox runtime cache is ready.
-        Get-MsixAppRuntimeVersion
+        (Get-MsixAppRuntimeVersion).Channels
+        # => @('1.4', '1.5', '1.6', '1.7', '1.8')
     #>
     [CmdletBinding()]
     param([string]$Path)
 
     if (-not $Path) { $Path = Join-Path (Get-MsixToolsRoot) 'runtime' }
     $marker = Join-Path $Path 'runtime.installed'
+    $bundle = Join-Path $Path 'Microsoft.DesktopAppInstaller.msixbundle'
 
-    $bundle  = Join-Path $Path 'Microsoft.DesktopAppInstaller.msixbundle'
-    $runtime = Join-Path $Path 'WindowsAppRuntimeInstall-x64.exe'
+    # Channel-aware exe discovery. Filename convention is
+    #   WindowsAppRuntimeInstall-x64-<major>.<minor>.exe
+    # (set by _MsixAppRuntimeFileName in this file).
+    $rx = [regex]'^WindowsAppRuntimeInstall-x64-(?<ch>\d+\.\d+)\.exe$'
+    $channels = New-Object 'System.Collections.Generic.List[string]'
+    $exes     = New-Object 'System.Collections.Generic.List[string]'
+    if (Test-Path -LiteralPath $Path) {
+        foreach ($file in (Get-ChildItem -LiteralPath $Path -File -Filter 'WindowsAppRuntimeInstall-x64-*.exe' -ErrorAction SilentlyContinue)) {
+            $m = $rx.Match($file.Name)
+            if ($m.Success) {
+                $channels.Add($m.Groups['ch'].Value)
+                $exes.Add($file.FullName)
+            }
+        }
+    }
 
     return [pscustomobject]@{
         Path                  = $Path
-        Installed             = Test-Path $marker
-        InstalledOn           = if (Test-Path $marker) { [datetime](Get-Content $marker -Raw).Trim() } else { $null }
-        DesktopAppInstaller   = if (Test-Path $bundle)  { $bundle  } else { $null }
-        WindowsAppRuntimeExe  = if (Test-Path $runtime) { $runtime } else { $null }
+        Installed             = Test-Path -LiteralPath $marker
+        InstalledOn           = if (Test-Path -LiteralPath $marker) { [datetime](Get-Content -LiteralPath $marker -Raw).Trim() } else { $null }
+        DesktopAppInstaller   = if (Test-Path -LiteralPath $bundle) { $bundle } else { $null }
+        Channels              = [string[]]$channels
+        WindowsAppRuntimeExes = [string[]]$exes
     }
 }
 

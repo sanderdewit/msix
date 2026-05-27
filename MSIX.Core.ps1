@@ -191,7 +191,7 @@ function New-MsixWorkspace {
         try {
             # unpack, edit, repack into $ws
         } finally {
-            Remove-Item $ws -Recurse -Force
+            Remove-Item -LiteralPath $ws -Recurse -Force
         }
     #>
     [OutputType([string])]

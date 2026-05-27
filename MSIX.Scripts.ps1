@@ -421,7 +421,7 @@ function Add-MsixStandardScript {
         Add-MsixPsfV2 @psfArgs
 
     } finally {
-        Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 

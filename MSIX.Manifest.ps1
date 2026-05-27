@@ -275,7 +275,7 @@ function Get-MsixManifest {
                 return (_MsixLoadXmlSecure -Path $out)
             } finally { $zip.Dispose() }
         } finally {
-            Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 

@@ -167,7 +167,7 @@
 
     $toolsRoot = Get-MsixToolsRoot
     $signtool  = Join-Path $toolsRoot 'Tools\signtool.exe'
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
 
     Write-MsixLog Info "Signing: $($fileinfo.Name) (backend: $effectiveSigner)"
 
@@ -179,7 +179,7 @@
         'SignTool' {
             $sigArgs = if ($Pfx) {
 
-                $cert = Get-Item $Pfx
+                $cert = Get-Item -LiteralPath $Pfx
                 # Decrypt SecureString only at the CLI boundary — never stored in a plain variable
                 $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($PfxPassword)
                 try {
@@ -429,7 +429,7 @@ function New-MsixSelfSignedCertificate {
     Write-MsixLog Info "Generating self-signed cert with Subject = $subject"
 
     if (-not $OutputFolder) {
-        $base         = (Get-Item $PackagePath).BaseName
+        $base         = (Get-Item -LiteralPath $PackagePath).BaseName
         $OutputFolder = Join-Path $env:TEMP "msix-selfsign-$base-$([guid]::NewGuid().ToString('N').Substring(0,8))"
     }
     New-Item $OutputFolder -ItemType Directory -Force | Out-Null

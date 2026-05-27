@@ -77,13 +77,13 @@ function Get-MsixVcRuntimeReference {
     )
 
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-vcrt"
     try {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
-        $allFiles = Get-ChildItem $workspace -Recurse -File -ErrorAction SilentlyContinue
+        $allFiles = Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue
         $bundled  = $allFiles | Where-Object { $script:KnownVcRuntimeDlls -contains $_.Name.ToLower() } |
                      ForEach-Object {
                          [pscustomobject]@{
@@ -242,12 +242,12 @@ function Add-MsixVcRuntimeBundle {
         [SecureString]$PfxPassword
     )
 
-    if (-not (Test-Path $SourceFolder)) {
+    if (-not (Test-Path -LiteralPath $SourceFolder)) {
         throw "VC runtime source folder not found: $SourceFolder"
     }
 
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace $fileinfo.BaseName
 
     try {
@@ -261,7 +261,7 @@ function Add-MsixVcRuntimeBundle {
         # Determine architecture if auto
         if ($Architecture -eq 'auto') {
             $sample = Join-Path $workspace $apps[0].GetAttribute('Executable')
-            $Architecture = if (Test-Path $sample) { (_GetPeArchitecture $sample) } else { 'x86' }
+            $Architecture = if (Test-Path -LiteralPath $sample) { (_GetPeArchitecture $sample) } else { 'x86' }
             if ($Architecture -notin 'x86','x64') { $Architecture = 'x86' }
             Write-MsixLog Info "Architecture auto-detected: $Architecture"
         }
@@ -280,7 +280,7 @@ function Add-MsixVcRuntimeBundle {
         # Locate each DLL under SourceFolder. Heuristic search.
         $copied = @()
         foreach ($name in $Names) {
-            $hit = Get-ChildItem $SourceFolder -Recurse -Filter $name -ErrorAction SilentlyContinue |
+            $hit = Get-ChildItem -LiteralPath $SourceFolder -Recurse -Filter $name -ErrorAction SilentlyContinue |
                    Where-Object {
                        (_GetPeArchitecture $_.FullName) -eq $Architecture
                    } | Select-Object -First 1

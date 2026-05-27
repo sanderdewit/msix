@@ -19,7 +19,17 @@
 [CmdletBinding()]
 param(
     [string[]]$Tag,
-    [string]$OutputPath = (Join-Path $PSScriptRoot 'TestResults.xml')
+    [string]$OutputPath = (Join-Path $PSScriptRoot 'TestResults.xml'),
+
+    # Issue #47: hardened developer workstations / build agents may revoke
+    # the WMI/CIM privileges Pester's NUnit metadata exporter needs (calls
+    # Get-CimInstance Win32_*). The tests themselves don't care, but the
+    # end-step throws and the wrapper exits with the infra-failure code.
+    # Pass -DisableTestResult to skip NUnit XML emission and run the suite
+    # to completion on those hosts. CI still defaults to emitting the
+    # artifact so release-time logs remain machine-readable.
+    [Alias('NoTestResult')]
+    [switch]$DisableTestResult
 )
 
 $ErrorActionPreference = 'Stop'
@@ -30,9 +40,14 @@ $config = New-PesterConfiguration
 $config.Run.Path        = $PSScriptRoot
 $config.Run.PassThru    = $true
 $config.Output.Verbosity = 'Detailed'
-$config.TestResult.Enabled    = $true
-$config.TestResult.OutputPath = $OutputPath
-$config.TestResult.OutputFormat = 'NUnitXml'
+if ($DisableTestResult) {
+    $config.TestResult.Enabled = $false
+    Write-Host "TestResult XML emission DISABLED (-DisableTestResult). Tests still run, but no NUnit artifact will be written." -ForegroundColor Yellow
+} else {
+    $config.TestResult.Enabled    = $true
+    $config.TestResult.OutputPath = $OutputPath
+    $config.TestResult.OutputFormat = 'NUnitXml'
+}
 
 if ($Tag) { $config.Filter.Tag = $Tag }
 

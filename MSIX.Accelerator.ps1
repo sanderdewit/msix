@@ -59,7 +59,7 @@ function ConvertFrom-MsixYamlAccelerator {
         [string]$Path
     )
 
-    if (-not (Test-Path $Path)) { throw "Accelerator not found: $Path" }
+    if (-not (Test-Path -LiteralPath $Path)) { throw "Accelerator not found: $Path" }
 
     # SECURITY (H5): We deliberately do NOT invoke any external YAML
     # deserialiser here, even if one is installed. Full YAML parsers honour

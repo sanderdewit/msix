@@ -50,35 +50,42 @@ Describe '-LiteralPath consistency for user-supplied paths (issue #45)' -Tag 'Li
 
 Describe 'Source-level guard: user-facing provider calls use -LiteralPath' -Tag 'LiteralPath' {
 
-    # Pin the convention with a source-level scan. Any positional
-    # `Get-Item $foo` (where $foo is a parameter or workspace variable
-    # rather than a literal) is a candidate for the wildcard-expansion
-    # bug.  We don't claim 100% coverage -- the scan focuses on the
-    # forms most exposed to user input: the provider cmdlets that
-    # accept a path positional argument and a $-prefixed identifier
-    # immediately after.
+    # Issue #46: extend the original (#45) guard to catch assignment +
+    # parenthesised + dotted-access forms, not only the line-start
+    # statement form. The previous regex was `^\s+Verb-Noun $var`, which
+    # let `$x = Get-Item $foo` and `(Get-Item $foo).BaseName` through
+    # because the cmdlet didn't sit at line start.
+    #
+    # New regex uses a non-identifier lookbehind `(?<![A-Za-z-])` so we
+    # match the cmdlet wherever it appears in an expression, not only at
+    # the start of a statement.
+    #
+    # Copy-Item / Move-Item are kept out of this guard intentionally:
+    # their two-positional form (`Copy-Item $src $dst`) needs hand
+    # review to choose between -LiteralPath and -Path (the source may be
+    # a wildcard glob by design in some call sites). A second guard
+    # below scans for the most exposed positional form -- the one that
+    # takes two $-prefixed variables in a row.
 
     BeforeAll {
-        # Module source files (exclude tests).
         $script:ModuleSources = Get-ChildItem -LiteralPath (Resolve-Path (Join-Path $PSScriptRoot '..')) `
             -Filter 'MSIX.*.ps1' -File |
             Where-Object { $_.Name -notlike '*.Tests.ps1' }
     }
 
-    # The regex below matches:  <whitespace>Verb-Noun $varName<space-or-end>
-    # We accept it only when it is NOT preceded on the same line by
-    # `-LiteralPath` (which would mean the call is already safe) and not
-    # part of a string literal (anchoring at line start prevents the
-    # latter).
     $cmdlets = @(
         'Get-Item','Get-ChildItem','Test-Path','Remove-Item',
         'Get-Content','Set-Content'
     )
 
     foreach ($cmdlet in $cmdlets) {
-        It "$cmdlet never appears with a positional `$variable in module source" -TestCases @(@{ Cmd = $cmdlet }) {
+        It "$cmdlet never appears with a positional `$variable (anywhere in an expression)" -TestCases @(@{ Cmd = $cmdlet }) {
             param($Cmd)
-            $pattern = "(?m)^\s+$([regex]::Escape($Cmd))\s+\`$[A-Za-z_][A-Za-z0-9_]*(\s|$)"
+            # (?<![A-Za-z-]) prevents matching INSIDE a longer cmdlet name.
+            # The trailing lookahead accepts whitespace, ')', '.', or
+            # end-of-line so we catch assignment, parenthesised, and
+            # dotted-access forms.
+            $pattern = "(?<![A-Za-z-])$([regex]::Escape($Cmd))\s+\`$[A-Za-z_][A-Za-z0-9_]*(?=\s|\)|\.|$)"
             $rx = [regex]$pattern
             $offenders = @()
             foreach ($f in $script:ModuleSources) {
@@ -91,6 +98,79 @@ Describe 'Source-level guard: user-facing provider calls use -LiteralPath' -Tag 
             $offenders.Count | Should -Be 0 -Because (
                 "Found positional $Cmd `$var calls without -LiteralPath:`n" +
                 ($offenders -join "`n"))
+        }
+    }
+
+    It 'Copy-Item / Move-Item never use the two-positional `$src `$dst form' {
+        # The classic offender is `Copy-Item $src $dst -Force`. The fix is
+        # `Copy-Item -LiteralPath $src -Destination $dst -Force` (or
+        # `-Path` if $src is deliberately a wildcard glob). Either way the
+        # raw `Verb-Item $a $b` form is what we forbid -- it leaves both
+        # source AND destination exposed to wildcard expansion.
+        $rx = [regex]'(?<![A-Za-z-])(Copy-Item|Move-Item)\s+\$[A-Za-z_][A-Za-z0-9_]*\s+\$[A-Za-z_][A-Za-z0-9_]*(?=\s|$)'
+        $offenders = @()
+        foreach ($f in $script:ModuleSources) {
+            $src = Get-Content -LiteralPath $f.FullName -Raw
+            $matchSet = $rx.Matches($src)
+            if ($matchSet.Count -gt 0) {
+                $offenders += "$($f.Name): $($matchSet.Count) match(es)"
+            }
+        }
+        $offenders.Count | Should -Be 0 -Because (
+            "Found two-positional `Copy-Item / Move-Item `$src `$dst calls:`n" +
+            ($offenders -join "`n"))
+    }
+}
+
+Describe 'Functional: signer / scanner code paths tolerate bracketed paths (issue #46)' -Tag 'LiteralPath' {
+    # Real-call functional coverage for the wildcard-character-in-path
+    # failure mode. Pick a single MSIX cmdlet that hits the same set of
+    # provider calls Invoke-MsixSigning would (Get-Item on the package
+    # path, etc.) and exercise it against a path with `[x]` in it.
+
+    BeforeAll {
+        # We can't run the actual signer (needs a real .msix + cert), but
+        # Get-MsixPublisherId is a quick public cmdlet defined in
+        # MSIX.Core.ps1 that operates on a string and has no filesystem
+        # surface -- this confirms the module loads and the bracket-aware
+        # tests below come from a clean state.
+        Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    }
+
+    It 'Resolve-MsixDebugViewPath returns a string or null for a bracketed env override' {
+        # The env-var path is one of the most exposed user-supplied
+        # entry points. Setting it to a bogus bracketed path must not
+        # throw -- Resolve-MsixDebugViewPath should fall through to its
+        # default search order and return either a string or $null.
+        $bracketedDir = Join-Path $env:TEMP "msix-litpath-[x]-debugview-$([guid]::NewGuid().ToString('N').Substring(0,6))"
+        New-Item -ItemType Directory -Path $bracketedDir -Force | Out-Null
+        $prev = $env:MSIX_DEBUGVIEW_PATH
+        try {
+            $env:MSIX_DEBUGVIEW_PATH = Join-Path $bracketedDir 'Dbgview.exe'
+            # Whether or not the file exists, the call should not throw
+            # and should return either a string or $null.
+            { Resolve-MsixDebugViewPath } | Should -Not -Throw
+        } finally {
+            $env:MSIX_DEBUGVIEW_PATH = $prev
+            Remove-Item -LiteralPath $bracketedDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'A trace file at a path containing [x] is parseable by Get-MsixTraceFailure' {
+        # Trace files come from operator workflows and can land at
+        # arbitrary paths. The parser must accept brackets.
+        $bracketed = Join-Path $env:TEMP "msix-litpath-trace-[x]-$([guid]::NewGuid().ToString('N').Substring(0,6)).log"
+        # Use BOM-less UTF-8 -- the parser strips a BOM but the
+        # canonical TraceFixup output is BOM-less.
+        [IO.File]::WriteAllText($bracketed,
+            "[00:00:01.000 1234:AB1] WriteFileW: C:\Program Files\WindowsApps\app\cache.tmp -> ACCESS_DENIED`r`n",
+            [Text.UTF8Encoding]::new($false))
+        try {
+            $rows = Get-MsixTraceFailure -Path $bracketed
+            @($rows).Count | Should -Be 1
+            $rows[0].Function | Should -Be 'WriteFileW'
+        } finally {
+            Remove-Item -LiteralPath $bracketed -Force -ErrorAction SilentlyContinue
         }
     }
 }

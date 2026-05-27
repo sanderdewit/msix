@@ -244,15 +244,15 @@ function Get-MsixManifest {
         [string]$Path
     )
 
-    if (-not (Test-Path $Path)) {
+    if (-not (Test-Path -LiteralPath $Path)) {
         throw "Path not found: $Path"
     }
-    $item = Get-Item $Path
+    $item = Get-Item -LiteralPath $Path
 
     if ($item.PSIsContainer) {
         # Folder — assume it's an unpacked workspace; look for AppxManifest.xml
         $candidate = Join-Path $item.FullName 'AppxManifest.xml'
-        if (-not (Test-Path $candidate)) {
+        if (-not (Test-Path -LiteralPath $candidate)) {
             throw "No AppxManifest.xml under '$($item.FullName)'."
         }
         return (_MsixLoadXmlSecure -Path $candidate)

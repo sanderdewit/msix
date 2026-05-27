@@ -68,7 +68,7 @@ function Get-MsixToolsRoot {
         $cursor = Split-Path $cursor -Parent
         if (-not $cursor) { break }
         # Same-level siblings under this ancestor
-        $sibling = Get-ChildItem $cursor -Directory -ErrorAction SilentlyContinue |
+        $sibling = Get-ChildItem -LiteralPath $cursor -Directory -ErrorAction SilentlyContinue |
                    Where-Object { Test-Path "$($_.FullName)\Tools\MakeAppx.exe" } |
                    Sort-Object Name -Descending |
                    Select-Object -First 1
@@ -86,9 +86,9 @@ function Get-MsixToolsRoot {
     # 4) Windows SDK default paths — pick the highest-versioned bin dir
     foreach ($arch in @('x64','x86')) {
         $kitBin = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
-        if (Test-Path $kitBin) {
+        if (Test-Path -LiteralPath $kitBin) {
             # Versioned subfolders + a flat <arch> root (older SDKs)
-            $candidate = Get-ChildItem $kitBin -Directory -ErrorAction SilentlyContinue |
+            $candidate = Get-ChildItem -LiteralPath $kitBin -Directory -ErrorAction SilentlyContinue |
                          Where-Object { Test-Path "$($_.FullName)\$arch\makeappx.exe" } |
                          Sort-Object Name -Descending |
                          Select-Object -First 1

@@ -92,7 +92,7 @@ function Install-MsixMgr {
         -Force:$Force `
         -PostInstall {
             param($dest)
-            $exe = Get-ChildItem $dest -Recurse -Filter 'msixmgr.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+            $exe = Get-ChildItem -LiteralPath $dest -Recurse -Filter 'msixmgr.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($exe) {
                 $env:MSIX_MSIXMGR_PATH = $exe.FullName
                 Write-MsixLog Info "msixmgr installed: $($exe.FullName)"
@@ -174,10 +174,10 @@ function Get-MsixMgrVersion {
     param([string]$Path)
 
     if (-not $Path) { $Path = Resolve-MsixMgrPath }
-    if (-not $Path -or -not (Test-Path $Path)) {
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) {
         return [pscustomobject]@{ Path = $Path; Installed = $false; Version = $null }
     }
-    $info = Get-Item $Path
+    $info = Get-Item -LiteralPath $Path
     return [pscustomobject]@{
         Path      = $info.FullName
         Installed = $true
@@ -220,7 +220,7 @@ function Resolve-MsixMgrPath {
         (Join-Path $toolsRoot 'msixmgr\x86\msixmgr.exe'),
         (Join-Path $toolsRoot 'Tools\msixmgr.exe')
     )) {
-        if (Test-Path $p) { return $p }
+        if (Test-Path -LiteralPath $p) { return $p }
     }
     return $null
 }
@@ -328,7 +328,7 @@ function New-MsixAppAttachImage {
     }
 
     foreach ($p in $PackagePath) {
-        if (-not (Test-Path $p)) { throw "Package not found: $p" }
+        if (-not (Test-Path -LiteralPath $p)) { throw "Package not found: $p" }
     }
 
     if ($FileType -eq 'cim') {
@@ -346,7 +346,7 @@ function New-MsixAppAttachImage {
             $first = $false
         }
         Write-MsixLog Info "App Attach CIM created: $OutputPath"
-        return Get-Item $OutputPath
+        return Get-Item -LiteralPath $OutputPath
     }
 
     # ──────────── VHDX path ────────────
@@ -355,7 +355,7 @@ function New-MsixAppAttachImage {
     }
 
     if (-not $SizeGB) {
-        $totalBytes = ($PackagePath | ForEach-Object { (Get-Item $_).Length } | Measure-Object -Sum).Sum
+        $totalBytes = ($PackagePath | ForEach-Object { (Get-Item -LiteralPath $_).Length } | Measure-Object -Sum).Sum
         # Unpacked is roughly 2-3x compressed; pad another 20% headroom; minimum 1 GB
         $SizeGB = [math]::Max(1, [math]::Ceiling(($totalBytes * 3 * 1.2) / 1GB))
         Write-MsixLog Info "Auto-sized VHDX: ${SizeGB} GB"
@@ -391,7 +391,7 @@ function New-MsixAppAttachImage {
     }
 
     Write-MsixLog Info "App Attach VHDX created: $OutputPath"
-    return Get-Item $OutputPath
+    return Get-Item -LiteralPath $OutputPath
 }
 
 
@@ -415,7 +415,7 @@ function Mount-MsixAppAttachImage {
     .EXAMPLE
         # Inspect an image's contents from PowerShell.
         $mnt = Mount-MsixAppAttachImage -ImagePath C:\images\app.vhdx
-        Get-ChildItem $mnt.DriveLetter
+        Get-ChildItem -LiteralPath $mnt.DriveLetter
         Dismount-MsixAppAttachImage -ImagePath C:\images\app.vhdx
     #>
     [CmdletBinding()]
@@ -424,7 +424,7 @@ function Mount-MsixAppAttachImage {
         [string]$ImagePath
     )
 
-    if (-not (Test-Path $ImagePath)) { throw "Image not found: $ImagePath" }
+    if (-not (Test-Path -LiteralPath $ImagePath)) { throw "Image not found: $ImagePath" }
 
     Mount-DiskImage -ImagePath $ImagePath -PassThru | Out-Null
     Start-Sleep -Milliseconds 500
@@ -481,10 +481,10 @@ function Test-MsixAppAttachImage {
     $m = Mount-MsixAppAttachImage -ImagePath $ImagePath
     try {
         if (-not $m.DriveLetter) { throw "Image mounted without an accessible volume." }
-        $packages = Get-ChildItem $m.DriveLetter -Directory -ErrorAction SilentlyContinue |
+        $packages = Get-ChildItem -LiteralPath $m.DriveLetter -Directory -ErrorAction SilentlyContinue |
                     ForEach-Object {
                         $manifest = Join-Path $_.FullName 'AppxManifest.xml'
-                        if (Test-Path $manifest) {
+                        if (Test-Path -LiteralPath $manifest) {
                             [xml]$x = _MsixLoadXmlSecure -Path $manifest
                             [pscustomobject]@{
                                 Folder      = $_.Name

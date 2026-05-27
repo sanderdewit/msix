@@ -40,7 +40,7 @@ function Get-MsixFontCandidate {
     param([Parameter(Mandatory)][string]$PackagePath)
 
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-fonts"
     try {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
@@ -93,7 +93,7 @@ function Get-MsixDesktopShortcutCandidate {
     param([Parameter(Mandatory)][string]$PackagePath)
 
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-shortcuts"
     try {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
@@ -250,7 +250,7 @@ function Get-MsixCapabilityHint {
     param([Parameter(Mandatory)][string]$PackagePath)
 
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-caphints"
     try {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
@@ -307,7 +307,7 @@ function Get-MsixNestedPackageCandidate {
     param([Parameter(Mandatory)][string]$PackagePath)
 
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-nested"
     try {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
@@ -409,7 +409,7 @@ function Get-MsixPluginExtensionPoint {
     )
 
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-plugins"
     try {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')

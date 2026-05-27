@@ -315,14 +315,14 @@ function Remove-MsixUninstallerArtifact {
                     ($PathPatterns | Where-Object { $name -match $_ }).Count -gt 0
                 } |
                 ForEach-Object {
-                    Remove-Item $_.FullName -Force
+                    Remove-Item -LiteralPath $_.FullName -Force
                     $removedFiles += $_.FullName.Substring($workspace.Length + 1)
                 }
 
             # ── Strip Registry.dat Uninstall\* entries ────────────────────
             $removedKeys = @()
             $datPath = Join-Path $workspace 'Registry.dat'
-            if (-not $KeepRegistry -and (Test-Path $datPath)) {
+            if (-not $KeepRegistry -and (Test-Path -LiteralPath $datPath)) {
                 # Parse + mutate the hive via offreg.dll (no elevation required).
                 # ORSaveHive cannot overwrite, so we save to a sibling path and replace.
                 $newDat = "$datPath.new"
@@ -501,7 +501,7 @@ function Remove-MsixUpdaterArtifact {
                     ($PathPatterns | Where-Object { $name -match $_ }).Count -gt 0
                 } |
                 ForEach-Object {
-                    Remove-Item $_.FullName -Force
+                    Remove-Item -LiteralPath $_.FullName -Force
                     $removedFiles += $_.FullName.Substring($workspace.Length + 1)
                 }
 
@@ -513,7 +513,7 @@ function Remove-MsixUpdaterArtifact {
                     ($rel -match '(^|\\)tasks\\') -or ($rel -match '\\vfs\\windows\\tasks\\')
                 } |
                 ForEach-Object {
-                    Remove-Item $_.FullName -Force
+                    Remove-Item -LiteralPath $_.FullName -Force
                     $removedTasks += $_.FullName.Substring($workspace.Length + 1)
                 }
 
@@ -603,7 +603,7 @@ function Remove-MsixShellRegistryArtifact {
             param($workspace)
 
             $datPath = Join-Path $workspace 'Registry.dat'
-            if (-not (Test-Path $datPath)) {
+            if (-not (Test-Path -LiteralPath $datPath)) {
                 Write-MsixLog Info 'No Registry.dat in package — nothing to clean.'
                 return $null
             }

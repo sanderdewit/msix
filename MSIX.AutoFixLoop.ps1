@@ -274,7 +274,7 @@ function Invoke-MsixAutoFixLoop {
                 Write-MsixLog Warning "AutoFixLoop: trace capture failed on pass $pass - $_"
             }
 
-            if ($prevTracePath -and (Test-Path $tracePath)) {
+            if ($prevTracePath -and (Test-Path -LiteralPath $tracePath)) {
                 $delta = Compare-MsixTrace -Baseline $prevTracePath -Candidate $tracePath
                 $delta | ConvertTo-Json -Depth 10 -Compress |
                     Out-File (Join-Path $passDir 'trace-delta.json') -Encoding utf8

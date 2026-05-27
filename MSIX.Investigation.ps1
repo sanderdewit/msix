@@ -101,7 +101,7 @@ function Resolve-MsixProcMonPath {
         "${env:ProgramFiles}\SysInternals\Procmon.exe",
         "${env:ProgramFiles}\SysInternalsSuite\Procmon.exe"
     )) {
-        if (Test-Path $p) { return $p }
+        if (Test-Path -LiteralPath $p) { return $p }
     }
     return $null
 }
@@ -179,7 +179,7 @@ function Invoke-MsixProcMonCapture {
     Write-MsixLog Info "Stopping Process Monitor capture"
     Start-Process -FilePath $procmon -ArgumentList @('/Terminate') -Wait
 
-    if (-not (Test-Path $OutputPml)) {
+    if (-not (Test-Path -LiteralPath $OutputPml)) {
         throw "Procmon capture failed; PML not created: $OutputPml"
     }
     return $OutputPml
@@ -205,7 +205,7 @@ function Get-MsixProcMonFailure {
         [string]$ProcessName
     )
 
-    if (-not (Test-Path $PmlPath)) { throw "PML not found: $PmlPath" }
+    if (-not (Test-Path -LiteralPath $PmlPath)) { throw "PML not found: $PmlPath" }
 
     $procmon = Resolve-MsixProcMonPath
     if (-not $procmon) { throw 'procmon.exe not found.' }
@@ -214,7 +214,7 @@ function Get-MsixProcMonFailure {
     Write-MsixLog Info "Converting PML -> CSV: $csv"
 
     $null = Invoke-MsixProcess $procmon -ArgumentList @('/OpenLog', $PmlPath, '/SaveAs', $csv, '/SaveApplyFilter', '/Quiet', '/Terminate')
-    if (-not (Test-Path $csv)) {
+    if (-not (Test-Path -LiteralPath $csv)) {
         throw "Procmon failed to export CSV from $PmlPath"
     }
 
@@ -260,7 +260,7 @@ function Get-MsixStaticAnalysis {
     )
 
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-static"
     $findings  = @()
 
@@ -296,7 +296,7 @@ function Get-MsixStaticAnalysis {
         $psfApps = @($apps | Where-Object { $_.GetAttribute('Executable') -match 'PsfLauncher' })
         $hasPsf  = $psfApps.Count -gt 0
         if ($hasPsf) {
-            $cfgJson = @(Get-ChildItem $workspace -Recurse -Filter 'config.json' -ErrorAction SilentlyContinue)
+            $cfgJson = @(Get-ChildItem -LiteralPath $workspace -Recurse -Filter 'config.json' -ErrorAction SilentlyContinue)
             $hasPsf  = $cfgJson.Count -gt 0   # bare PsfLauncher with no config.json is not real PSF
         }
         if ($hasPsf) {
@@ -317,7 +317,7 @@ function Get-MsixStaticAnalysis {
             if ($exe.Contains('\') -and -not $hasPsf) {
                 $relDir = $exe.Substring(0, $exe.LastIndexOf('\'))
                 $exeFs  = Join-Path $workspace $exe
-                if (Test-Path $exeFs) {
+                if (Test-Path -LiteralPath $exeFs) {
                     $companions = Get-ChildItem (Split-Path $exeFs) -File -ErrorAction SilentlyContinue |
                                   Where-Object { $_.Extension -in '.ini', '.cfg', '.config', '.txt', '.dat', '.dll' }
                     if ($companions) {
@@ -349,8 +349,8 @@ function Get-MsixStaticAnalysis {
                 # report.
                 $hasDir = $exe.Contains('\')
                 $appDir = if ($hasDir) { Join-Path $workspace ($exe.Substring(0, $exe.LastIndexOf('\'))) } else { $workspace }
-                if (Test-Path $appDir) {
-                    $writableHints = Get-ChildItem $appDir -Recurse -File -ErrorAction SilentlyContinue |
+                if (Test-Path -LiteralPath $appDir) {
+                    $writableHints = Get-ChildItem -LiteralPath $appDir -Recurse -File -ErrorAction SilentlyContinue |
                                      Where-Object { $_.Extension -in '.log', '.tmp', '.cache' -or
                                                     $_.Name -match '^(settings|user|state)\.' }
                     if ($writableHints) {

@@ -646,7 +646,7 @@ function Add-MsixPsfV2 {
         $firstExe  = $apps[0].GetAttribute('Executable')
         if (-not $firstExe) {
             # Fallback: scan workspace for the first .exe that isn't a PSF launcher
-            $firstExe = Get-ChildItem $workspace -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue |
+            $firstExe = Get-ChildItem -LiteralPath $workspace -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue |
                         Where-Object { $_.Name -notmatch '^Psf' } |
                         Select-Object -First 1 |
                         ForEach-Object { $_.FullName.Substring($workspace.Length + 1) }
@@ -670,9 +670,9 @@ function Add-MsixPsfV2 {
         $isPsfPresent  = $apps | Where-Object { $psfLauncherRx.IsMatch($_.GetAttribute('Executable')) } |
                          Select-Object -First 1
 
-        if ($isPsfPresent -and (Test-Path $configPath)) {
+        if ($isPsfPresent -and (Test-Path -LiteralPath $configPath)) {
             # Merge mode: read existing config, append new fixups to each process entry
-            $existingCfg  = Get-Content $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            $existingCfg  = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
             $existingApps = @($existingCfg.applications)
 
             # Build a map of process entries keyed by executable name
@@ -736,9 +736,9 @@ function Add-MsixPsfV2 {
         )
         foreach ($f in $runtimeFiles) {
             $src = Join-Path $PsfSourcePath $f
-            if (Test-Path $src) {
+            if (Test-Path -LiteralPath $src) {
                 if ($PSCmdlet.ShouldProcess($src, "Copy PSF runtime")) {
-                    Copy-Item $src $appFolder -Force
+                    Copy-Item -LiteralPath $src -Destination $appFolder -Force
                     Write-MsixLog Debug "Copied: $f"
                 }
             } else {
@@ -758,9 +758,9 @@ function Add-MsixPsfV2 {
                 $src = Join-Path $PsfSourcePath $dllName
             }
 
-            if (Test-Path $src) {
+            if (Test-Path -LiteralPath $src) {
                 if ($PSCmdlet.ShouldProcess($src, "Copy fixup DLL")) {
-                    Copy-Item $src (Join-Path $appFolder $dllName) -Force
+                    Copy-Item -LiteralPath $src -Destination (Join-Path $appFolder $dllName) -Force
                     Write-MsixLog Debug "Fixup copied: $dllName"
                 }
             } else {
@@ -771,8 +771,8 @@ function Add-MsixPsfV2 {
         # --- Optional extra files (e.g. start scripts, .lnk, icons) ---
         if ($AdditionalFiles) {
             foreach ($extra in $AdditionalFiles) {
-                if (Test-Path $extra) {
-                    Copy-Item $extra $appFolder -Force
+                if (Test-Path -LiteralPath $extra) {
+                    Copy-Item -LiteralPath $extra -Destination $appFolder -Force
                     Write-MsixLog Debug "Extra file copied: $extra"
                 } else {
                     Write-MsixLog Warning "Additional file not found: $extra"
@@ -784,8 +784,8 @@ function Add-MsixPsfV2 {
         $needsWrapper = @($AppOptions) | Where-Object { $_.kind -in 'startScript','endScript' }
         if ($needsWrapper) {
             $wrapper = Join-Path $PsfSourcePath 'StartingScriptWrapper.ps1'
-            if (Test-Path $wrapper) {
-                Copy-Item $wrapper $appFolder -Force
+            if (Test-Path -LiteralPath $wrapper) {
+                Copy-Item -LiteralPath $wrapper -Destination $appFolder -Force
                 Write-MsixLog Debug "StartingScriptWrapper.ps1 copied"
             } else {
                 Write-MsixLog Warning "StartingScriptWrapper.ps1 not found in $PsfSourcePath"

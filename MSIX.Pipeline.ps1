@@ -361,7 +361,7 @@ function _MsixMutatePackage {
     if (-not $NoChangeMessage) { $NoChangeMessage = "No changes for $Operation." }
 
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
     $wsName    = if ($WorkspaceSuffix) { "$($fileinfo.BaseName)$WorkspaceSuffix" } else { "$($fileinfo.BaseName)-$Operation" }
     $workspace = New-MsixWorkspace $wsName
 

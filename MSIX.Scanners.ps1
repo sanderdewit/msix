@@ -50,7 +50,7 @@ function Get-MsixUninstallerCandidate {
         '^uninstaller.*\.exe$'
     )
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-unin"
     try {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
@@ -127,7 +127,7 @@ function Get-MsixUpdaterCandidate {
     $excludePatterns = @('^psf', '^msvc', '^vcruntime', '^api-ms-win-', '^msix')
 
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-upd"
     try {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
@@ -215,7 +215,7 @@ function Get-MsixUninstallRegistryEntry {
     param([Parameter(Mandatory)][string]$PackagePath)
 
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-uninreg"
 
     try {
@@ -223,7 +223,7 @@ function Get-MsixUninstallRegistryEntry {
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         $datPath = Join-Path $workspace 'Registry.dat'
-        if (-not (Test-Path $datPath)) {
+        if (-not (Test-Path -LiteralPath $datPath)) {
             Write-MsixLog Info 'No Registry.dat in package.'
             return @()
         }
@@ -294,7 +294,7 @@ function Get-MsixRunKeyEntry {
     param([Parameter(Mandatory)][string]$PackagePath)
 
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-runkeys"
     try {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
@@ -304,7 +304,7 @@ function Get-MsixRunKeyEntry {
         $hits = @()
         foreach ($dat in @('Registry.dat','User.dat')) {
             $datPath = Join-Path $workspace $dat
-            if (-not (Test-Path $datPath)) { continue }
+            if (-not (Test-Path -LiteralPath $datPath)) { continue }
             # Best-effort string scan — full hive parsing requires reg.exe load.
             try {
                 $bytes = [IO.File]::ReadAllBytes($datPath)
@@ -437,14 +437,14 @@ function Get-MsixShellContextMenuEntry {
     param([Parameter(Mandatory)][string]$PackagePath)
 
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-shellctx"
     try {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         $datPath = Join-Path $workspace 'Registry.dat'
-        if (-not (Test-Path $datPath)) { return @() }
+        if (-not (Test-Path -LiteralPath $datPath)) { return @() }
 
         $results = [System.Collections.Generic.List[object]]::new()
         $clsidGuidRegex = '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$'
@@ -594,14 +594,14 @@ function Get-MsixComServerEntry {
     param([Parameter(Mandatory)][string]$PackagePath)
 
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-comsrv"
     try {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         $datPath = Join-Path $workspace 'Registry.dat'
-        if (-not (Test-Path $datPath)) { return @() }
+        if (-not (Test-Path -LiteralPath $datPath)) { return @() }
 
         $results = [System.Collections.Generic.List[object]]::new()
         $clsidGuidRegex = '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$'
@@ -698,7 +698,7 @@ function Get-MsixAliasCandidate {
     param([Parameter(Mandatory)][string]$PackagePath)
 
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item $PackagePath
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-alias"
     try {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
@@ -974,7 +974,7 @@ function Get-MsixHeuristicFinding {
     # ── Manifest-level findings (alternatives to PSF) ───────────────────────
     try {
         $toolsRoot = Get-MsixToolsRoot
-        $fileinfo  = Get-Item $PackagePath
+        $fileinfo  = Get-Item -LiteralPath $PackagePath
         $tmp = New-MsixWorkspace "$($fileinfo.BaseName)-mfheur"
         try {
             $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $tmp, '/o')

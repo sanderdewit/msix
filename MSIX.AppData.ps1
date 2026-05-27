@@ -64,7 +64,7 @@ function Get-MsixContainerAppData {
             VirtualRoaming    = Join-Path $cache 'Roaming'
             VirtualTemp       = Join-Path $cache 'Temp'
             AcExists          = Test-Path (Join-Path $base 'AC')
-            CacheExists       = Test-Path $cache
+            CacheExists       = Test-Path -LiteralPath $cache
         }
     }
 }
@@ -102,7 +102,7 @@ function Get-MsixOrphanedAppData {
     )
 
     $roaming = $env:APPDATA
-    if (-not (Test-Path $roaming)) { throw "Roaming AppData not found: $roaming" }
+    if (-not (Test-Path -LiteralPath $roaming)) { throw "Roaming AppData not found: $roaming" }
 
     $installed = Get-AppxPackage |
                  ForEach-Object { @($_.Name, $_.PackageFamilyName, $_.PublisherId, $_.Publisher) } |
@@ -120,7 +120,7 @@ function Get-MsixOrphanedAppData {
         if (-not $matched) {
             $size = 0
             try {
-                $size = (Get-ChildItem $folder.FullName -Recurse -File -ErrorAction SilentlyContinue |
+                $size = (Get-ChildItem -LiteralPath $folder.FullName -Recurse -File -ErrorAction SilentlyContinue |
                          Measure-Object -Property Length -Sum).Sum
             } catch {
                 Write-MsixLog Debug "Could not measure orphaned AppData folder '$($folder.FullName)': $_"
@@ -173,11 +173,11 @@ function Copy-MsixHostAppDataIntoPackage {
         [string]$DestinationSubfolder
     )
 
-    if (-not (Test-Path $SourcePath)) { throw "Source not found: $SourcePath" }
+    if (-not (Test-Path -LiteralPath $SourcePath)) { throw "Source not found: $SourcePath" }
 
     $info = Get-MsixContainerAppData -PackageName $PackageName
     if (-not $DestinationSubfolder) {
-        $DestinationSubfolder = (Get-Item $SourcePath).Name
+        $DestinationSubfolder = (Get-Item -LiteralPath $SourcePath).Name
     }
     $dest = Join-Path $info.VirtualRoaming $DestinationSubfolder
 
@@ -256,8 +256,8 @@ function Get-MsixPackageStorageSummary {
         $appx = Get-AppxPackage -Name $info.Name | Select-Object -First 1
 
         function _size($p) {
-            if (-not (Test-Path $p)) { return 0 }
-            $s = (Get-ChildItem $p -Recurse -File -ErrorAction SilentlyContinue |
+            if (-not (Test-Path -LiteralPath $p)) { return 0 }
+            $s = (Get-ChildItem -LiteralPath $p -Recurse -File -ErrorAction SilentlyContinue |
                   Measure-Object -Property Length -Sum).Sum
             [math]::Round(([double]$s) / 1MB, 2)
         }

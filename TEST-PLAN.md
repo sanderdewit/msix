@@ -475,6 +475,26 @@ Anything in this document that *can't* be expressed as a Pester test (real
 package installs, real signing services, real shell-extension activation)
 should be run manually before each release.
 
+### Running the suite on hardened hosts (issue #47)
+
+Pester emits an NUnit XML artifact by default. The exporter calls
+`Get-CimInstance Win32_*` for environment metadata, which needs WMI/CIM
+privileges that locked-down developer workstations and build agents may
+revoke. The tests themselves don't care, but the end-step throws and
+the wrapper correctly exits with the infra-failure code.
+
+If you see `Get-CimInstance: Access denied` from
+`Write-NUnitEnvironmentInformation` on your host, run the suite with
+`-DisableTestResult` (alias `-NoTestResult`):
+
+```powershell
+# Hardened workstation -- skip the NUnit artifact:
+pwsh .\MSIX.Tests\Invoke-MsixTests.ps1 -DisableTestResult
+```
+
+This disables `TestResult.Enabled` for that run only. CI keeps the
+default and still publishes the NUnit XML for downstream consumption.
+
 ---
 
 ## Release checklist

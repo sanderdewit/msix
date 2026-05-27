@@ -102,8 +102,8 @@ function _MsixRenderTemplate {
         [string]$TemplatePath,
         [hashtable]$Parameters
     )
-    if (-not (Test-Path $TemplatePath)) { throw "Template not found: $TemplatePath" }
-    $text = Get-Content $TemplatePath -Raw
+    if (-not (Test-Path -LiteralPath $TemplatePath)) { throw "Template not found: $TemplatePath" }
+    $text = Get-Content -LiteralPath $TemplatePath -Raw
 
     # Find every <#PARAM:Name#> in the template, replace from $Parameters,
     # complain about anything left unsubstituted.
@@ -201,7 +201,7 @@ function New-MsixStandardScript {
 
     if ($PSCmdlet.ShouldProcess($OutputPath, "Generate $Name from template")) {
         $dir = Split-Path $OutputPath -Parent
-        if ($dir -and -not (Test-Path $dir)) { New-Item $dir -ItemType Directory -Force | Out-Null }
+        if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item $dir -ItemType Directory -Force | Out-Null }
         Set-Content -Path $OutputPath -Value $content -Encoding utf8
         Write-MsixLog Info "Generated $Name -> $OutputPath"
     }
@@ -210,7 +210,7 @@ function New-MsixStandardScript {
         Set-MsixScriptSignature -ScriptPath $OutputPath -Pfx $Pfx -PfxPassword $PfxPassword -TimestampUrl $TimestampUrl
     }
 
-    return Get-Item $OutputPath
+    return Get-Item -LiteralPath $OutputPath
 }
 
 
@@ -256,8 +256,8 @@ function Set-MsixScriptSignature {
         [string]$TimestampUrl = 'http://timestamp.digicert.com'
     )
 
-    if (-not (Test-Path $ScriptPath)) { throw "Script not found: $ScriptPath" }
-    if (-not (Test-Path $Pfx))        { throw "PFX not found: $Pfx" }
+    if (-not (Test-Path -LiteralPath $ScriptPath)) { throw "Script not found: $ScriptPath" }
+    if (-not (Test-Path -LiteralPath $Pfx))        { throw "PFX not found: $Pfx" }
 
     $cert = Get-PfxCertificate -FilePath $Pfx -Password $PfxPassword -ErrorAction Stop
 

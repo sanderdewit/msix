@@ -142,7 +142,7 @@ function Get-MsixTraceOutput {
         [string]$FunctionPattern
     )
 
-    if (-not (Test-Path $Path)) { throw "Trace log not found: $Path" }
+    if (-not (Test-Path -LiteralPath $Path)) { throw "Trace log not found: $Path" }
 
     Get-Content -LiteralPath $Path |
         ConvertFrom-MsixTraceLine |

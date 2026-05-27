@@ -56,7 +56,7 @@ function Resolve-MsixDebugViewPath {
         "${env:ProgramFiles}\SysInternalsSuite\Dbgview64.exe",
         "${env:ProgramFiles}\SysInternalsSuite\Dbgview.exe"
     )) {
-        if (Test-Path $p) { return $p }
+        if (Test-Path -LiteralPath $p) { return $p }
     }
     return $null
 }
@@ -253,7 +253,7 @@ function Set-MsixProcMonFilterRule {
         $regPath = 'HKCU:\Software\Sysinternals\Process Monitor'
         if (-not $PSCmdlet.ShouldProcess($regPath, 'Set ProcMon filter rules')) { return $false }
 
-        if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
+        if (-not (Test-Path -LiteralPath $regPath)) { New-Item -Path $regPath -Force | Out-Null }
         Set-ItemProperty -Path $regPath -Name 'FilterRules' -Value $bytes.ToArray() -Type Binary
         return $true
     } catch {
@@ -358,7 +358,7 @@ function Start-MsixDebugSession {
 
     if (-not $PSCmdlet.ShouldProcess($PackagePath, 'Start MSIX Debug Session')) { return }
 
-    $fileinfo = Get-Item $PackagePath
+    $fileinfo = Get-Item -LiteralPath $PackagePath
     if (-not $OutputDirectory) {
         $OutputDirectory = Join-Path ([Environment]::GetFolderPath('Desktop')) "msix-debug-$($fileinfo.BaseName)"
     }
@@ -703,9 +703,9 @@ function New-MsixSandboxConfig {
         [bool]$Networking = $true
     )
 
-    if (-not (Test-Path $DropFolder)) { throw "DropFolder not found: $DropFolder" }
+    if (-not (Test-Path -LiteralPath $DropFolder)) { throw "DropFolder not found: $DropFolder" }
     $msix = Join-Path $DropFolder $PackageName
-    if (-not (Test-Path $msix)) { throw "Package not in drop folder: $msix" }
+    if (-not (Test-Path -LiteralPath $msix)) { throw "Package not in drop folder: $msix" }
 
     if (-not $ModulePath)  { $ModulePath  = $PSScriptRoot }
     if (-not $RuntimePath) {
@@ -713,7 +713,7 @@ function New-MsixSandboxConfig {
         $runtimeResult = Update-MsixAppRuntime
         $RuntimePath   = $runtimeResult.Path
     }
-    if (-not (Test-Path $RuntimePath)) {
+    if (-not (Test-Path -LiteralPath $RuntimePath)) {
         throw "RuntimePath not found: $RuntimePath. Run Install-MsixAppRuntime first."
     }
 
@@ -735,7 +735,7 @@ function New-MsixSandboxConfig {
     } catch {
         Write-MsixLog Warning "Could not pre-detect WindowsAppRuntime dependencies: $($_.Exception.Message)"
     }
-    if ($CertPath -and -not (Test-Path $CertPath)) {
+    if ($CertPath -and -not (Test-Path -LiteralPath $CertPath)) {
         throw "CertPath not found: $CertPath"
     }
 
@@ -749,7 +749,7 @@ function New-MsixSandboxConfig {
         $certLeaf = Split-Path $CertPath -Leaf
         $certTarget = Join-Path $DropFolder $certLeaf
         if ((Resolve-Path $CertPath).Path -ne (Resolve-Path $certTarget -ErrorAction SilentlyContinue).Path) {
-            Copy-Item $CertPath $certTarget -Force
+            Copy-Item -LiteralPath $CertPath -Destination $certTarget -Force
         }
         $certFileInSandbox = "C:\msix-drop\$certLeaf"
     }

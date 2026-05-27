@@ -51,3 +51,41 @@ Describe 'Pester wrapper fail-fast contract (issue #43)' -Tag 'TestRunner' {
         $valIdx   | Should -BeLessThan $writeIdx
     }
 }
+
+Describe 'Pester wrapper -DisableTestResult switch (issue #47)' -Tag 'TestRunner' {
+
+    # Hardened workstations / build agents may revoke the WMI/CIM
+    # privileges Pester's NUnit metadata exporter needs (Get-CimInstance
+    # Win32_*). The tests don't care, but Pester's end-step throws and
+    # the wrapper exits with the infra-failure code. -DisableTestResult
+    # skips the NUnit XML emission so the suite can run to completion.
+
+    BeforeAll {
+        # Resolve the wrapper as a real PowerShell command so we can
+        # inspect its parameter metadata without invoking it.
+        $script:WrapperCmd = Get-Command -Name (Resolve-Path (Join-Path $PSScriptRoot 'Invoke-MsixTests.ps1')).Path
+    }
+
+    It 'Wrapper exposes -DisableTestResult (with -NoTestResult alias)' {
+        $script:WrapperCmd.Parameters.ContainsKey('DisableTestResult') | Should -BeTrue
+        $script:WrapperCmd.Parameters['DisableTestResult'].ParameterType.FullName |
+            Should -Be 'System.Management.Automation.SwitchParameter'
+        $script:WrapperCmd.Parameters['DisableTestResult'].Aliases | Should -Contain 'NoTestResult'
+    }
+
+    It 'When -DisableTestResult is set, the script disables TestResult.Enabled' {
+        # Source-level guard: there must be an explicit if/else gating the
+        # TestResult configuration on the switch. Otherwise a future edit
+        # could silently re-enable the NUnit exporter on hardened hosts.
+        $script:WrapperSrc | Should -Match 'if\s*\(\s*\$DisableTestResult\s*\)\s*\{[\s\S]*?\$config\.TestResult\.Enabled\s*=\s*\$false'
+        # And the default branch (no switch) must enable it -- CI relies
+        # on the artifact.
+        $script:WrapperSrc | Should -Match '\}\s*else\s*\{[\s\S]*?\$config\.TestResult\.Enabled\s*=\s*\$true'
+    }
+
+    It 'Disabled-mode notice is loud (Write-Host with a colour)' {
+        # An operator running with -DisableTestResult must SEE that no
+        # artifact will be produced; silent skip would defeat the purpose.
+        $script:WrapperSrc | Should -Match 'TestResult XML emission DISABLED.+-DisableTestResult'
+    }
+}

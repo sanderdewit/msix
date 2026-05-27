@@ -52,7 +52,7 @@ function Get-MsixInfo {
     )
 
     PROCESS {
-        $fileinfo  = Get-Item $PackagePath
+        $fileinfo  = Get-Item -LiteralPath $PackagePath
         [xml]$appinfo = Get-MsixManifest -Path $fileinfo.FullName
         $signinfo     = Get-AuthenticodeSignature -FilePath $fileinfo
 
@@ -355,7 +355,7 @@ function New-MsixPsfJson {
     )
 
     Write-Warning 'New-MsixPsfJson is obsolete and produces incorrect output for multi-app packages. Use New-MsixPsfConfig with typed builders (New-MsixPsfFileRedirectionConfig, etc.) and Add-MsixPsfV2 instead.'
-    [xml]$appinfo  = _MsixLoadXmlSecure -Path (Get-Item $AppxManifest).FullName
+    [xml]$appinfo  = _MsixLoadXmlSecure -Path (Get-Item -LiteralPath $AppxManifest).FullName
     $apps          = @($appinfo.Package.Applications.Application)
 
     $appEntries = foreach ($app in $apps) {

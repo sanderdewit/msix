@@ -212,7 +212,7 @@ function _MsixExpandZip {
         [string]$DestinationPath
     )
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    if (-not (Test-Path $DestinationPath)) {
+    if (-not (Test-Path -LiteralPath $DestinationPath)) {
         New-Item $DestinationPath -ItemType Directory -Force | Out-Null
     }
     [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $DestinationPath)
@@ -503,8 +503,8 @@ function Install-MsixPsfBinary {
     Write-MsixLog Info "Latest TMurgent PSF release: $tag"
 
     $marker = Join-Path $Destination 'psf.version'
-    if ((Test-Path $marker) -and -not $Force) {
-        $current = (Get-Content $marker -Raw -ErrorAction SilentlyContinue).Trim()
+    if ((Test-Path -LiteralPath $marker) -and -not $Force) {
+        $current = (Get-Content -LiteralPath $marker -Raw -ErrorAction SilentlyContinue).Trim()
         if ($current -eq $tag) {
             Write-MsixLog Info "PSF $tag already installed at $Destination. Use -Force to reinstall."
             return [pscustomobject]@{ Path = $Destination; Version = $tag; Updated = $false }
@@ -530,7 +530,7 @@ function Install-MsixPsfBinary {
             # any of them into the toolchain root.
             _MsixVerifyAuthenticodeFolder -Folder $tmp -ToolName 'PSF'
 
-            if (-not (Test-Path $Destination)) {
+            if (-not (Test-Path -LiteralPath $Destination)) {
                 New-Item $Destination -ItemType Directory -Force | Out-Null
                 $destinationCreated = $true
             }
@@ -591,8 +591,8 @@ function Get-MsixPsfBinariesVersion {
     $marker = Join-Path $Path 'psf.version'
     return [pscustomobject]@{
         Path        = $Path
-        Installed   = Test-Path $marker
-        Version     = if (Test-Path $marker) { (Get-Content $marker -Raw).Trim() } else { $null }
+        Installed   = Test-Path -LiteralPath $marker
+        Version     = if (Test-Path -LiteralPath $marker) { (Get-Content -LiteralPath $marker -Raw).Trim() } else { $null }
         HasLauncher = Test-Path (Join-Path $Path 'PsfLauncher32.exe')
     }
 }
@@ -693,7 +693,7 @@ function Install-MsixProcMon {
         -PostInstall {
             param($dest)
             $exe = Join-Path $dest 'Procmon.exe'
-            if (Test-Path $exe) {
+            if (Test-Path -LiteralPath $exe) {
                 $env:MSIX_PROCMON_PATH = $exe
                 Write-MsixLog Info "Process Monitor installed at $exe"
             } else {
@@ -794,8 +794,8 @@ function Install-MsixDebugView {
         -PostInstall {
             param($dest)
             $exe = Join-Path $dest 'Dbgview64.exe'
-            if (-not (Test-Path $exe)) { $exe = Join-Path $dest 'Dbgview.exe' }
-            if (Test-Path $exe) {
+            if (-not (Test-Path -LiteralPath $exe)) { $exe = Join-Path $dest 'Dbgview.exe' }
+            if (Test-Path -LiteralPath $exe) {
                 $env:MSIX_DEBUGVIEW_PATH = $exe
                 Write-MsixLog Info "DebugView installed at $exe"
             } else {
@@ -869,13 +869,13 @@ function Get-MsixDebugViewVersion {
     if (-not $Path) { $Path = Join-Path (Get-MsixToolsRoot) 'debugview' }
     $marker = Join-Path $Path 'debugview.installed'
     $exe    = Join-Path $Path 'Dbgview64.exe'
-    if (-not (Test-Path $exe)) { $exe = Join-Path $Path 'Dbgview.exe' }
+    if (-not (Test-Path -LiteralPath $exe)) { $exe = Join-Path $Path 'Dbgview.exe' }
 
     return [pscustomobject]@{
         Path        = $Path
-        Installed   = Test-Path $marker
-        InstalledOn = if (Test-Path $marker) { [datetime](Get-Content $marker -Raw).Trim() } else { $null }
-        Executable  = if (Test-Path $exe) { $exe } else { $null }
+        Installed   = Test-Path -LiteralPath $marker
+        InstalledOn = if (Test-Path -LiteralPath $marker) { [datetime](Get-Content -LiteralPath $marker -Raw).Trim() } else { $null }
+        Executable  = if (Test-Path -LiteralPath $exe) { $exe } else { $null }
     }
 }
 
@@ -971,8 +971,8 @@ function Install-MsixSdkTool {
 
     # ── Idempotency check ─────────────────────────────────────────────────
     $marker = Join-Path $Destination 'Tools\sdk.version'
-    if ((Test-Path $marker) -and -not $Force) {
-        $current = (Get-Content $marker -Raw -ErrorAction SilentlyContinue).Trim()
+    if ((Test-Path -LiteralPath $marker) -and -not $Force) {
+        $current = (Get-Content -LiteralPath $marker -Raw -ErrorAction SilentlyContinue).Trim()
         if ($current -eq "$Version|$Architecture") {
             Write-MsixLog Info "SDK tools $Version ($Architecture) already installed at $Destination\Tools."
             return [pscustomobject]@{ Path = "$Destination\Tools"; Version = $Version; Architecture = $Architecture; Updated = $false }
@@ -987,7 +987,7 @@ function Install-MsixSdkTool {
 
     if ($PSCmdlet.ShouldProcess("$Destination\Tools", "Install Microsoft.Windows.SDK.BuildTools $Version ($Architecture)")) {
         $toolsDir = Join-Path $Destination 'Tools'
-        $toolsDirExisted = Test-Path $toolsDir
+        $toolsDirExisted = Test-Path -LiteralPath $toolsDir
         try {
             _MsixDownloadFile -Url $url -Destination $nupkg
 
@@ -1015,7 +1015,7 @@ function Install-MsixSdkTool {
             # the AppxPackaging dependency DLLs that signtool needs at runtime).
             Copy-Item "$archDir\*" $toolsDir -Recurse -Force
 
-            "$Version|$Architecture" | Set-Content $marker -Encoding ascii
+            "$Version|$Architecture" | Set-Content -LiteralPath $marker -Encoding ascii
             Write-MsixLog Info "MakeAppx.exe + signtool.exe installed at $toolsDir"
 
             # Reset the cached tools root so the next Get-MsixToolsRoot picks this up
@@ -1077,7 +1077,7 @@ function Update-MsixSdkTool {
     if (-not $Destination) { $Destination = $PSScriptRoot }
     if (-not $PSCmdlet.ShouldProcess($Destination, 'Update SDK Tools')) { return }
     $marker = Join-Path $Destination 'Tools\sdk.version'
-    if (-not (Test-Path $marker)) {
+    if (-not (Test-Path -LiteralPath $marker)) {
         return Install-MsixSdkTool -Destination $Destination -Architecture $Architecture
     }
 
@@ -1088,7 +1088,7 @@ function Update-MsixSdkTool {
                ForEach-Object { [pscustomobject]@{ Raw=$_; Ver=[version]($_ -replace '[^0-9.]','') } } |
                Sort-Object Ver -Descending | Select-Object -First 1).Raw
 
-    $current = (Get-Content $marker -Raw).Trim()
+    $current = (Get-Content -LiteralPath $marker -Raw).Trim()
     if ($current -eq "$latest|$Architecture") {
         Write-MsixLog Info "SDK tools up to date ($latest, $Architecture)."
         return [pscustomobject]@{ Path = "$Destination\Tools"; Version = $latest; Architecture = $Architecture; Updated = $false }
@@ -1123,10 +1123,10 @@ function Get-MsixSdkToolsVersion {
     param([string]$Destination)
     if (-not $Destination) { $Destination = $PSScriptRoot }
     $marker = Join-Path $Destination 'Tools\sdk.version'
-    if (-not (Test-Path $marker)) {
+    if (-not (Test-Path -LiteralPath $marker)) {
         return [pscustomobject]@{ Path = "$Destination\Tools"; Installed = $false; Version = $null; Architecture = $null }
     }
-    $current = (Get-Content $marker -Raw).Trim()
+    $current = (Get-Content -LiteralPath $marker -Raw).Trim()
     $parts   = $current -split '\|'
     return [pscustomobject]@{
         Path         = "$Destination\Tools"
@@ -1230,7 +1230,7 @@ function Install-MsixAppRuntime {
     if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'runtime' }
 
     $marker = Join-Path $Destination 'runtime.installed'
-    if ((Test-Path $marker) -and -not $Force) {
+    if ((Test-Path -LiteralPath $marker) -and -not $Force) {
         # Check whether all requested channels are cached; if any is missing
         # we still need to download just that one (don't bail out).
         $missing = $Channels | Where-Object {

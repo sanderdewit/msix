@@ -10,18 +10,19 @@ Describe 'Template substitution is injection-safe (#49)' -Tag 'Security' {
 
     It 'doubles single quotes so a value cannot break out of its literal' {
         $tmpl = Join-Path -Path $TestDrive -ChildPath 'inj.ps1.tmpl'
-        Set-Content -LiteralPath $tmpl -Value "`$x = '<#PARAM:V#>'" -Encoding utf8
+        Set-Content -LiteralPath $tmpl -Value "`$x = '<#PARAM:V#>'" -Encoding utf8 -NoNewline
         $rendered = InModuleScope MSIX -Parameters @{ Tmpl = $tmpl } {
             param($Tmpl)
             _MsixRenderTemplate -TemplatePath $Tmpl -Parameters @{ V = "a'; bad" }
         }
-        $rendered | Should -Be "`$x = 'a''; bad'"
+        $rendered.Trim() | Should -Be "`$x = 'a''; bad'"
     }
 
     It 'produces a script with no injected statement for a hostile DisplayName' {
+        $payload = "x'; throw 'INJECTED'; '"
         $out = Join-Path -Path $TestDrive -ChildPath 'cs.ps1'
         New-MsixStandardScript -Name CreateShortcut -Parameters @{
-            DisplayName = "x'; throw 'INJECTED'; '"
+            DisplayName = $payload
             Target      = 'app.exe'
         } -OutputPath $out | Out-Null
 
@@ -37,7 +38,7 @@ Describe 'Template substitution is injection-safe (#49)' -Tag 'Security' {
         # And the payload must survive verbatim as an inert string constant.
         $strings = $ast.FindAll(
             { param($n) $n -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
-        @($strings.Value) | Should -Contain "x'; throw 'INJECTED'; "
+        @($strings.Value) | Should -Contain $payload
     }
 }
 

@@ -12,12 +12,12 @@ Describe 'Manifest namespace registry (v0.10)' -Tag 'Manifest' {
     }
 
     It 'Returns the documented uap10 URI' {
-        Get-MsixManifestNamespaceUri 'uap10' |
+        Get-MsixManifestNamespaceUri -Prefix 'uap10' |
             Should -Be 'http://schemas.microsoft.com/appx/manifest/uap/windows10/10'
     }
 
     It 'Returns the documented desktop6 URI' {
-        Get-MsixManifestNamespaceUri 'desktop6' |
+        Get-MsixManifestNamespaceUri -Prefix 'desktop6' |
             Should -Be 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/6'
     }
 

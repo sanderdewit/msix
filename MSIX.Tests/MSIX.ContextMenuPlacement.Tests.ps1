@@ -70,7 +70,7 @@ Describe 'Shell-extension context menu placement (TMEditX-verified pattern)' -Ta
                 $appExt = $m.CreateElement('Extensions', $m.Package.NamespaceURI)
                 $null = $app.AppendChild($appExt)
             }
-            $comUri    = Get-MsixManifestNamespaceUri 'com'
+            $comUri    = Get-MsixManifestNamespaceUri -Prefix 'com'
             $comExt    = $m.CreateElement('com:Extension', $comUri)
             $comExt.SetAttribute('Category', 'windows.comServer')
             $comServer = $m.CreateElement('com:ComServer', $comUri)

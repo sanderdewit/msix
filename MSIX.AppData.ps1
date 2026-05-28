@@ -53,7 +53,7 @@ function Get-MsixContainerAppData {
             throw "Multiple matches for '$PackageName'. Be more specific. Found: $(($appx.Name) -join ', ')"
         }
 
-        $base = Join-Path $env:LOCALAPPDATA "Packages\$($appx.PackageFamilyName)"
+        $base = Join-Path -Path $env:LOCALAPPDATA -ChildPath "Packages\$($appx.PackageFamilyName)"
         $cache = Join-Path -Path $base -ChildPath 'LocalCache'
 
         return [pscustomobject]@{
@@ -183,7 +183,7 @@ function Copy-MsixHostAppDataIntoPackage {
 
     if ($PSCmdlet.ShouldProcess($dest, "Copy from $SourcePath")) {
         New-Item -ItemType Directory -Path $dest -Force | Out-Null
-        Copy-Item "$SourcePath\*" $dest -Recurse -Force
+        Copy-Item -Path "$SourcePath\*" -Destination $dest -Recurse -Force
         Write-MsixLog -Level Info -Message "Copied $SourcePath -> $dest"
     }
     return $dest

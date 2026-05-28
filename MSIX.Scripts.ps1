@@ -91,7 +91,7 @@ function Get-MsixStandardScript {
             Description    = $v.Description
             RequiredParams = $v.RequiredParams
             OptionalParams = @($v.Defaults.Keys)
-            Template       = Join-Path $script:TemplateDir $v.Template
+            Template       = Join-Path -Path $script:TemplateDir -ChildPath $v.Template
         }
     }
 }
@@ -196,7 +196,7 @@ function New-MsixStandardScript {
     foreach ($k in $entry.Defaults.Keys) { $merged[$k] = $entry.Defaults[$k] }
     foreach ($k in $Parameters.Keys)     { $merged[$k] = $Parameters[$k] }
 
-    $tmpl    = Join-Path $script:TemplateDir $entry.Template
+    $tmpl    = Join-Path -Path $script:TemplateDir -ChildPath $entry.Template
     $content = _MsixRenderTemplate -TemplatePath $tmpl -Parameters $merged
 
     if ($PSCmdlet.ShouldProcess($OutputPath, "Generate $Name from template")) {

@@ -26,7 +26,7 @@ Describe 'Playbook bus' -Tag 'Playbooks' {
 
     Context 'Matching' {
         BeforeAll {
-            $script:TmpHive = Join-Path $env:TEMP "msix-playbook-test-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+            $script:TmpHive = Join-Path -Path $env:TEMP -ChildPath "msix-playbook-test-$([guid]::NewGuid().ToString('N').Substring(0,8))"
             New-Item -ItemType Directory -Path $script:TmpHive -Force | Out-Null
             # Synthesise a minimal manifest that the playbook should match.
             $xml = @'
@@ -50,7 +50,7 @@ Describe 'Playbook bus' -Tag 'Playbooks' {
   </Applications>
 </Package>
 '@
-            $script:ManifestPath = Join-Path $script:TmpHive 'AppxManifest.xml'
+            $script:ManifestPath = Join-Path -Path $script:TmpHive -ChildPath 'AppxManifest.xml'
             [System.IO.File]::WriteAllText($script:ManifestPath, $xml, [System.Text.UTF8Encoding]::new($false))
         }
         AfterAll {

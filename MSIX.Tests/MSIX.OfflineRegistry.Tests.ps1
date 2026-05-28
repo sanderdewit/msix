@@ -4,7 +4,7 @@
     # Build a synthetic hive entirely via the OR* APIs — guarantees the on-disk
     # format is one OROpenHiveByHandle understands (reg.exe save produces a
     # variant that fails with ERROR_BADDB on some Windows builds).
-    $script:TestHive = Join-Path $env:TEMP "msix-offreg-test-$([guid]::NewGuid().ToString('N').Substring(0,8)).dat"
+    $script:TestHive = Join-Path -Path $env:TEMP -ChildPath "msix-offreg-test-$([guid]::NewGuid().ToString('N').Substring(0,8)).dat"
 
     & (Get-Module MSIX) {
         param($hivePath)

@@ -16,7 +16,7 @@ Describe 'Issue #28: registry cleanup + idempotent ManifestFix detection' -Tag '
         }
 
         It 'Deletes a subtree with children — the case where bare ORDeleteKey fails' {
-            $hivePath = Join-Path $env:TEMP "msix-issue28-recdel-$([guid]::NewGuid().ToString('N').Substring(0,8)).dat"
+            $hivePath = Join-Path -Path $env:TEMP -ChildPath "msix-issue28-recdel-$([guid]::NewGuid().ToString('N').Substring(0,8)).dat"
             try {
                 & (Get-Module MSIX) {
                     # ($hivePath isn't needed inside — the test asserts in-memory
@@ -61,7 +61,7 @@ Describe 'Issue #28: registry cleanup + idempotent ManifestFix detection' -Tag '
         }
 
         It 'Returns $true (no-op) when deleting a subkey that does not exist' {
-            $hivePath = Join-Path $env:TEMP "msix-issue28-noexist-$([guid]::NewGuid().ToString('N').Substring(0,8)).dat"
+            $hivePath = Join-Path -Path $env:TEMP -ChildPath "msix-issue28-noexist-$([guid]::NewGuid().ToString('N').Substring(0,8)).dat"
             try {
                 $result = & (Get-Module MSIX) {
                     $h = _MsixCreateOfflineHive

@@ -169,7 +169,7 @@ function Invoke-MsixAutoFixLoop {
 
     # Per-run working directory
     $runId  = [guid]::NewGuid().ToString('N').Substring(0, 12)
-    $runDir = Join-Path $env:TEMP "msix-autofix-loop-$runId"
+    $runDir = Join-Path -Path $env:TEMP -ChildPath "msix-autofix-loop-$runId"
     $null   = New-Item -ItemType Directory -Path $runDir -Force
 
     # Determine the working copy path.

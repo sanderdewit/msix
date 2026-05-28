@@ -255,7 +255,7 @@ function Update-MsixSigner {
             # Without this, a signing failure leaves the user with an
             # unsigned modified package where their signed original used
             # to live.
-            $scratch = Join-Path $env:TEMP ("msix-resign-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($outputPath)))
+            $scratch = Join-Path -Path $env:TEMP -ChildPath ("msix-resign-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($outputPath)))
             $packOk = $false
             try {
                 $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
@@ -471,8 +471,8 @@ function Add-MsixAlias {
             Add-MsixManifestNamespace -Manifest $manifest -Prefix 'uap3'
             Add-MsixManifestNamespace -Manifest $manifest -Prefix 'desktop'
 
-            $uap3Uri    = Get-MsixManifestNamespaceUri 'uap3'
-            $desktopUri = Get-MsixManifestNamespaceUri 'desktop'
+            $uap3Uri    = Get-MsixManifestNamespaceUri -Prefix 'uap3'
+            $desktopUri = Get-MsixManifestNamespaceUri -Prefix 'desktop'
 
             $targets = @($manifest.Package.Applications.Application)
             if (-not $targetAll -and $targetAppIds) {

@@ -2,7 +2,7 @@
     Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 
     # Build a minimal .msix fixture so New-MsixRemediationPlan can fingerprint it.
-    $script:FixtureDir = Join-Path $env:TEMP "msix-remedplan-test-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    $script:FixtureDir = Join-Path -Path $env:TEMP -ChildPath "msix-remedplan-test-$([guid]::NewGuid().ToString('N').Substring(0,8))"
     New-Item -ItemType Directory -Path $script:FixtureDir -Force | Out-Null
 
     $manifestXml = @'
@@ -21,9 +21,9 @@
   </Applications>
 </Package>
 '@
-    $manifestXml | Out-File -FilePath (Join-Path $script:FixtureDir 'AppxManifest.xml') -Encoding utf8
+    $manifestXml | Out-File -FilePath (Join-Path -Path $script:FixtureDir -ChildPath 'AppxManifest.xml') -Encoding utf8
 
-    $script:PlanYamlPath = Join-Path $env:TEMP "msix-remedplan-test-$([guid]::NewGuid().ToString('N').Substring(0,8)).yaml"
+    $script:PlanYamlPath = Join-Path -Path $env:TEMP -ChildPath "msix-remedplan-test-$([guid]::NewGuid().ToString('N').Substring(0,8)).yaml"
 }
 
 AfterAll {
@@ -127,7 +127,7 @@ Describe 'Remediation plan round-trip' -Tag 'RemediationPlan' {
 
     Context 'Import-MsixRemediationPlan validation' {
         It 'Throws when the file is missing the remediation: root key' {
-            $bad = Join-Path $env:TEMP 'bad-plan.yaml'
+            $bad = Join-Path -Path $env:TEMP -ChildPath 'bad-plan.yaml'
             'version: 1' | Out-File -FilePath $bad -Encoding utf8
             try {
                 { Import-MsixRemediationPlan -Path $bad } | Should -Throw
@@ -137,7 +137,7 @@ Describe 'Remediation plan round-trip' -Tag 'RemediationPlan' {
         }
 
         It 'Throws when a fix cmdlet is not from the MSIX module' {
-            $rogue = Join-Path $env:TEMP 'rogue-plan.yaml'
+            $rogue = Join-Path -Path $env:TEMP -ChildPath 'rogue-plan.yaml'
             @"
 remediation:
   version: 1

@@ -87,7 +87,7 @@ function Import-MsixSparseShellExtension {
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
     $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-sparse"
-    $inner     = Join-Path $env:TEMP ("msix-inner-{0}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)))
+    $inner     = Join-Path -Path $env:TEMP -ChildPath ("msix-inner-{0}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)))
 
     try {
         # ── Unpack outer ──────────────────────────────────────────────────
@@ -281,7 +281,7 @@ function Import-MsixSparseShellExtension {
 
         # ── Repack — atomic scratch / sign / move ────────────────────────
         $target  = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $scratch = Join-Path $env:TEMP ("msix-sparse-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($target)))
+        $scratch = Join-Path -Path $env:TEMP -ChildPath ("msix-sparse-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($target)))
         $packOk  = $false
         try {
             $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')

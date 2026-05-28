@@ -90,14 +90,14 @@ function Get-MsixVcRuntimeReference {
                              Name         = $_.Name.ToLower()
                              Path         = $_.FullName.Substring($workspace.Length + 1)
                              SizeBytes    = $_.Length
-                             Architecture = (_GetPeArchitecture $_.FullName)
+                             Architecture = (_GetPeArchitecture -Path $_.FullName)
                          }
                      }
 
         # Best-effort PE import scan.
         $references = @{}
         foreach ($exe in @($allFiles | Where-Object { $_.Extension -in '.exe','.dll' })) {
-            $imports = _GetPeImports $exe.FullName
+            $imports = _GetPeImports -Path $exe.FullName
             foreach ($imp in $imports) {
                 $low = $imp.ToLower()
                 if ($script:KnownVcRuntimeDlls -contains $low) {
@@ -261,7 +261,7 @@ function Add-MsixVcRuntimeBundle {
         # Determine architecture if auto
         if ($Architecture -eq 'auto') {
             $sample = Join-Path -Path $workspace -ChildPath $apps[0].GetAttribute('Executable')
-            $Architecture = if (Test-Path -LiteralPath $sample) { (_GetPeArchitecture $sample) } else { 'x86' }
+            $Architecture = if (Test-Path -LiteralPath $sample) { (_GetPeArchitecture -Path $sample) } else { 'x86' }
             if ($Architecture -notin 'x86','x64') { $Architecture = 'x86' }
             Write-MsixLog -Level Info -Message "Architecture auto-detected: $Architecture"
         }
@@ -282,7 +282,7 @@ function Add-MsixVcRuntimeBundle {
         foreach ($name in $Names) {
             $hit = Get-ChildItem -LiteralPath $SourceFolder -Recurse -Filter $name -ErrorAction SilentlyContinue |
                    Where-Object {
-                       (_GetPeArchitecture $_.FullName) -eq $Architecture
+                       (_GetPeArchitecture -Path $_.FullName) -eq $Architecture
                    } | Select-Object -First 1
             if (-not $hit) {
                 Write-MsixLog -Level Warning -Message "$name not found under $SourceFolder for $Architecture"

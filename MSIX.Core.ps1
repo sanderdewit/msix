@@ -201,7 +201,7 @@ function New-MsixWorkspace {
         [string]$PackageName
     )
     $id   = [guid]::NewGuid().ToString('N').Substring(0, 8)
-    $path = Join-Path $env:TEMP "msix-$PackageName-$id"
+    $path = Join-Path -Path $env:TEMP -ChildPath "msix-$PackageName-$id"
     New-Item -ItemType Directory -Path $path -Force | Out-Null
     Write-MsixLog -Level Debug -Message "Workspace created: $path"
     return $path

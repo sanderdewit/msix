@@ -141,7 +141,7 @@
         if ($Config.AppIsolation -and $Config.AppIsolation.Capabilities) {
             Add-MsixManifestNamespace -Manifest $manifest -Prefix 'rescap'
             Set-MsixManifestMaxVersionTested -Manifest $manifest -MinBuild 26100
-            $rescapUri = Get-MsixManifestNamespaceUri 'rescap'
+            $rescapUri = Get-MsixManifestNamespaceUri -Prefix 'rescap'
             $capsNode  = $manifest.Package.Capabilities
             if (-not $capsNode) {
                 $capsNode = $manifest.CreateElement('Capabilities', $manifest.Package.NamespaceURI)
@@ -167,7 +167,7 @@
         # Atomic pack-then-sign: original target is preserved if signing fails.
         $scratchExt = [System.IO.Path]::GetExtension($target)
         if (-not $scratchExt) { $scratchExt = '.msix' }
-        $scratch = Join-Path $env:TEMP ("msix-pipeline-{0}-{1}{2}" -f `
+        $scratch = Join-Path -Path $env:TEMP -ChildPath ("msix-pipeline-{0}-{1}{2}" -f `
             $fileinfo.BaseName, ([guid]::NewGuid().ToString('N').Substring(0,8)), $scratchExt)
 
         $needsPsf      = [bool]$Config.PSF
@@ -395,7 +395,7 @@ function _MsixMutatePackage {
 
         # ── Atomic repack ──────────────────────────────────────────────────
         $target  = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $scratch = Join-Path $env:TEMP ("msix-{0}-{1}{2}" -f $Operation, ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($target)))
+        $scratch = Join-Path -Path $env:TEMP -ChildPath ("msix-{0}-{1}{2}" -f $Operation, ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($target)))
         $packOk = $false
         try {
             $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')

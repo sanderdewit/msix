@@ -44,7 +44,7 @@
         Add-MsixManifestNamespace -Manifest $M -Prefix 'rescap'
 
         $props = $M.Package.Properties
-        $d6    = Get-MsixManifestNamespaceUri 'desktop6'
+        $d6    = Get-MsixManifestNamespaceUri -Prefix 'desktop6'
 
         $flag = $props.SelectSingleNode(
             '*[local-name()="RegistryWriteVirtualization" and ' +
@@ -55,7 +55,7 @@
         }
         $flag.InnerText = if ($Enable) { 'enabled' } else { 'disabled' }
 
-        $virtUri  = Get-MsixManifestNamespaceUri 'virtualization'
+        $virtUri  = Get-MsixManifestNamespaceUri -Prefix 'virtualization'
         $virtNode = $props.SelectSingleNode(
             '*[local-name()="RegistryWriteVirtualization" and ' +
             'namespace-uri()="' + $virtUri + '"]')
@@ -109,7 +109,7 @@ Describe 'Set-MsixRegistryWriteVirtualization -ExcludedKeys (selective passthrou
             'hkey_current_user\software\contoso',
             'HKEY_CURRENT_USER\SOFTWARE\Other'
         )
-        $virtUri = Get-MsixManifestNamespaceUri 'virtualization'
+        $virtUri = Get-MsixManifestNamespaceUri -Prefix 'virtualization'
         $nodes = $m.Package.Properties.SelectNodes(
             '*[local-name()="RegistryWriteVirtualization" and namespace-uri()="' + $virtUri + '"]' +
             '/*[local-name()="ExcludedKeys"]/*[local-name()="ExcludedKey"]')
@@ -123,7 +123,7 @@ Describe 'Set-MsixRegistryWriteVirtualization -ExcludedKeys (selective passthrou
         $sb = $script:ApplyMutation
         & $sb $m @('HKEY_CURRENT_USER\SOFTWARE\Contoso')
 
-        $virtUri = Get-MsixManifestNamespaceUri 'virtualization'
+        $virtUri = Get-MsixManifestNamespaceUri -Prefix 'virtualization'
         $node = $m.Package.Properties.SelectSingleNode(
             '*[local-name()="RegistryWriteVirtualization" and namespace-uri()="' + $virtUri + '"]')
         $node | Should -Not -BeNullOrEmpty
@@ -143,7 +143,7 @@ Describe 'Set-MsixRegistryWriteVirtualization -ExcludedKeys (selective passthrou
         & $sb $m @('HKEY_CURRENT_USER\SOFTWARE\Contoso','HKEY_CURRENT_USER\SOFTWARE\Contoso\v2')
         & $sb $m @('HKEY_CURRENT_USER\SOFTWARE\Contoso','HKEY_CURRENT_USER\SOFTWARE\Contoso\v2')
 
-        $virtUri = Get-MsixManifestNamespaceUri 'virtualization'
+        $virtUri = Get-MsixManifestNamespaceUri -Prefix 'virtualization'
         # Only one <virtualization:RegistryWriteVirtualization> element.
         $blocks = $m.Package.Properties.SelectNodes(
             '*[local-name()="RegistryWriteVirtualization" and namespace-uri()="' + $virtUri + '"]')

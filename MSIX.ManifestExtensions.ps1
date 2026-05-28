@@ -89,14 +89,14 @@ function _MsixMutateManifest {
     Save-MsixManifest -Manifest $manifest -Path "$workspace\AppxManifest.xml"
 
     if ($SaveManifestTo) {
-        Copy-Item "$workspace\AppxManifest.xml" $SaveManifestTo -Force
+        Copy-Item -Path "$workspace\AppxManifest.xml" -Destination $SaveManifestTo -Force
         Write-MsixLog -Level Info -Message "Debug manifest saved to: $SaveManifestTo"
     }
 
     $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
     $scratchExt = [System.IO.Path]::GetExtension($target)
     if (-not $scratchExt) { $scratchExt = '.msix' }
-    $scratch = Join-Path $env:TEMP ("msix-pack-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), $scratchExt)
+    $scratch = Join-Path -Path $env:TEMP -ChildPath ("msix-pack-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), $scratchExt)
     $packSucceeded = $false
     $signSucceeded = $false
     try {
@@ -279,7 +279,7 @@ function Set-MsixFileSystemWriteVirtualization {
         Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 19041
 
         $props = $M.Package.Properties
-        $d6    = Get-MsixManifestNamespaceUri 'desktop6'
+        $d6    = Get-MsixManifestNamespaceUri -Prefix 'desktop6'
 
         # ── desktop6 flag element (idempotent) ─────────────────────────────
         $flag = $props.SelectSingleNode(
@@ -294,7 +294,7 @@ function Set-MsixFileSystemWriteVirtualization {
 
         # ── virtualization:ExcludedDirectories ────────────────────────────
         # Always written alongside the flag (matches commercial tool behaviour).
-        $virtUri  = Get-MsixManifestNamespaceUri 'virtualization'
+        $virtUri  = Get-MsixManifestNamespaceUri -Prefix 'virtualization'
         $virtNode = $props.SelectSingleNode(
             '*[local-name()="FileSystemWriteVirtualization" and ' +
             'namespace-uri()="' + $virtUri + '"]')
@@ -315,7 +315,7 @@ function Set-MsixFileSystemWriteVirtualization {
         }
 
         # ── unvirtualizedResources capability (required by the schema) ─────
-        $rescapUri = Get-MsixManifestNamespaceUri 'rescap'
+        $rescapUri = Get-MsixManifestNamespaceUri -Prefix 'rescap'
         $capsNode  = $M.Package.Capabilities
         if (-not $capsNode) {
             $capsNode = $M.CreateElement('Capabilities', $M.Package.NamespaceURI)
@@ -427,7 +427,7 @@ function Set-MsixRegistryWriteVirtualization {
         Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 19041
 
         $props = $M.Package.Properties
-        $d6    = Get-MsixManifestNamespaceUri 'desktop6'
+        $d6    = Get-MsixManifestNamespaceUri -Prefix 'desktop6'
 
         # ── desktop6 flag element (idempotent) ─────────────────────────────
         $flag = $props.SelectSingleNode(
@@ -441,7 +441,7 @@ function Set-MsixRegistryWriteVirtualization {
         Write-MsixLog -Level Info -Message "desktop6:RegistryWriteVirtualization set to '$($flag.InnerText)'."
 
         # ── virtualization:ExcludedKeys (optional) ─────────────────────────
-        $virtUri  = Get-MsixManifestNamespaceUri 'virtualization'
+        $virtUri  = Get-MsixManifestNamespaceUri -Prefix 'virtualization'
         $virtNode = $props.SelectSingleNode(
             '*[local-name()="RegistryWriteVirtualization" and ' +
             'namespace-uri()="' + $virtUri + '"]')
@@ -462,7 +462,7 @@ function Set-MsixRegistryWriteVirtualization {
         }
 
         # ── unvirtualizedResources capability (required by the schema) ─────
-        $rescapUri = Get-MsixManifestNamespaceUri 'rescap'
+        $rescapUri = Get-MsixManifestNamespaceUri -Prefix 'rescap'
         $capsNode  = $M.Package.Capabilities
         if (-not $capsNode) {
             $capsNode = $M.CreateElement('Capabilities', $M.Package.NamespaceURI)
@@ -544,7 +544,7 @@ function Set-MsixInstalledLocationVirtualization {
             return
         }
 
-        $u10 = Get-MsixManifestNamespaceUri 'uap10'
+        $u10 = Get-MsixManifestNamespaceUri -Prefix 'uap10'
         $ext = $M.CreateElement('uap10:Extension', $u10)
         $ext.SetAttribute('Category', $cat)
         $body = $M.CreateElement('uap10:InstalledLocationVirtualization', $u10)
@@ -633,7 +633,7 @@ function Add-MsixLoaderSearchPathOverride {
         if ($existing) {
             $body = $existing.SelectSingleNode('*[local-name()="LoaderSearchPathOverride"]')
         } else {
-            $u6   = Get-MsixManifestNamespaceUri 'uap6'
+            $u6   = Get-MsixManifestNamespaceUri -Prefix 'uap6'
             $ext  = $M.CreateElement('uap6:Extension', $u6)
             $ext.SetAttribute('Category', 'windows.loaderSearchPathOverride')
             $body = $M.CreateElement('uap6:LoaderSearchPathOverride', $u6)
@@ -641,7 +641,7 @@ function Add-MsixLoaderSearchPathOverride {
             $null = $appExt.AppendChild($ext)
         }
 
-        $u6 = Get-MsixManifestNamespaceUri 'uap6'
+        $u6 = Get-MsixManifestNamespaceUri -Prefix 'uap6'
         foreach ($p in $Paths) {
             # Idempotent: skip if same entry already present
             $already = $body.ChildNodes | Where-Object {
@@ -756,7 +756,7 @@ function Add-MsixFirewallRule {
         $app = Get-MsixManifestApplication -Manifest $M -AppId $AppId
         if (-not $app) { throw "Application '$AppId' not found in the manifest." }
 
-        $d2  = Get-MsixManifestNamespaceUri 'desktop2'
+        $d2  = Get-MsixManifestNamespaceUri -Prefix 'desktop2'
 
         # windows.firewallRules is a package-level extension:
         # Package/Extensions/desktop2:Extension/desktop2:FirewallRules
@@ -775,7 +775,7 @@ function Add-MsixFirewallRule {
             $null = $pkgExt.AppendChild($ext)
         }
 
-        $rescapUri = Get-MsixManifestNamespaceUri 'rescap'
+        $rescapUri = Get-MsixManifestNamespaceUri -Prefix 'rescap'
         $capsNode  = $M.Package.Capabilities
         if (-not $capsNode) {
             $capsNode = $M.CreateElement('Capabilities', $M.Package.NamespaceURI)
@@ -870,7 +870,7 @@ function Add-MsixProtocolHandler {
 
         $app   = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
         $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
-        $uap    = Get-MsixManifestNamespaceUri 'uap'
+        $uap    = Get-MsixManifestNamespaceUri -Prefix 'uap'
 
         # Idempotent: same Name already declared?
         $already = $appExt.SelectNodes('*[local-name()="Extension" and @Category="windows.protocol"]') |
@@ -967,7 +967,7 @@ function Add-MsixFileTypeAssociation {
 
         $app   = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
         $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
-        $uap    = Get-MsixManifestNamespaceUri 'uap'
+        $uap    = Get-MsixManifestNamespaceUri -Prefix 'uap'
 
         $ext  = $M.CreateElement('uap:Extension', $uap)
         $ext.SetAttribute('Category', 'windows.fileTypeAssociation')
@@ -1065,7 +1065,7 @@ function Add-MsixStartupTask {
 
         $app   = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
         $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
-        $u5    = Get-MsixManifestNamespaceUri 'uap5'
+        $u5    = Get-MsixManifestNamespaceUri -Prefix 'uap5'
 
         # Idempotent: same TaskId?
         $already = $appExt.SelectNodes('*[local-name()="Extension" and @Category="windows.startupTask"]') |
@@ -1138,7 +1138,7 @@ function Add-MsixFontExtension {
                         -Activity 'uap4:SharedFonts' -Mutate {
         param([xml]$M)
         Add-MsixManifestNamespace -Manifest $M -Prefix 'uap4'
-        $u4 = Get-MsixManifestNamespaceUri 'uap4'
+        $u4 = Get-MsixManifestNamespaceUri -Prefix 'uap4'
 
         $pkgExt = _MsixGetOrCreatePackageExtensions -Manifest $M
         $cat    = 'windows.sharedFonts'
@@ -1371,9 +1371,9 @@ function Add-MsixShellVerbExtension {
 
         $app    = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
         $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
-        $uap    = Get-MsixManifestNamespaceUri 'uap'
-        $uap2   = Get-MsixManifestNamespaceUri 'uap2'
-        $uap3   = Get-MsixManifestNamespaceUri 'uap3'
+        $uap    = Get-MsixManifestNamespaceUri -Prefix 'uap'
+        $uap2   = Get-MsixManifestNamespaceUri -Prefix 'uap2'
+        $uap3   = Get-MsixManifestNamespaceUri -Prefix 'uap3'
 
         # Schema structure (per MSIX manifest spec):
         #   <uap:Extension Category="windows.fileTypeAssociation">   ← uap namespace
@@ -1514,7 +1514,7 @@ function Add-MsixComServerExtension {
         Add-MsixManifestNamespace -Manifest $M -Prefix 'com4'
         Add-MsixManifestNamespace -Manifest $M -Prefix 'rescap'
 
-        $comUri = Get-MsixManifestNamespaceUri 'com4'
+        $comUri = Get-MsixManifestNamespaceUri -Prefix 'com4'
 
         # AppId is retained for backward compat / sanity check only.
         # com:Extension/windows.comServer declares a CLSID for system-wide
@@ -1567,7 +1567,7 @@ function Add-MsixComServerExtension {
             # Auto-inject runFullTrust (required for COM servers exposed to
             # callers outside the package). Mirrors Add-MsixFirewallRule's
             # canonical pattern: idempotent — skip if already present.
-            $rescapUri = Get-MsixManifestNamespaceUri 'rescap'
+            $rescapUri = Get-MsixManifestNamespaceUri -Prefix 'rescap'
             $capsNode  = $M.Package.Capabilities
             if (-not $capsNode) {
                 $capsNode = $M.CreateElement('Capabilities', $M.Package.NamespaceURI)

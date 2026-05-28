@@ -224,7 +224,7 @@
 
             Write-MsixLog -Level Info -Message "TrustedSigning account=$TrustedSigningAccount profile=$TrustedSigningProfile endpoint=$TrustedSigningEndpoint"
 
-            $metadataPath = Join-Path $env:TEMP "ts-metadata-$([guid]::NewGuid().ToString('N').Substring(0,8)).json"
+            $metadataPath = Join-Path -Path $env:TEMP -ChildPath "ts-metadata-$([guid]::NewGuid().ToString('N').Substring(0,8)).json"
             $metadata = @{
                 Endpoint               = $TrustedSigningEndpoint
                 CodeSigningAccountName = $TrustedSigningAccount
@@ -430,7 +430,7 @@ function New-MsixSelfSignedCertificate {
 
     if (-not $OutputFolder) {
         $base         = (Get-Item -LiteralPath $PackagePath).BaseName
-        $OutputFolder = Join-Path $env:TEMP "msix-selfsign-$base-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        $OutputFolder = Join-Path -Path $env:TEMP -ChildPath "msix-selfsign-$base-$([guid]::NewGuid().ToString('N').Substring(0,8))"
     }
     New-Item -Path $OutputFolder -ItemType Directory -Force | Out-Null
 

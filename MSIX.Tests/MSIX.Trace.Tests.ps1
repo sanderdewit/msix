@@ -37,7 +37,7 @@ Describe 'Trace Fixup parser' -Tag 'Trace' {
 
     Context 'Get-MsixTraceFailure' {
         BeforeAll {
-            $script:LogPath = Join-Path $env:TEMP "trace-$([guid]::NewGuid().ToString('N').Substring(0,8)).log"
+            $script:LogPath = Join-Path -Path $env:TEMP -ChildPath "trace-$([guid]::NewGuid().ToString('N').Substring(0,8)).log"
             @(
                 '[00:00:01.001 1234:A1] CreateFileW: C:\Windows\SysWOW64\settings.cfg -> NAME_NOT_FOUND'
                 '[00:00:01.002 1234:A1] CreateFileW: C:\Program Files\WindowsApps\app\out.log -> ACCESS_DENIED'

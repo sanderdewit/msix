@@ -516,7 +516,7 @@ function Install-MsixPsfBinary {
         throw "No release asset matching '$AssetPattern' in $tag. Assets: $($release.assets.name -join ', ')"
     }
 
-    $tmp = Join-Path $env:TEMP "tmurgent-psf-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    $tmp = Join-Path -Path $env:TEMP -ChildPath "tmurgent-psf-$([guid]::NewGuid().ToString('N').Substring(0,8))"
     New-Item -Path $tmp -ItemType Directory -Force | Out-Null
     $zip = Join-Path -Path $tmp -ChildPath $asset.name
 
@@ -980,7 +980,7 @@ function Install-MsixSdkTool {
     }
 
     # ── Download + extract ────────────────────────────────────────────────
-    $tmp = Join-Path $env:TEMP "sdk-buildtools-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    $tmp = Join-Path -Path $env:TEMP -ChildPath "sdk-buildtools-$([guid]::NewGuid().ToString('N').Substring(0,8))"
     New-Item -Path $tmp -ItemType Directory -Force | Out-Null
     $nupkg = Join-Path -Path $tmp -ChildPath "$($script:SdkToolsNuGet).$Version.nupkg"
     $url   = "https://api.nuget.org/v3-flatcontainer/$($script:SdkToolsNuGet.ToLower())/$Version/$($script:SdkToolsNuGet.ToLower()).$Version.nupkg"
@@ -1013,7 +1013,7 @@ function Install-MsixSdkTool {
 
             # Copy the whole arch folder (MakeAppx, signtool, makepri, plus
             # the AppxPackaging dependency DLLs that signtool needs at runtime).
-            Copy-Item "$archDir\*" $toolsDir -Recurse -Force
+            Copy-Item -Path "$archDir\*" -Destination $toolsDir -Recurse -Force
 
             "$Version|$Architecture" | Set-Content -LiteralPath $marker -Encoding ascii
             Write-MsixLog -Level Info -Message "MakeAppx.exe + signtool.exe installed at $toolsDir"
@@ -1234,7 +1234,7 @@ function Install-MsixAppRuntime {
         # Check whether all requested channels are cached; if any is missing
         # we still need to download just that one (don't bail out).
         $missing = $Channels | Where-Object {
-            -not (Test-Path -LiteralPath (Join-Path $Destination (_MsixAppRuntimeFileName -Channel $_)))
+            -not (Test-Path -LiteralPath (Join-Path -Path $Destination -ChildPath (_MsixAppRuntimeFileName -Channel $_)))
         }
         if (-not $missing) {
             Write-MsixLog -Level Info -Message "Windows App Runtime ($($Channels -join ', ')) + DesktopAppInstaller cached at $Destination."

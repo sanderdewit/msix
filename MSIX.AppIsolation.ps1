@@ -122,7 +122,7 @@ function Add-MsixAppIsolation {
         # Win32 App Isolation requires Win11 24H2 (build 26100)
         Set-MsixManifestMaxVersionTested -Manifest $manifest -MinBuild 26100
 
-        $rescapUri = Get-MsixManifestNamespaceUri 'rescap'
+        $rescapUri = Get-MsixManifestNamespaceUri -Prefix 'rescap'
         $capsNode  = $manifest.Package.Capabilities
         if (-not $capsNode) {
             $capsNode = $manifest.CreateElement('Capabilities', $manifest.Package.NamespaceURI)

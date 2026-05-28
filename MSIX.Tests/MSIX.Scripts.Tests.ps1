@@ -1,6 +1,6 @@
 ﻿BeforeAll {
     Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
-    $script:Tmp = Join-Path $env:TEMP "msix-scripts-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    $script:Tmp = Join-Path -Path $env:TEMP -ChildPath "msix-scripts-$([guid]::NewGuid().ToString('N').Substring(0,8))"
     New-Item $script:Tmp -ItemType Directory -Force | Out-Null
 }
 AfterAll {
@@ -26,7 +26,7 @@ Describe 'Standard scripts' -Tag 'Scripts' {
     }
 
     It 'New-MsixStandardScript renders CreateShortcut substituting parameters' {
-        $out = Join-Path $script:Tmp 'cs.ps1'
+        $out = Join-Path -Path $script:Tmp -ChildPath 'cs.ps1'
         New-MsixStandardScript -Name CreateShortcut -OutputPath $out -Parameters @{
             DisplayName = 'Contoso'
             Target      = 'contoso.exe'
@@ -38,18 +38,18 @@ Describe 'Standard scripts' -Tag 'Scripts' {
     }
 
     It 'Throws when a required parameter is missing' {
-        $out = Join-Path $script:Tmp 'missing.ps1'
+        $out = Join-Path -Path $script:Tmp -ChildPath 'missing.ps1'
         { New-MsixStandardScript -Name CreateShortcut -OutputPath $out -Parameters @{ DisplayName = 'X' } } |
             Should -Throw '*Target*'
     }
 
     It 'Validates Name against the catalogue' {
-        $out = Join-Path $script:Tmp 'n.ps1'
+        $out = Join-Path -Path $script:Tmp -ChildPath 'n.ps1'
         { New-MsixStandardScript -Name 'Bogus' -OutputPath $out -Parameters @{} } | Should -Throw
     }
 
     It 'Applies defaults for optional parameters' {
-        $out = Join-Path $script:Tmp 'defaults.ps1'
+        $out = Join-Path -Path $script:Tmp -ChildPath 'defaults.ps1'
         New-MsixStandardScript -Name CreateShortcut -OutputPath $out -Parameters @{
             DisplayName = 'A'
             Target      = 'a.exe'

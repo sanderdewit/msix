@@ -242,7 +242,7 @@
         }
 
         # ── COM SurrogateServer (bare 'com' namespace, Application level) ──
-        $comUri    = Get-MsixManifestNamespaceUri 'com'
+        $comUri    = Get-MsixManifestNamespaceUri -Prefix 'com'
         $comExt    = $manifest.CreateElement('com:Extension',       $comUri)
         $comExt.SetAttribute('Category', 'windows.comServer')
 
@@ -266,8 +266,8 @@
         # ItemType/Verb namespace — desktop4 is the outer container).
         # For -MenuType DragDrop we use the same schema; the COM class
         # decides whether it implements drag/drop or context menu interfaces.
-        $d4Uri = Get-MsixManifestNamespaceUri 'desktop4'
-        $d5Uri = Get-MsixManifestNamespaceUri 'desktop5'
+        $d4Uri = Get-MsixManifestNamespaceUri -Prefix 'desktop4'
+        $d5Uri = Get-MsixManifestNamespaceUri -Prefix 'desktop5'
 
         $d4Ext = $manifest.CreateElement('desktop4:Extension', $d4Uri)
         $d4Ext.SetAttribute('Category', 'windows.fileExplorerContextMenus')
@@ -440,8 +440,8 @@ function Add-MsixFileExplorerContextMenu {
             $null    = $app.AppendChild($extNode)
         }
 
-        $d4Uri = Get-MsixManifestNamespaceUri 'desktop4'
-        $d5Uri = Get-MsixManifestNamespaceUri 'desktop5'
+        $d4Uri = Get-MsixManifestNamespaceUri -Prefix 'desktop4'
+        $d5Uri = Get-MsixManifestNamespaceUri -Prefix 'desktop5'
 
         $d4Ext = $manifest.CreateElement('desktop4:Extension', $d4Uri)
         $d4Ext.SetAttribute('Category', 'windows.fileExplorerContextMenus')

@@ -7,7 +7,7 @@
         $lines = @($Rows | ForEach-Object {
             "[00:00:01.000 1234:AB1] $($_.Function): $($_.Path) -> $($_.Result)"
         })
-        $tmp = Join-Path $env:TEMP ("msix-tracedelta-test-{0}.log" -f [guid]::NewGuid().ToString('N'))
+        $tmp = Join-Path -Path $env:TEMP -ChildPath ("msix-tracedelta-test-{0}.log" -f [guid]::NewGuid().ToString('N'))
         # WriteAllLines creates the file even when $lines is empty.
         [IO.File]::WriteAllLines($tmp, [string[]]$lines, [Text.UTF8Encoding]::new($false))
         return $tmp

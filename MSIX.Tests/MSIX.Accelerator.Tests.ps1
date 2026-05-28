@@ -10,7 +10,7 @@ Describe 'Accelerator YAML parser is safe-by-design' -Tag 'Security' {
 package: contoso.app
 publisher: CN=Contoso
 '@
-        $tmp = Join-Path $env:TEMP "msix-accel-$([guid]::NewGuid().ToString('N').Substring(0,8)).yaml"
+        $tmp = Join-Path -Path $env:TEMP -ChildPath "msix-accel-$([guid]::NewGuid().ToString('N').Substring(0,8)).yaml"
         Set-Content -LiteralPath $tmp -Value $yaml -NoNewline -Encoding utf8
         try {
             $r = ConvertFrom-MsixYamlAccelerator -Path $tmp
@@ -23,7 +23,7 @@ publisher: CN=Contoso
 
     It 'Parses inline list values' {
         $yaml = "patterns: [.log, .tmp, .bak]"
-        $tmp = Join-Path $env:TEMP "msix-accel-$([guid]::NewGuid().ToString('N').Substring(0,8)).yaml"
+        $tmp = Join-Path -Path $env:TEMP -ChildPath "msix-accel-$([guid]::NewGuid().ToString('N').Substring(0,8)).yaml"
         Set-Content -LiteralPath $tmp -Value $yaml -NoNewline -Encoding utf8
         try {
             $r = ConvertFrom-MsixYamlAccelerator -Path $tmp
@@ -43,7 +43,7 @@ publisher: CN=Contoso
 
     It 'Treats YAML type tags as literal text (no object instantiation)' {
         $hostile = "package: !!python/object/apply:os.system [`"whoami`"]"
-        $tmp = Join-Path $env:TEMP "msix-accel-$([guid]::NewGuid().ToString('N').Substring(0,8)).yaml"
+        $tmp = Join-Path -Path $env:TEMP -ChildPath "msix-accel-$([guid]::NewGuid().ToString('N').Substring(0,8)).yaml"
         Set-Content -LiteralPath $tmp -Value $hostile -NoNewline -Encoding utf8
         try {
             { $r = ConvertFrom-MsixYamlAccelerator -Path $tmp; $r } | Should -Not -Throw

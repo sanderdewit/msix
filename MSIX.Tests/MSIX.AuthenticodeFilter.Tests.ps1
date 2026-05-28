@@ -1,7 +1,7 @@
 ﻿BeforeAll {
     Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 
-    $script:Sandbox = Join-Path $env:TEMP "msix-authenticode-filter-test-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    $script:Sandbox = Join-Path -Path $env:TEMP -ChildPath "msix-authenticode-filter-test-$([guid]::NewGuid().ToString('N').Substring(0,8))"
     New-Item -ItemType Directory -Path $script:Sandbox -Force | Out-Null
 
     # Drop a mix of files into a fake toolchain extraction folder.
@@ -19,7 +19,7 @@
         'archive.zip'                   # MUST be skipped
     ) | ForEach-Object {
         # Empty files are enough — the filter inspects extensions, not contents.
-        '' | Set-Content -LiteralPath (Join-Path $script:Sandbox $_) -Encoding ascii
+        '' | Set-Content -LiteralPath (Join-Path -Path $script:Sandbox -ChildPath $_) -Encoding ascii
     }
 }
 

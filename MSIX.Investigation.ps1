@@ -139,7 +139,7 @@ function Invoke-MsixProcMonCapture {
         [string]$PackageFamilyName,
         [Parameter(Mandatory)]
         [string]$AppId,
-        [string]$OutputPml = (Join-Path $env:TEMP "msix-procmon-$([guid]::NewGuid().ToString('N').Substring(0,8)).pml"),
+        [string]$OutputPml = (Join-Path -Path $env:TEMP -ChildPath "msix-procmon-$([guid]::NewGuid().ToString('N').Substring(0,8)).pml"),
         [int]$DurationSeconds = 30,
         [string]$ProcessName
     )

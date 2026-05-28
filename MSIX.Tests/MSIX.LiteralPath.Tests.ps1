@@ -13,7 +13,7 @@ Describe '-LiteralPath consistency for user-supplied paths (issue #45)' -Tag 'Li
     # nothing -- silently returning $null instead of the file content.
 
     BeforeAll {
-        $script:Bracketed = Join-Path $env:TEMP "msix-litpath-[x]-$([guid]::NewGuid().ToString('N').Substring(0,6)).json"
+        $script:Bracketed = Join-Path -Path $env:TEMP -ChildPath "msix-litpath-[x]-$([guid]::NewGuid().ToString('N').Substring(0,6)).json"
         Set-Content -LiteralPath $script:Bracketed -Value '{"hello":"world"}' -Encoding utf8
     }
     AfterAll {
@@ -142,7 +142,7 @@ Describe 'Functional: signer / scanner code paths tolerate bracketed paths (issu
         # entry points. Setting it to a bogus bracketed path must not
         # throw -- Resolve-MsixDebugViewPath should fall through to its
         # default search order and return either a string or $null.
-        $bracketedDir = Join-Path $env:TEMP "msix-litpath-[x]-debugview-$([guid]::NewGuid().ToString('N').Substring(0,6))"
+        $bracketedDir = Join-Path -Path $env:TEMP -ChildPath "msix-litpath-[x]-debugview-$([guid]::NewGuid().ToString('N').Substring(0,6))"
         New-Item -ItemType Directory -Path $bracketedDir -Force | Out-Null
         $prev = $env:MSIX_DEBUGVIEW_PATH
         try {
@@ -159,7 +159,7 @@ Describe 'Functional: signer / scanner code paths tolerate bracketed paths (issu
     It 'A trace file at a path containing [x] is parseable by Get-MsixTraceFailure' {
         # Trace files come from operator workflows and can land at
         # arbitrary paths. The parser must accept brackets.
-        $bracketed = Join-Path $env:TEMP "msix-litpath-trace-[x]-$([guid]::NewGuid().ToString('N').Substring(0,6)).log"
+        $bracketed = Join-Path -Path $env:TEMP -ChildPath "msix-litpath-trace-[x]-$([guid]::NewGuid().ToString('N').Substring(0,6)).log"
         # Use BOM-less UTF-8 -- the parser strips a BOM but the
         # canonical TraceFixup output is BOM-less.
         [IO.File]::WriteAllText($bracketed,

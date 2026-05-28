@@ -59,7 +59,7 @@ Describe 'Get-MsixAppRuntimeVersion is channel-aware (issue #42)' -Tag 'AppRunti
     # discovery reports the channels actually present on disk.
 
     BeforeAll {
-        $script:Stage = Join-Path $env:TEMP "msix-apprt-test-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        $script:Stage = Join-Path -Path $env:TEMP -ChildPath "msix-apprt-test-$([guid]::NewGuid().ToString('N').Substring(0,8))"
         New-Item -ItemType Directory -Path $script:Stage -Force | Out-Null
     }
     AfterAll {
@@ -77,10 +77,10 @@ Describe 'Get-MsixAppRuntimeVersion is channel-aware (issue #42)' -Tag 'AppRunti
     It 'discovers every WindowsAppRuntimeInstall-x64-<channel>.exe on disk' {
         # Stage the channel files (empty -- the discovery is filename-based).
         foreach ($ch in '1.4','1.5','1.7') {
-            New-Item -ItemType File -Path (Join-Path $script:Stage "WindowsAppRuntimeInstall-x64-$ch.exe") -Force | Out-Null
+            New-Item -ItemType File -Path (Join-Path -Path $script:Stage -ChildPath "WindowsAppRuntimeInstall-x64-$ch.exe") -Force | Out-Null
         }
         # Touch the marker so Installed reports true.
-        (Get-Date -Format o) | Set-Content -LiteralPath (Join-Path $script:Stage 'runtime.installed') -Encoding ascii
+        (Get-Date -Format o) | Set-Content -LiteralPath (Join-Path -Path $script:Stage -ChildPath 'runtime.installed') -Encoding ascii
 
         $r = Get-MsixAppRuntimeVersion -Path $script:Stage
         $r.Installed | Should -BeTrue
@@ -89,8 +89,8 @@ Describe 'Get-MsixAppRuntimeVersion is channel-aware (issue #42)' -Tag 'AppRunti
     }
 
     It 'ignores files that do not match the channel-suffix naming convention' {
-        New-Item -ItemType File -Path (Join-Path $script:Stage 'WindowsAppRuntimeInstall-x64.exe') -Force | Out-Null
-        New-Item -ItemType File -Path (Join-Path $script:Stage 'WindowsAppRuntimeInstall-arm64-1.4.exe') -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path -Path $script:Stage -ChildPath 'WindowsAppRuntimeInstall-x64.exe') -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path -Path $script:Stage -ChildPath 'WindowsAppRuntimeInstall-arm64-1.4.exe') -Force | Out-Null
         $r = Get-MsixAppRuntimeVersion -Path $script:Stage
         # Should still have exactly 3 from the previous step
         @($r.Channels).Count | Should -Be 3

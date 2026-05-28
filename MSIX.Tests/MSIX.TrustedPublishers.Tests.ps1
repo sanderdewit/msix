@@ -62,7 +62,7 @@ Describe 'Trusted-publisher allowlist (issue #19)' -Tag 'TrustedPublishers' {
         }
 
         It '_MsixLoadTrustedPublishers throws on a malformed JSON file' {
-            $bad = Join-Path $env:TEMP "bad-signers-$([guid]::NewGuid().ToString('N').Substring(0,8)).json"
+            $bad = Join-Path -Path $env:TEMP -ChildPath "bad-signers-$([guid]::NewGuid().ToString('N').Substring(0,8)).json"
             '{ "publishers": ' | Out-File -LiteralPath $bad -Encoding utf8   # truncated
             try {
                 { (Get-Module MSIX).Invoke({ param($p) _MsixLoadTrustedPublishers -Path $p }, $bad) } |
@@ -73,13 +73,13 @@ Describe 'Trusted-publisher allowlist (issue #19)' -Tag 'TrustedPublishers' {
         }
 
         It '_MsixLoadTrustedPublishers throws on a missing file' {
-            $missing = Join-Path $env:TEMP "no-such-signers-$([guid]::NewGuid().ToString('N').Substring(0,8)).json"
+            $missing = Join-Path -Path $env:TEMP -ChildPath "no-such-signers-$([guid]::NewGuid().ToString('N').Substring(0,8)).json"
             { (Get-Module MSIX).Invoke({ param($p) _MsixLoadTrustedPublishers -Path $p }, $missing) } |
                 Should -Throw
         }
 
         It '_MsixLoadTrustedPublishers throws when an entry lacks CN=...,' {
-            $bad = Join-Path $env:TEMP "rogue-signers-$([guid]::NewGuid().ToString('N').Substring(0,8)).json"
+            $bad = Join-Path -Path $env:TEMP -ChildPath "rogue-signers-$([guid]::NewGuid().ToString('N').Substring(0,8)).json"
             @'
 {
   "version": 1,

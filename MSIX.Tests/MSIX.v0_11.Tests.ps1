@@ -74,13 +74,13 @@ Describe '-NoSign alias: <Name>' -Tag 'NoSign' -ForEach @(
 
 Describe 'Get-MsixManifest is polymorphic (v0.11)' -Tag 'Manifest' {
     BeforeAll {
-        $script:Tmp = Join-Path $env:TEMP "msix-mf-poly-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        $script:Tmp = Join-Path -Path $env:TEMP -ChildPath "msix-mf-poly-$([guid]::NewGuid().ToString('N').Substring(0,8))"
         New-Item $script:Tmp -ItemType Directory -Force | Out-Null
     }
     AfterAll { Remove-Item -LiteralPath $script:Tmp -Recurse -Force -ErrorAction SilentlyContinue }
 
     It 'Reads an XML file directly' {
-        $xmlPath = Join-Path $script:Tmp 'AppxManifest.xml'
+        $xmlPath = Join-Path -Path $script:Tmp -ChildPath 'AppxManifest.xml'
         @'
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
@@ -98,7 +98,7 @@ Describe 'Get-MsixManifest is polymorphic (v0.11)' -Tag 'Manifest' {
     }
 
     It 'Throws cleanly on a non-existent path' {
-        { Get-MsixManifest -Path (Join-Path $script:Tmp 'no-such-thing.xml') } |
+        { Get-MsixManifest -Path (Join-Path -Path $script:Tmp -ChildPath 'no-such-thing.xml') } |
             Should -Throw '*Path not found*'
     }
 }

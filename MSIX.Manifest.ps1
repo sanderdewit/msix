@@ -596,7 +596,7 @@ function Get-MsixManifestNamespaceUri {
         [string] or $null when the prefix is unknown.
 
     .EXAMPLE
-        $uri = Get-MsixManifestNamespaceUri 'desktop9'
+        $uri = Get-MsixManifestNamespaceUri -Prefix 'desktop9'
         $el  = $manifest.CreateElement('desktop9:Extension', $uri)
     #>
     [OutputType([string])]

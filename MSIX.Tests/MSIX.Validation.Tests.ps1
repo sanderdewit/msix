@@ -1,7 +1,7 @@
 ﻿BeforeAll {
     Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 
-    $script:Tmp = Join-Path $env:TEMP "msix-validate-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    $script:Tmp = Join-Path -Path $env:TEMP -ChildPath "msix-validate-$([guid]::NewGuid().ToString('N').Substring(0,8))"
     New-Item $script:Tmp -ItemType Directory -Force | Out-Null
 }
 
@@ -18,13 +18,13 @@ Describe 'Validation' -Tag 'Validation' {
         }
 
         It 'Throws on malformed XML' {
-            $bad = Join-Path $script:Tmp 'bad.xml'
+            $bad = Join-Path -Path $script:Tmp -ChildPath 'bad.xml'
             'not xml' | Set-Content -LiteralPath $bad
             { Test-MsixManifest -Path $bad } | Should -Throw '*not valid XML*'
         }
 
         It 'Throws when Identity is missing required fields' {
-            $broken = Join-Path $script:Tmp 'broken.xml'
+            $broken = Join-Path -Path $script:Tmp -ChildPath 'broken.xml'
             @'
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
@@ -36,7 +36,7 @@ Describe 'Validation' -Tag 'Validation' {
         }
 
         It 'Throws when Applications is empty' {
-            $noapp = Join-Path $script:Tmp 'noapp.xml'
+            $noapp = Join-Path -Path $script:Tmp -ChildPath 'noapp.xml'
             @'
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
@@ -47,7 +47,7 @@ Describe 'Validation' -Tag 'Validation' {
         }
 
         It 'Returns true for a complete manifest' {
-            $ok = Join-Path $script:Tmp 'ok.xml'
+            $ok = Join-Path -Path $script:Tmp -ChildPath 'ok.xml'
             @'
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
@@ -61,12 +61,12 @@ Describe 'Validation' -Tag 'Validation' {
 
     Context 'Test-MsixPsfConfig' {
         It 'Throws on missing keys' {
-            $bad = Join-Path $script:Tmp 'badcfg.json'
+            $bad = Join-Path -Path $script:Tmp -ChildPath 'badcfg.json'
             '{}' | Set-Content -LiteralPath $bad
             { Test-MsixPsfConfig -Path $bad } | Should -Throw '*applications*'
         }
         It 'Accepts a valid PSF config' {
-            $ok = Join-Path $script:Tmp 'okcfg.json'
+            $ok = Join-Path -Path $script:Tmp -ChildPath 'okcfg.json'
             @'
 {
   "applications": [{ "id": "App", "executable": "x.exe" }],

@@ -839,7 +839,7 @@ function Add-MsixPsfV2 {
         # only on success. A signing failure must NEVER leave the user with
         # an unsigned modified copy of their signed package.
         $repackTarget = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $scratch      = Join-Path $env:TEMP ("msix-psfv2-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($repackTarget)))
+        $scratch      = Join-Path -Path $env:TEMP -ChildPath ("msix-psfv2-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($repackTarget)))
         Write-MsixLog -Level Info -Message "Repacking (via scratch): $repackTarget"
         $packOk = $false
         try {

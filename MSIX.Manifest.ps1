@@ -261,7 +261,7 @@ function Get-MsixManifest {
     if ($item.Extension -in '.msix', '.appx', '.msixbundle', '.appxbundle') {
         # Pull the manifest out of the archive without touching MakeAppx.
         Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
-        $tmp = New-MsixWorkspace "$($item.BaseName)-mf"
+        $tmp = New-MsixWorkspace -PackageName "$($item.BaseName)-mf"
         try {
             $zip = [System.IO.Compression.ZipFile]::OpenRead($item.FullName)
             try {
@@ -301,7 +301,7 @@ function Save-MsixManifest {
         Destination file. Overwrites silently.
 
     .EXAMPLE
-        [xml]$m = Get-MsixManifest "$workspace\AppxManifest.xml"
+        [xml]$m = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
         Set-MsixManifestPublisher -Manifest $m -Publisher 'CN=Contoso, O=Contoso, C=NL'
         Save-MsixManifest -Manifest $m -Path "$workspace\AppxManifest.xml"
     #>
@@ -505,7 +505,7 @@ function Set-MsixManifestPublisher {
         [System.Xml.XmlDocument] — the same instance, returned for chaining.
 
     .EXAMPLE
-        [xml]$m = Get-MsixManifest "$ws\AppxManifest.xml"
+        [xml]$m = Get-MsixManifest -Path "$ws\AppxManifest.xml"
         Set-MsixManifestPublisher -Manifest $m -Publisher 'CN=Contoso, O=Contoso, C=NL'
         Save-MsixManifest -Manifest $m -Path "$ws\AppxManifest.xml"
     #>

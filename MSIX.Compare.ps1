@@ -18,9 +18,9 @@ function _MsixUnpackForCompare {
     param([string]$PackagePath, [string]$Tag)
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-$Tag"
-    $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-    Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-$Tag"
+    $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+    Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
     return $workspace
 }
 
@@ -211,10 +211,10 @@ function Compare-MsixPackage {
     $rightWs = _MsixUnpackForCompare -PackagePath $RightPath -Tag 'right'
 
     try {
-        $null = Test-MsixManifest "$leftWs\AppxManifest.xml"
-        $null = Test-MsixManifest "$rightWs\AppxManifest.xml"
-        [xml]$leftManifest  = Get-MsixManifest "$leftWs\AppxManifest.xml"
-        [xml]$rightManifest = Get-MsixManifest "$rightWs\AppxManifest.xml"
+        $null = Test-MsixManifest -Path "$leftWs\AppxManifest.xml"
+        $null = Test-MsixManifest -Path "$rightWs\AppxManifest.xml"
+        [xml]$leftManifest  = Get-MsixManifest -Path "$leftWs\AppxManifest.xml"
+        [xml]$rightManifest = Get-MsixManifest -Path "$rightWs\AppxManifest.xml"
 
         $manifestChanges = _ComparePackageManifest -LeftManifest $leftManifest -RightManifest $rightManifest
 

@@ -159,8 +159,8 @@ function Add-MsixCapability {
         -NoChangeMessage 'No capabilities added.' `
         -Mutator {
             param($workspace)
-            $null = Test-MsixManifest "$workspace\AppxManifest.xml"
-            [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
+            $null = Test-MsixManifest -Path "$workspace\AppxManifest.xml"
+            [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
 
             $caps = $manifest.Package.Capabilities
             if (-not $caps) {
@@ -198,7 +198,7 @@ function Add-MsixCapability {
 
             if (-not $added) { return $null }
 
-            Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
+            Save-MsixManifest -Manifest $manifest -Path "$workspace\AppxManifest.xml"
             @{ CapabilitiesAdded = $added }
         }.GetNewClosure()
 }
@@ -883,8 +883,8 @@ function Update-MsixPackageVersion {
         -NoChangeMessage 'Version unchanged.' `
         -Mutator {
             param($workspace)
-            $null = Test-MsixManifest "$workspace\AppxManifest.xml"
-            [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
+            $null = Test-MsixManifest -Path "$workspace\AppxManifest.xml"
+            [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
             $current = [version]$manifest.Package.Identity.Version
 
             if ($NewVersion) {
@@ -902,7 +902,7 @@ function Update-MsixPackageVersion {
             }
             $manifest.Package.Identity.Version = $next.ToString(4)
             Write-MsixLog -Level Info -Message "Version: $current -> $next"
-            Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
+            Save-MsixManifest -Manifest $manifest -Path "$workspace\AppxManifest.xml"
             @{ PreviousVersion = $current.ToString(4); NewVersion = $next.ToString(4) }
         }.GetNewClosure()
 

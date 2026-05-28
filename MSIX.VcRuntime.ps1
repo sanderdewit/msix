@@ -78,10 +78,10 @@ function Get-MsixVcRuntimeReference {
 
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-vcrt"
+    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-vcrt"
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         $allFiles = Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue
         $bundled  = $allFiles | Where-Object { $script:KnownVcRuntimeDlls -contains $_.Name.ToLower() } |
@@ -248,14 +248,14 @@ function Add-MsixVcRuntimeBundle {
 
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace $fileinfo.BaseName
+    $workspace = New-MsixWorkspace -PackageName $fileinfo.BaseName
 
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
-        $null = Test-MsixManifest "$workspace\AppxManifest.xml"
-        [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
+        $null = Test-MsixManifest -Path "$workspace\AppxManifest.xml"
+        [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
         $apps          = @(Get-MsixManifestApplication $manifest)
 
         # Determine architecture if auto
@@ -306,8 +306,8 @@ function Add-MsixVcRuntimeBundle {
 
         # Repack
         $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $target, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx pack'
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $target, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack'
 
         if (-not $SkipSigning) {
             Invoke-MsixSigning -PackagePath $target -Pfx $Pfx -PfxPassword $PfxPassword

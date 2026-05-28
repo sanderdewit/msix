@@ -382,7 +382,7 @@ function Add-MsixStandardScript {
     if (-not $ScriptFileName) { $ScriptFileName = "$Name.ps1" }
 
     # Stage script in a workspace so cleanup is easy
-    $stage      = New-MsixWorkspace "$AppId-$Name"
+    $stage      = New-MsixWorkspace -PackageName "$AppId-$Name"
     $scriptPath = Join-Path -Path $stage -ChildPath $ScriptFileName
 
     try {

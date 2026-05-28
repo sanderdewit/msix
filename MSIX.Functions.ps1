@@ -226,14 +226,14 @@ function Update-MsixSigner {
     PROCESS {
         $toolsRoot = Get-MsixToolsRoot
         $fileinfo  = Get-Item -LiteralPath $PackagePath
-        $workspace = New-MsixWorkspace $fileinfo.BaseName
+        $workspace = New-MsixWorkspace -PackageName $fileinfo.BaseName
 
         try {
             Write-MsixLog -Level Info -Message "Unpacking: $($fileinfo.FullName)"
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-            Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+            $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+            Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
-            [xml]$appinfo = Get-MsixManifest "$workspace\AppxManifest.xml"
+            [xml]$appinfo = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
 
             $outputPath = $fileinfo.FullName
 
@@ -242,7 +242,7 @@ function Update-MsixSigner {
                 $newPublisherId = Get-MsixPublisherId $Publisher
 
                 $appinfo.Package.Identity.Publisher = $Publisher
-                Save-MsixManifest $appinfo "$workspace\AppxManifest.xml"
+                Save-MsixManifest -Manifest $appinfo -Path "$workspace\AppxManifest.xml"
 
                 $outputPath = $fileinfo.FullName -replace [regex]::Escape($oldPublisherId), $newPublisherId
                 Write-MsixLog -Level Info -Message "Output path: $outputPath"
@@ -258,8 +258,8 @@ function Update-MsixSigner {
             $scratch = Join-Path $env:TEMP ("msix-resign-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($outputPath)))
             $packOk = $false
             try {
-                $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
-                Assert-MsixProcessSuccess $r 'MakeAppx pack'
+                $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+                Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack'
                 $packOk = $true
                 Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword
                 Move-Item -LiteralPath $scratch -Destination $outputPath -Force

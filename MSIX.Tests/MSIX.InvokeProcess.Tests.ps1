@@ -34,7 +34,7 @@ Describe 'Invoke-MsixProcess' -Tag 'Core' {
         # Verify PowerShell binds the first positional arg to FilePath.
         # Use a real, always-present Windows binary so no toolchain is needed.
         # cmd.exe /c exit 0 is the safest no-op available everywhere.
-        $result = Invoke-MsixProcess "$env:SystemRoot\System32\cmd.exe" `
+        $result = Invoke-MsixProcess -FilePath "$env:SystemRoot\System32\cmd.exe" `
                       -ArgumentList @('/c', 'exit', '0')
         $result | Should -Not -BeNullOrEmpty
         $result.ExitCode | Should -Be 0
@@ -45,7 +45,7 @@ Describe 'Invoke-MsixProcess' -Tag 'Core' {
     # ---------------------------------------------------------------------------
 
     It 'Returns an object with ExitCode, StdOut, and StdErr properties' {
-        $result = Invoke-MsixProcess "$env:SystemRoot\System32\cmd.exe" `
+        $result = Invoke-MsixProcess -FilePath "$env:SystemRoot\System32\cmd.exe" `
                       -ArgumentList @('/c', 'exit', '0')
         $result.PSObject.Properties.Name | Should -Contain 'ExitCode'
         $result.PSObject.Properties.Name | Should -Contain 'StdOut'
@@ -53,13 +53,13 @@ Describe 'Invoke-MsixProcess' -Tag 'Core' {
     }
 
     It 'Captures a non-zero exit code correctly' {
-        $result = Invoke-MsixProcess "$env:SystemRoot\System32\cmd.exe" `
+        $result = Invoke-MsixProcess -FilePath "$env:SystemRoot\System32\cmd.exe" `
                       -ArgumentList @('/c', 'exit', '42')
         $result.ExitCode | Should -Be 42
     }
 
     It 'Captures stdout from the child process' {
-        $result = Invoke-MsixProcess "$env:SystemRoot\System32\cmd.exe" `
+        $result = Invoke-MsixProcess -FilePath "$env:SystemRoot\System32\cmd.exe" `
                       -ArgumentList @('/c', 'echo hello-from-child')
         $result.StdOut | Should -Match 'hello-from-child'
     }

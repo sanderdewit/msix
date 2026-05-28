@@ -119,8 +119,8 @@ function Assert-MsixProcessSuccess {
         Short label used in the thrown error (e.g. 'MakeAppx unpack').
 
     .EXAMPLE
-        $r = Invoke-MsixProcess $makeAppx -ArgumentList @('unpack','/p',$pkg,'/d',$ws,'/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+        $r = Invoke-MsixProcess -FilePath $makeAppx -ArgumentList @('unpack','/p',$pkg,'/d',$ws,'/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
     #>
     param(
         [Parameter(Mandatory)]

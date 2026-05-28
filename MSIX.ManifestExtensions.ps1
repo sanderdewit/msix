@@ -76,17 +76,17 @@ function _MsixMutateManifest {
 
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
-    $workspace = New-MsixWorkspace $fileinfo.BaseName
+    $workspace = New-MsixWorkspace -PackageName $fileinfo.BaseName
 
-    $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-    Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+    $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+    Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
-    $null = Test-MsixManifest "$workspace\AppxManifest.xml"
-    [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
+    $null = Test-MsixManifest -Path "$workspace\AppxManifest.xml"
+    [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
 
     $manifest = Invoke-MsixManifestTransform -Manifest $manifest -Transform $Mutate
 
-    Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
+    Save-MsixManifest -Manifest $manifest -Path "$workspace\AppxManifest.xml"
 
     if ($SaveManifestTo) {
         Copy-Item "$workspace\AppxManifest.xml" $SaveManifestTo -Force
@@ -101,8 +101,8 @@ function _MsixMutateManifest {
     $signSucceeded = $false
     try {
         Write-MsixLog -Level Info -Message "$Activity -> $target"
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack','/p',$scratch,'/d',$workspace,'/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx pack'
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack','/p',$scratch,'/d',$workspace,'/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack'
         $packSucceeded = $true
 
         if ($WhatIfPreview) {

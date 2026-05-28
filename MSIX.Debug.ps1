@@ -370,7 +370,7 @@ function Start-MsixDebugSession {
     # 0) Auto-detect target process name from manifest when not supplied by caller
     if (-not $ProcessName) {
         try {
-            $mf  = Get-MsixManifest $PackagePath
+            $mf  = Get-MsixManifest -Path $PackagePath
             $app = Get-MsixManifestApplication $mf
             if ($app) {
                 $exeAttr = $app.GetAttribute('Executable')

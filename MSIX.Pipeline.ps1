@@ -98,7 +98,7 @@
 
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
-    $workspace = New-MsixWorkspace $fileinfo.BaseName
+    $workspace = New-MsixWorkspace -PackageName $fileinfo.BaseName
     $target    = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
 
     # Compute WhatIf semantics once. In WhatIf mode the unpack + edit + pack
@@ -116,13 +116,13 @@
 
         # ── Unpack into workspace ────────────────────────────────────────
         Write-MsixLog -Level Info -Message 'Stage: Unpack'
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         # ── Validate ─────────────────────────────────────────────────────
         Write-MsixLog -Level Info -Message 'Stage: Validate'
-        $null = Test-MsixManifest "$workspace\AppxManifest.xml"
-        [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
+        $null = Test-MsixManifest -Path "$workspace\AppxManifest.xml"
+        [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
         $manifestDirty = $false
 
         # ── Publisher update ─────────────────────────────────────────────
@@ -160,7 +160,7 @@
         }
 
         if ($manifestDirty) {
-            Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
+            Save-MsixManifest -Manifest $manifest -Path "$workspace\AppxManifest.xml"
         }
 
         # ── Repack to SCRATCH (never to $target until sign succeeds) ─────
@@ -177,8 +177,8 @@
         try {
             if ($needsPsf) {
                 Write-MsixLog -Level Info -Message 'Stage: PSF injection'
-                $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
-                Assert-MsixProcessSuccess $r 'MakeAppx pack (pre-PSF scratch)'
+                $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+                Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack (pre-PSF scratch)'
 
                 $psfArgs = @{
                     PackagePath  = $scratch
@@ -191,8 +191,8 @@
                 Add-MsixPsfV2 @psfArgs
             } else {
                 Write-MsixLog -Level Info -Message 'Stage: Repack'
-                $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
-                Assert-MsixProcessSuccess $r 'MakeAppx pack'
+                $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+                Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack'
             }
             $packSucceeded = $true
 
@@ -363,11 +363,11 @@ function _MsixMutatePackage {
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath
     $wsName    = if ($WorkspaceSuffix) { "$($fileinfo.BaseName)$WorkspaceSuffix" } else { "$($fileinfo.BaseName)-$Operation" }
-    $workspace = New-MsixWorkspace $wsName
+    $workspace = New-MsixWorkspace -PackageName $wsName
 
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         $summary = & $Mutator $workspace
 
@@ -398,8 +398,8 @@ function _MsixMutatePackage {
         $scratch = Join-Path $env:TEMP ("msix-{0}-{1}{2}" -f $Operation, ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($target)))
         $packOk = $false
         try {
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
-            Assert-MsixProcessSuccess $r 'MakeAppx pack'
+            $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+            Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack'
             $packOk = $true
             if (-not $SkipSigning) {
                 Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword

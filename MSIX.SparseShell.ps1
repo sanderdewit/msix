@@ -86,13 +86,13 @@ function Import-MsixSparseShellExtension {
 
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
-    $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-sparse"
+    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-sparse"
     $inner     = Join-Path $env:TEMP ("msix-inner-{0}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)))
 
     try {
         # ── Unpack outer ──────────────────────────────────────────────────
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack (outer)'
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack (outer)'
 
         # ── Resolve the nested package path ──────────────────────────────
         if (-not $NestedPackagePath) {
@@ -121,8 +121,8 @@ function Import-MsixSparseShellExtension {
 
         # ── Unpack inner ──────────────────────────────────────────────────
         New-Item -ItemType Directory -Path $inner -Force | Out-Null
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $innerPkg, '/d', $inner, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack (inner)'
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $innerPkg, '/d', $inner, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack (inner)'
 
         # ── Load both manifests via the XML-safe helper ──────────────────
         $outerManifestPath = Join-Path -Path $workspace -ChildPath 'AppxManifest.xml'
@@ -284,8 +284,8 @@ function Import-MsixSparseShellExtension {
         $scratch = Join-Path $env:TEMP ("msix-sparse-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($target)))
         $packOk  = $false
         try {
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
-            Assert-MsixProcessSuccess $r 'MakeAppx pack'
+            $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+            Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack'
             $packOk = $true
             if (-not $SkipSigning) {
                 Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword

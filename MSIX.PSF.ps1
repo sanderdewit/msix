@@ -631,15 +631,15 @@ function Add-MsixPsfV2 {
     if (-not $PsfSourcePath) { $PsfSourcePath = Join-Path -Path $toolsRoot -ChildPath 'psf' }
 
     $fileinfo = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace $fileinfo.BaseName
+    $workspace = New-MsixWorkspace -PackageName $fileinfo.BaseName
 
     try {
         Write-MsixLog -Level Info -Message "Unpacking: $($fileinfo.FullName)"
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
-        $null = Test-MsixManifest "$workspace\AppxManifest.xml"
-        [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
+        $null = Test-MsixManifest -Path "$workspace\AppxManifest.xml"
+        [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
         $apps = @(Get-MsixManifestApplication $manifest)
 
         # Determine bitness from first app's executable path
@@ -830,7 +830,7 @@ function Add-MsixPsfV2 {
             }
 
             if ($PSCmdlet.ShouldProcess("$workspace\AppxManifest.xml", 'Save updated manifest')) {
-                Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
+                Save-MsixManifest -Manifest $manifest -Path "$workspace\AppxManifest.xml"
             }
         }
 
@@ -843,8 +843,8 @@ function Add-MsixPsfV2 {
         Write-MsixLog -Level Info -Message "Repacking (via scratch): $repackTarget"
         $packOk = $false
         try {
-            $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
-            Assert-MsixProcessSuccess $r 'MakeAppx pack'
+            $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+            Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack'
             $packOk = $true
             if ($SkipSigning) {
                 Write-MsixLog -Level Info -Message "Skipping signing (use Invoke-MsixSigning later, or chain another PSF call)."

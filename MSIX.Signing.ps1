@@ -195,7 +195,7 @@
             }
 
             if ($PSCmdlet.ShouldProcess($fileinfo.FullName, 'Sign with signtool')) {
-                $r = Invoke-MsixProcess $signtool -ArgumentList $sigArgs
+                $r = Invoke-MsixProcess -FilePath $signtool -ArgumentList $sigArgs
                 if ($r.ExitCode -ne 0) {
                     $detail = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
                     throw "signtool failed (exit $($r.ExitCode)): $detail`nCheck: Microsoft-Windows-AppxPackagingOM event log."
@@ -238,7 +238,7 @@
                              '/dlib', $resolvedDlib, '/dmdf', $metadataPath, $fileinfo.FullName)
 
                 if ($PSCmdlet.ShouldProcess($fileinfo.FullName, 'Sign with signtool (Trusted Signing)')) {
-                    $r = Invoke-MsixProcess $signtool -ArgumentList $sigArgs
+                    $r = Invoke-MsixProcess -FilePath $signtool -ArgumentList $sigArgs
                     if ($r.ExitCode -ne 0) {
                         $detail = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
                         throw "signtool (TrustedSigning) failed (exit $($r.ExitCode)): $detail"
@@ -299,7 +299,7 @@
                 $azArgsBase += $fileinfo.FullName
 
                 if ($PSCmdlet.ShouldProcess($fileinfo.FullName, 'Sign with AzureSignTool (Key Vault)')) {
-                    $r = Invoke-MsixProcess $azst -ArgumentList $azArgsBase
+                    $r = Invoke-MsixProcess -FilePath $azst -ArgumentList $azArgsBase
                     if ($r.ExitCode -ne 0) {
                         $detail = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
                         throw "AzureSignTool failed (exit $($r.ExitCode)): $detail"

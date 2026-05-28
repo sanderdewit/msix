@@ -213,7 +213,7 @@ function Get-MsixProcMonFailure {
     $csv = [System.IO.Path]::ChangeExtension($PmlPath, '.csv')
     Write-MsixLog -Level Info -Message "Converting PML -> CSV: $csv"
 
-    $null = Invoke-MsixProcess $procmon -ArgumentList @('/OpenLog', $PmlPath, '/SaveAs', $csv, '/SaveApplyFilter', '/Quiet', '/Terminate')
+    $null = Invoke-MsixProcess -FilePath $procmon -ArgumentList @('/OpenLog', $PmlPath, '/SaveAs', $csv, '/SaveApplyFilter', '/Quiet', '/Terminate')
     if (-not (Test-Path -LiteralPath $csv)) {
         throw "Procmon failed to export CSV from $PmlPath"
     }

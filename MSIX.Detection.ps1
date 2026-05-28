@@ -41,10 +41,10 @@ function Get-MsixFontCandidate {
 
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-fonts"
+    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-fonts"
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Extension -in '.ttf','.otf','.ttc' } |
@@ -94,10 +94,10 @@ function Get-MsixDesktopShortcutCandidate {
 
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-shortcuts"
+    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-shortcuts"
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         $patterns = @('VFS\\Common Desktop','VFS\\User Desktop','VFS\\Desktop')
         Get-ChildItem -LiteralPath $workspace -Recurse -File -Filter *.lnk -ErrorAction SilentlyContinue |
@@ -251,10 +251,10 @@ function Get-MsixCapabilityHint {
 
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-caphints"
+    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-caphints"
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         $hits = [System.Collections.Generic.HashSet[string]]::new()
         $allDlls = $script:DllToCapability.Keys
@@ -308,10 +308,10 @@ function Get-MsixNestedPackageCandidate {
 
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-nested"
+    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-nested"
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Extension -in '.msix','.appx','.msixbundle','.appxbundle' } |
@@ -410,15 +410,15 @@ function Get-MsixPluginExtensionPoint {
 
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-plugins"
+    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-plugins"
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         # Anchor the scan under the first Application's exe directory if we
         # can resolve it. Without that anchor we'd also flag e.g.
         # VFS\Windows\System32\<random>\Plugins (false positive).
-        [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
+        [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
         $apps = @($manifest.Package.Applications.Application)
         $appRoots = [System.Collections.Generic.List[string]]::new()
         foreach ($app in $apps) {

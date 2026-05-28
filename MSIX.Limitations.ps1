@@ -238,14 +238,14 @@ function Test-MsixAgainstLimitation {
 
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-limits"
+    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-limits"
     $hits = @()
 
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
-        [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
+        [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
 
         # cwd-system32 / install-dir-readonly: any executable in a subfolder + writable companions
         foreach ($app in @($manifest.Package.Applications.Application)) {

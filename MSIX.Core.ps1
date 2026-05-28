@@ -234,14 +234,14 @@ function Invoke-MsixProcess {
 
     .EXAMPLE
         # Preferred: array form (each argument quoted correctly)
-        Invoke-MsixProcess "$root\Tools\MakeAppx.exe" -ArgumentList @(
+        Invoke-MsixProcess -FilePath "$root\Tools\MakeAppx.exe" -ArgumentList @(
             'unpack', '/p', $packagePath, '/d', $workspace, '/o'
         )
 
     .EXAMPLE
         # DEPRECATED legacy single-string form — emits a warning. New callers
         # MUST use -ArgumentList; this is retained only for older scripts.
-        Invoke-MsixProcess "$root\Tools\MakeAppx.exe" `
+        Invoke-MsixProcess -FilePath "$root\Tools\MakeAppx.exe" `
             -Arguments "unpack /p `"$packagePath`" /d `"$workspace`" /o"
     #>
     [CmdletBinding(DefaultParameterSetName = 'ArgumentList')]

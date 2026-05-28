@@ -4,7 +4,7 @@
     New-Item $script:Tmp -ItemType Directory -Force | Out-Null
 }
 AfterAll {
-    Remove-Item $script:Tmp -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $script:Tmp -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Module MSIX -ErrorAction SilentlyContinue
 }
 
@@ -21,7 +21,7 @@ Describe 'Standard scripts' -Tag 'Scripts' {
 
     It 'Each catalogue entry points to a real template file' {
         foreach ($e in Get-MsixStandardScript) {
-            Test-Path $e.Template | Should -BeTrue
+            Test-Path -LiteralPath $e.Template | Should -BeTrue
         }
     }
 
@@ -31,7 +31,7 @@ Describe 'Standard scripts' -Tag 'Scripts' {
             DisplayName = 'Contoso'
             Target      = 'contoso.exe'
         } | Out-Null
-        $text = Get-Content $out -Raw
+        $text = Get-Content -LiteralPath $out -Raw
         $text | Should -Match "displayName\s*=\s*'Contoso'"
         $text | Should -Match "target\s*=\s*'contoso\.exe'"
         $text | Should -Not -Match '<#PARAM:'
@@ -55,6 +55,6 @@ Describe 'Standard scripts' -Tag 'Scripts' {
             Target      = 'a.exe'
         } | Out-Null
         # 'Location' default is 'Desktop'
-        (Get-Content $out -Raw) | Should -Match "location\s*=\s*'Desktop'"
+        (Get-Content -LiteralPath $out -Raw) | Should -Match "location\s*=\s*'Desktop'"
     }
 }

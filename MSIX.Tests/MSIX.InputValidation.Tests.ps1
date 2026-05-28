@@ -111,7 +111,7 @@ Describe 'Parameter validation rejects malformed input' -Tag 'Validation' {
             # Exercise the ValidateScript directly: $_ is the parameter value,
             # so we use $vs.ScriptBlock.InvokeWithContext.
             foreach ($good in '*','.log','.tar.gz','Directory','Drive') {
-                $dollarUnder = New-Object psvariable '_', @([string[]]@($good))
+                $dollarUnder = [psvariable]::new('_', @([string[]]@($good)))
                 { $vs.ScriptBlock.InvokeWithContext(@{}, $dollarUnder, @()) } |
                     Should -Not -Throw
             }

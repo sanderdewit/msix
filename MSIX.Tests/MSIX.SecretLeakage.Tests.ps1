@@ -71,7 +71,7 @@ Describe 'Secret non-leakage' -Tag 'Security' {
             Invoke-MsixSigning -PackagePath 'C:\nope.msix' -Pfx 'C:\nope.pfx' -PfxPassword $secure -Signer SignTool -WarningVariable warn -WarningAction Continue -WhatIf
         }
         catch {
-            Write-Verbose $_
+            Write-Verbose -Message $_
         }
         ($warn -join ' ') | Should -Match 'command line'
     }

@@ -95,9 +95,9 @@ function Install-MsixMgr {
             $exe = Get-ChildItem -LiteralPath $dest -Recurse -Filter 'msixmgr.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($exe) {
                 $env:MSIX_MSIXMGR_PATH = $exe.FullName
-                Write-MsixLog Info "msixmgr installed: $($exe.FullName)"
+                Write-MsixLog -Level Info -Message "msixmgr installed: $($exe.FullName)"
             } else {
-                Write-MsixLog Warning "msixmgr.exe not found after extraction; check $dest"
+                Write-MsixLog -Level Warning -Message "msixmgr.exe not found after extraction; check $dest"
             }
         }
 }
@@ -216,9 +216,9 @@ function Resolve-MsixMgrPath {
     }
     $toolsRoot = Get-MsixToolsRoot
     foreach ($p in @(
-        (Join-Path $toolsRoot 'msixmgr\x64\msixmgr.exe'),
-        (Join-Path $toolsRoot 'msixmgr\x86\msixmgr.exe'),
-        (Join-Path $toolsRoot 'Tools\msixmgr.exe')
+        (Join-Path -Path $toolsRoot -ChildPath 'msixmgr\x64\msixmgr.exe'),
+        (Join-Path -Path $toolsRoot -ChildPath 'msixmgr\x86\msixmgr.exe'),
+        (Join-Path -Path $toolsRoot -ChildPath 'Tools\msixmgr.exe')
     )) {
         if (Test-Path -LiteralPath $p) { return $p }
     }
@@ -345,7 +345,7 @@ function New-MsixAppAttachImage {
             }
             $first = $false
         }
-        Write-MsixLog Info "App Attach CIM created: $OutputPath"
+        Write-MsixLog -Level Info -Message "App Attach CIM created: $OutputPath"
         return Get-Item -LiteralPath $OutputPath
     }
 
@@ -358,11 +358,11 @@ function New-MsixAppAttachImage {
         $totalBytes = ($PackagePath | ForEach-Object { (Get-Item -LiteralPath $_).Length } | Measure-Object -Sum).Sum
         # Unpacked is roughly 2-3x compressed; pad another 20% headroom; minimum 1 GB
         $SizeGB = [math]::Max(1, [math]::Ceiling(($totalBytes * 3 * 1.2) / 1GB))
-        Write-MsixLog Info "Auto-sized VHDX: ${SizeGB} GB"
+        Write-MsixLog -Level Info -Message "Auto-sized VHDX: ${SizeGB} GB"
     }
 
     if (-not $PSCmdlet.ShouldProcess($OutputPath, "Create VHDX (${SizeGB} GB) and unpack packages")) {
-        Write-MsixLog Info "[WhatIf] Would create ${SizeGB} GB VHDX at '$OutputPath' and unpack $($PackagePath.Count) package(s). No changes made."
+        Write-MsixLog -Level Info -Message "[WhatIf] Would create ${SizeGB} GB VHDX at '$OutputPath' and unpack $($PackagePath.Count) package(s). No changes made."
         return $null
     }
 
@@ -377,9 +377,9 @@ function New-MsixAppAttachImage {
         $drive = "$($part.DriveLetter):"
 
         foreach ($p in $PackagePath) {
-            $info  = _MsixGetPackageInfo $p
+            $info  = _MsixGetPackageInfo -PackagePath $p
             $folder = "${drive}\$($info.Name)_$($info.Version)"
-            Write-MsixLog Info "Expanding $p -> $folder"
+            Write-MsixLog -Level Info -Message "Expanding $p -> $folder"
             $msixMgrArgs = @('-Unpack', '-packagePath', $p, '-destination', $folder)
             if ($ApplyAcls) { $msixMgrArgs += '-applyacls' }
             $r = Invoke-MsixProcess -FilePath $msixmgr -ArgumentList $msixMgrArgs
@@ -390,7 +390,7 @@ function New-MsixAppAttachImage {
         Dismount-DiskImage -ImagePath $OutputPath | Out-Null
     }
 
-    Write-MsixLog Info "App Attach VHDX created: $OutputPath"
+    Write-MsixLog -Level Info -Message "App Attach VHDX created: $OutputPath"
     return Get-Item -LiteralPath $OutputPath
 }
 
@@ -463,7 +463,7 @@ function Dismount-MsixAppAttachImage {
         [string]$ImagePath
     )
     Dismount-DiskImage -ImagePath $ImagePath -ErrorAction Stop | Out-Null
-    Write-MsixLog Info "Dismounted: $ImagePath"
+    Write-MsixLog -Level Info -Message "Dismounted: $ImagePath"
 }
 
 
@@ -483,7 +483,7 @@ function Test-MsixAppAttachImage {
         if (-not $m.DriveLetter) { throw "Image mounted without an accessible volume." }
         $packages = Get-ChildItem -LiteralPath $m.DriveLetter -Directory -ErrorAction SilentlyContinue |
                     ForEach-Object {
-                        $manifest = Join-Path $_.FullName 'AppxManifest.xml'
+                        $manifest = Join-Path -Path $_.FullName -ChildPath 'AppxManifest.xml'
                         if (Test-Path -LiteralPath $manifest) {
                             [xml]$x = _MsixLoadXmlSecure -Path $manifest
                             [pscustomobject]@{

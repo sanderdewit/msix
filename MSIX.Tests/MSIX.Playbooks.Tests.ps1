@@ -54,7 +54,7 @@ Describe 'Playbook bus' -Tag 'Playbooks' {
             [System.IO.File]::WriteAllText($script:ManifestPath, $xml, [System.Text.UTF8Encoding]::new($false))
         }
         AfterAll {
-            if (Test-Path $script:TmpHive) {
+            if (Test-Path -LiteralPath $script:TmpHive) {
                 Remove-Item -LiteralPath $script:TmpHive -Recurse -Force -ErrorAction SilentlyContinue
             }
         }

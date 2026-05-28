@@ -81,7 +81,7 @@ function _MsixYamlBlock([object]$obj, [int]$indent) {
             foreach ($item in $items) {
                 if ($item -is [System.Collections.IDictionary] -or $item -is [pscustomobject]) {
                     # First key of the nested object gets the list bullet.
-                    $inner = _MsixYamlBlock $item ($indent + 4)
+                    $inner = _MsixYamlBlock -Obj $item -Indent ($indent + 4)
                     $lines = @($inner -split "`r?`n" | Where-Object { $_ -ne '' })
                     if ($lines.Count -gt 0) {
                         $sb.AppendLine("$pad  - $($lines[0].TrimStart())") | Out-Null
@@ -90,16 +90,16 @@ function _MsixYamlBlock([object]$obj, [int]$indent) {
                         }
                     }
                 } else {
-                    $sb.AppendLine("$pad  - $(_MsixYamlScalar $item)") | Out-Null
+                    $sb.AppendLine("$pad  - $(_MsixYamlScalar -Val $item)") | Out-Null
                 }
             }
 
         } elseif ($v -is [System.Collections.IDictionary] -or $v -is [pscustomobject]) {
             $sb.AppendLine("${pad}${k}:") | Out-Null
-            $sb.Append((_MsixYamlBlock $v ($indent + 2))) | Out-Null
+            $sb.Append((_MsixYamlBlock -Obj $v -Indent ($indent + 2))) | Out-Null
 
         } else {
-            $sb.AppendLine("${pad}${k}: $(_MsixYamlScalar $v)") | Out-Null
+            $sb.AppendLine("${pad}${k}: $(_MsixYamlScalar -Val $v)") | Out-Null
         }
     }
 
@@ -170,16 +170,16 @@ function _MsixParseYaml([string[]]$Lines, [ref]$Pos, [int]$MinIndent) {
                                     # First key may be on the same line as '-'.
                                     if ($firstVal -match '^([^:]+):\s*(.*)$') {
                                         $fk = $matches[1].Trim(); $fv = $matches[2].Trim()
-                                        $itemObj[$fk] = if ($fv -eq '' -or $fv -eq 'null') { $null } else { _MsixUnquoteYaml $fv }
+                                        $itemObj[$fk] = if ($fv -eq '' -or $fv -eq 'null') { $null } else { _MsixUnquoteYaml -S $fv }
                                     }
                                     $nested = _MsixParseYaml -Lines $Lines -Pos $Pos -MinIndent ($seqInd + 1)
                                     foreach ($nk in $nested.Keys) { $itemObj[$nk] = $nested[$nk] }
                                     $seq += [pscustomobject]$itemObj
                                 } else {
-                                    $seq += if ($firstVal -eq 'null') { $null } else { _MsixUnquoteYaml $firstVal }
+                                    $seq += if ($firstVal -eq 'null') { $null } else { _MsixUnquoteYaml -S $firstVal }
                                 }
                             } else {
-                                $seq += if ($firstVal -eq 'null') { $null } else { _MsixUnquoteYaml $firstVal }
+                                $seq += if ($firstVal -eq 'null') { $null } else { _MsixUnquoteYaml -S $firstVal }
                             }
                         }
                         $result[$key] = $seq
@@ -192,7 +192,7 @@ function _MsixParseYaml([string[]]$Lines, [ref]$Pos, [int]$MinIndent) {
                 }
                 $result[$key] = $null
             } else {
-                $result[$key] = _MsixUnquoteYaml $value
+                $result[$key] = _MsixUnquoteYaml -S $value
             }
         }
     }
@@ -350,11 +350,11 @@ function Export-MsixRemediationPlan {
 
     $yaml = "# MSIX Remediation Plan - do not edit version or packageFingerprint`n"
     $yaml += "remediation:`n"
-    $yaml += _MsixYamlBlock $Plan 2
+    $yaml += _MsixYamlBlock -Obj $Plan -Indent 2
 
     if ($PSCmdlet.ShouldProcess($Path, 'Write remediation plan')) {
         [IO.File]::WriteAllText($Path, $yaml, [Text.UTF8Encoding]::new($false))
-        Write-MsixLog Info "Remediation plan written: $Path"
+        Write-MsixLog -Level Info -Message "Remediation plan written: $Path"
     }
 }
 
@@ -594,14 +594,14 @@ function Invoke-MsixRemediationPlan {
     }
 
     $fixes = @($Plan.appliedFixes | Where-Object { $_ })
-    Write-MsixLog Info "Remediation plan: $($fixes.Count) step(s) from '$($Plan.generatedBy)'"
+    Write-MsixLog -Level Info -Message "Remediation plan: $($fixes.Count) step(s) from '$($Plan.generatedBy)'"
 
     if ($DryRun) {
         foreach ($fix in $fixes) {
             $name = if ($fix -is [hashtable]) { $fix['cmdlet'] } else { $fix.cmdlet }
             $argMap = if ($fix -is [hashtable]) { $fix['args'] } else { $fix.args }
             $argsStr = if ($argMap) { ($argMap.GetEnumerator() | ForEach-Object { "-$($_.Key) '$($_.Value)'" }) -join ' ' } else { '' }
-            Write-MsixLog Info "  [DryRun] $name $argsStr"
+            Write-MsixLog -Level Info -Message "  [DryRun] $name $argsStr"
         }
         return
     }
@@ -631,7 +631,7 @@ function Invoke-MsixRemediationPlan {
             $callArgs['SkipSigning'] = $true
         }
 
-        Write-MsixLog Info "  Step $i / $($fixes.Count): $name"
+        Write-MsixLog -Level Info -Message "  Step $i / $($fixes.Count): $name"
         if ($PSCmdlet.ShouldProcess($current, "Remediation plan step ${i}: $name")) {
             & $cmd @callArgs
         }
@@ -643,6 +643,6 @@ function Invoke-MsixRemediationPlan {
             Invoke-MsixSigning -PackagePath $current -Pfx $Pfx -PfxPassword $PfxPassword
         }
     } elseif (-not $SkipSigning -and -not $Pfx) {
-        Write-MsixLog Warning 'No -Pfx supplied - package left unsigned. Pass -SkipSigning to suppress this warning.'
+        Write-MsixLog -Level Warning -Message 'No -Pfx supplied - package left unsigned. Pass -SkipSigning to suppress this warning.'
     }
 }

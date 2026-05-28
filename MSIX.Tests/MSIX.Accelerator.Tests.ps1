@@ -37,8 +37,8 @@ publisher: CN=Contoso
     It 'Does NOT attempt to load powershell-yaml at runtime' {
         # Grep the module source: ConvertFrom-Yaml should not appear.
         $modulePath = Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.Accelerator.ps1')
-        (Get-Content $modulePath -Raw) | Should -Not -Match 'ConvertFrom-Yaml'
-        (Get-Content $modulePath -Raw) | Should -Not -Match 'powershell-yaml'
+        (Get-Content -LiteralPath $modulePath -Raw) | Should -Not -Match 'ConvertFrom-Yaml'
+        (Get-Content -LiteralPath $modulePath -Raw) | Should -Not -Match 'powershell-yaml'
     }
 
     It 'Treats YAML type tags as literal text (no object instantiation)' {

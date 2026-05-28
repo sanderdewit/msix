@@ -108,7 +108,7 @@ function Get-MsixToolsRoot {
         if (-not (Get-Command Install-MsixSdkTool -ErrorAction SilentlyContinue)) {
             throw 'Install-MsixSdkTool is not available; cannot auto-install. Make sure the module loaded fully.'
         }
-        Write-MsixLog Info 'No SDK tools found; auto-installing via Install-MsixSdkTool.'
+        Write-MsixLog -Level Info -Message 'No SDK tools found; auto-installing via Install-MsixSdkTool.'
         Install-MsixSdkTool | Out-Null
         if (Test-Path "$PSScriptRoot\Tools\MakeAppx.exe") {
             $script:ToolsRoot = $PSScriptRoot
@@ -162,7 +162,7 @@ function Set-MsixToolsRoot {
         throw "MakeAppx.exe not found under '$Path\Tools\'. Verify the path."
     }
     $script:ToolsRoot = $Path
-    Write-MsixLog Info "Tools root set to: $Path"
+    Write-MsixLog -Level Info -Message "Tools root set to: $Path"
 }
 
 function New-MsixWorkspace {
@@ -203,7 +203,7 @@ function New-MsixWorkspace {
     $id   = [guid]::NewGuid().ToString('N').Substring(0, 8)
     $path = Join-Path $env:TEMP "msix-$PackageName-$id"
     New-Item -ItemType Directory -Path $path -Force | Out-Null
-    Write-MsixLog Debug "Workspace created: $path"
+    Write-MsixLog -Level Debug -Message "Workspace created: $path"
     return $path
 }
 
@@ -265,7 +265,7 @@ function Invoke-MsixProcess {
     # Backward-compat: split the legacy single string into an array using a
     # quote-aware tokenizer. Issues a deprecation warning so callers migrate.
     if ($PSCmdlet.ParameterSetName -eq 'LegacyString') {
-        Write-MsixLog Warning "Invoke-MsixProcess: -Arguments (single string) is deprecated. Pass -ArgumentList @(...) instead. Caller: $((Get-PSCallStack)[1].Command)"
+        Write-MsixLog -Level Warning -Message "Invoke-MsixProcess: -Arguments (single string) is deprecated. Pass -ArgumentList @(...) instead. Caller: $((Get-PSCallStack)[1].Command)"
         $ArgumentList = @()
         if ($Arguments) {
             # Honour double-quoted segments containing spaces; otherwise split on whitespace.
@@ -276,9 +276,9 @@ function Invoke-MsixProcess {
         }
     }
 
-    Write-MsixLog Debug "Exec: $FilePath $([string]::Join(' ', ($ArgumentList | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } })))"
+    Write-MsixLog -Level Debug -Message "Exec: $FilePath $([string]::Join(' ', ($ArgumentList | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } })))"
 
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName               = $FilePath
     $psi.RedirectStandardError  = $true
     $psi.RedirectStandardOutput = $true
@@ -303,7 +303,7 @@ function Invoke-MsixProcess {
         }))
     }
 
-    $p = New-Object System.Diagnostics.Process
+    $p = [System.Diagnostics.Process]::new()
     $p.StartInfo = $psi
     try {
         $null = $p.Start()

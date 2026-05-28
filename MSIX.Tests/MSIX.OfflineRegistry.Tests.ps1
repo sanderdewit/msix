@@ -21,7 +21,7 @@
                 _MsixOfflineCloseKey -Key $child
             }
 
-            if (Test-Path $hivePath) { Remove-Item -LiteralPath $hivePath -Force }
+            if (Test-Path -LiteralPath $hivePath) { Remove-Item -LiteralPath $hivePath -Force }
             if (-not (_MsixOfflineSaveHive -Hive $hive -Path $hivePath)) {
                 throw 'ORSaveHive returned a non-success result.'
             }
@@ -30,13 +30,13 @@
         }
     } $script:TestHive
 
-    if (-not (Test-Path $script:TestHive)) {
+    if (-not (Test-Path -LiteralPath $script:TestHive)) {
         throw "Test setup failed: synthetic hive not produced at '$script:TestHive'."
     }
 }
 
 AfterAll {
-    if (Test-Path $script:TestHive) {
+    if (Test-Path -LiteralPath $script:TestHive) {
         Remove-Item -LiteralPath $script:TestHive -Force -ErrorAction SilentlyContinue
     }
     Remove-Module MSIX -ErrorAction SilentlyContinue

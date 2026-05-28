@@ -54,16 +54,16 @@ function Get-MsixContainerAppData {
         }
 
         $base = Join-Path $env:LOCALAPPDATA "Packages\$($appx.PackageFamilyName)"
-        $cache = Join-Path $base 'LocalCache'
+        $cache = Join-Path -Path $base -ChildPath 'LocalCache'
 
         return [pscustomobject]@{
             Name              = $appx.Name
             PackageFamilyName = $appx.PackageFamilyName
             PackageRoot       = $base
-            VirtualLocal      = Join-Path $cache 'Local'
-            VirtualRoaming    = Join-Path $cache 'Roaming'
-            VirtualTemp       = Join-Path $cache 'Temp'
-            AcExists          = Test-Path -LiteralPath (Join-Path $base 'AC')
+            VirtualLocal      = Join-Path -Path $cache -ChildPath 'Local'
+            VirtualRoaming    = Join-Path -Path $cache -ChildPath 'Roaming'
+            VirtualTemp       = Join-Path -Path $cache -ChildPath 'Temp'
+            AcExists          = Test-Path -LiteralPath (Join-Path -Path $base -ChildPath 'AC')
             CacheExists       = Test-Path -LiteralPath $cache
         }
     }
@@ -123,7 +123,7 @@ function Get-MsixOrphanedAppData {
                 $size = (Get-ChildItem -LiteralPath $folder.FullName -Recurse -File -ErrorAction SilentlyContinue |
                          Measure-Object -Property Length -Sum).Sum
             } catch {
-                Write-MsixLog Debug "Could not measure orphaned AppData folder '$($folder.FullName)': $_"
+                Write-MsixLog -Level Debug -Message "Could not measure orphaned AppData folder '$($folder.FullName)': $_"
             }
             [pscustomobject]@{
                 Path          = $folder.FullName
@@ -179,12 +179,12 @@ function Copy-MsixHostAppDataIntoPackage {
     if (-not $DestinationSubfolder) {
         $DestinationSubfolder = (Get-Item -LiteralPath $SourcePath).Name
     }
-    $dest = Join-Path $info.VirtualRoaming $DestinationSubfolder
+    $dest = Join-Path -Path $info.VirtualRoaming -ChildPath $DestinationSubfolder
 
     if ($PSCmdlet.ShouldProcess($dest, "Copy from $SourcePath")) {
         New-Item -ItemType Directory -Path $dest -Force | Out-Null
         Copy-Item "$SourcePath\*" $dest -Recurse -Force
-        Write-MsixLog Info "Copied $SourcePath -> $dest"
+        Write-MsixLog -Level Info -Message "Copied $SourcePath -> $dest"
     }
     return $dest
 }
@@ -230,7 +230,7 @@ function Invoke-MsixContainerCommand {
             $AppId = (@($manifest.Package.Applications.Application))[0].Id
         }
 
-        Write-MsixLog Info "Container exec: $($appx.PackageFamilyName)!$AppId -> $Command"
+        Write-MsixLog -Level Info -Message "Container exec: $($appx.PackageFamilyName)!$AppId -> $Command"
         Invoke-CommandInDesktopPackage -PackageFamilyName $appx.PackageFamilyName `
                                        -AppId $AppId `
                                        -Command $Command `

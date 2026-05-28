@@ -90,7 +90,7 @@ function _MsixMutateManifest {
 
     if ($SaveManifestTo) {
         Copy-Item "$workspace\AppxManifest.xml" $SaveManifestTo -Force
-        Write-MsixLog Info "Debug manifest saved to: $SaveManifestTo"
+        Write-MsixLog -Level Info -Message "Debug manifest saved to: $SaveManifestTo"
     }
 
     $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
@@ -100,16 +100,16 @@ function _MsixMutateManifest {
     $packSucceeded = $false
     $signSucceeded = $false
     try {
-        Write-MsixLog Info "$Activity -> $target"
+        Write-MsixLog -Level Info -Message "$Activity -> $target"
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack','/p',$scratch,'/d',$workspace,'/o')
         Assert-MsixProcessSuccess $r 'MakeAppx pack'
         $packSucceeded = $true
 
         if ($WhatIfPreview) {
-            Write-MsixLog Info "[WhatIf] Would replace '$target' with mutated package. Signing skipped."
+            Write-MsixLog -Level Info -Message "[WhatIf] Would replace '$target' with mutated package. Signing skipped."
             if ($UnsignedOutputPath) {
                 Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction Stop
-                Write-MsixLog Info "[WhatIf] Preview package copied to: $UnsignedOutputPath"
+                Write-MsixLog -Level Info -Message "[WhatIf] Preview package copied to: $UnsignedOutputPath"
             }
             return $null
         }
@@ -125,12 +125,12 @@ function _MsixMutateManifest {
         if ($packSucceeded -and -not $signSucceeded -and $UnsignedOutputPath) {
             try {
                 Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction Stop
-                Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
+                Write-MsixLog -Level Warning -Message "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
             } catch {
-                Write-MsixLog Error "Signing failed AND unsigned-output copy to '$UnsignedOutputPath' failed: $_"
+                Write-MsixLog -Level Error -Message "Signing failed AND unsigned-output copy to '$UnsignedOutputPath' failed: $_"
             }
         } elseif ($packSucceeded -and -not $signSucceeded) {
-            Write-MsixLog Warning "Signing failed. Original target '$target' is unchanged. Pass -UnsignedOutputPath to preserve the unsigned package next time."
+            Write-MsixLog -Level Warning -Message "Signing failed. Original target '$target' is unchanged. Pass -UnsignedOutputPath to preserve the unsigned package next time."
         }
         throw
     } finally {
@@ -274,9 +274,9 @@ function Set-MsixFileSystemWriteVirtualization {
                         -WhatIfPreview:$isWhatIf `
                         -Activity 'desktop6:FileSystemWriteVirtualization' -Mutate {
         param([xml]$M)
-        Add-MsixManifestNamespace $M 'desktop6'
-        Add-MsixManifestNamespace $M 'rescap'
-        Set-MsixManifestMaxVersionTested $M -MinBuild 19041
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'desktop6'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'rescap'
+        Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 19041
 
         $props = $M.Package.Properties
         $d6    = Get-MsixManifestNamespaceUri 'desktop6'
@@ -290,7 +290,7 @@ function Set-MsixFileSystemWriteVirtualization {
             $null = $props.AppendChild($flag)
         }
         $flag.InnerText = if ($Enable) { 'enabled' } else { 'disabled' }
-        Write-MsixLog Info "desktop6:FileSystemWriteVirtualization set to '$($flag.InnerText)'."
+        Write-MsixLog -Level Info -Message "desktop6:FileSystemWriteVirtualization set to '$($flag.InnerText)'."
 
         # ── virtualization:ExcludedDirectories ────────────────────────────
         # Always written alongside the flag (matches commercial tool behaviour).
@@ -301,7 +301,7 @@ function Set-MsixFileSystemWriteVirtualization {
         if ($virtNode) { $null = $props.RemoveChild($virtNode) }
 
         if ($ExcludedDirectories.Count -gt 0) {
-            Add-MsixManifestNamespace $M 'virtualization'
+            Add-MsixManifestNamespace -Manifest $M -Prefix 'virtualization'
             $virtNode = $M.CreateElement('virtualization:FileSystemWriteVirtualization', $virtUri)
             $dirs     = $M.CreateElement('virtualization:ExcludedDirectories', $virtUri)
             foreach ($dir in $ExcludedDirectories) {
@@ -311,7 +311,7 @@ function Set-MsixFileSystemWriteVirtualization {
             }
             $null = $virtNode.AppendChild($dirs)
             $null = $props.AppendChild($virtNode)
-            Write-MsixLog Info "virtualization:FileSystemWriteVirtualization: $($ExcludedDirectories.Count) excluded dir(s)."
+            Write-MsixLog -Level Info -Message "virtualization:FileSystemWriteVirtualization: $($ExcludedDirectories.Count) excluded dir(s)."
         }
 
         # ── unvirtualizedResources capability (required by the schema) ─────
@@ -328,7 +328,7 @@ function Set-MsixFileSystemWriteVirtualization {
             $cap = $M.CreateElement('rescap:Capability', $rescapUri)
             $cap.SetAttribute('Name', 'unvirtualizedResources')
             $null = $capsNode.AppendChild($cap)
-            Write-MsixLog Info "Capability added: unvirtualizedResources"
+            Write-MsixLog -Level Info -Message "Capability added: unvirtualizedResources"
         }
     }
 }
@@ -416,15 +416,15 @@ function Set-MsixRegistryWriteVirtualization {
                 }
             }
             # Case-insensitive dedupe, preserve first-seen order.
-            $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+            $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
             foreach ($key in $ExcludedKeys) {
                 if ($seen.Add($key)) { $validatedKeys += $key }
             }
         }
 
-        Add-MsixManifestNamespace $M 'desktop6'
-        Add-MsixManifestNamespace $M 'rescap'
-        Set-MsixManifestMaxVersionTested $M -MinBuild 19041
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'desktop6'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'rescap'
+        Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 19041
 
         $props = $M.Package.Properties
         $d6    = Get-MsixManifestNamespaceUri 'desktop6'
@@ -438,7 +438,7 @@ function Set-MsixRegistryWriteVirtualization {
             $null = $props.AppendChild($flag)
         }
         $flag.InnerText = if ($Enable) { 'enabled' } else { 'disabled' }
-        Write-MsixLog Info "desktop6:RegistryWriteVirtualization set to '$($flag.InnerText)'."
+        Write-MsixLog -Level Info -Message "desktop6:RegistryWriteVirtualization set to '$($flag.InnerText)'."
 
         # ── virtualization:ExcludedKeys (optional) ─────────────────────────
         $virtUri  = Get-MsixManifestNamespaceUri 'virtualization'
@@ -448,7 +448,7 @@ function Set-MsixRegistryWriteVirtualization {
         if ($virtNode) { $null = $props.RemoveChild($virtNode) }
 
         if ($validatedKeys.Count -gt 0) {
-            Add-MsixManifestNamespace $M 'virtualization'
+            Add-MsixManifestNamespace -Manifest $M -Prefix 'virtualization'
             $virtNode = $M.CreateElement('virtualization:RegistryWriteVirtualization', $virtUri)
             $keys     = $M.CreateElement('virtualization:ExcludedKeys', $virtUri)
             foreach ($k in $validatedKeys) {
@@ -458,7 +458,7 @@ function Set-MsixRegistryWriteVirtualization {
             }
             $null = $virtNode.AppendChild($keys)
             $null = $props.AppendChild($virtNode)
-            Write-MsixLog Info "virtualization:RegistryWriteVirtualization: $($validatedKeys.Count) excluded key(s)."
+            Write-MsixLog -Level Info -Message "virtualization:RegistryWriteVirtualization: $($validatedKeys.Count) excluded key(s)."
         }
 
         # ── unvirtualizedResources capability (required by the schema) ─────
@@ -475,7 +475,7 @@ function Set-MsixRegistryWriteVirtualization {
             $cap = $M.CreateElement('rescap:Capability', $rescapUri)
             $cap.SetAttribute('Name', 'unvirtualizedResources')
             $null = $capsNode.AppendChild($cap)
-            Write-MsixLog Info "Capability added: unvirtualizedResources"
+            Write-MsixLog -Level Info -Message "Capability added: unvirtualizedResources"
         }
     }
 }
@@ -530,17 +530,17 @@ function Set-MsixInstalledLocationVirtualization {
                         -WhatIfPreview:$isWhatIf `
                         -Activity 'uap10:InstalledLocationVirtualization' -Mutate {
         param([xml]$M)
-        Add-MsixManifestNamespace $M 'uap10'
-        Set-MsixManifestMaxVersionTested $M -MinBuild 19041
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'uap10'
+        Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 19041
 
-        $pkgExt = _MsixGetOrCreatePackageExtensions $M
+        $pkgExt = _MsixGetOrCreatePackageExtensions -Manifest $M
         $cat    = 'windows.installedLocationVirtualization'
         $existing = $pkgExt.ChildNodes | Where-Object {
             $_.LocalName -eq 'Extension' -and $_.Category -eq $cat
         }
         foreach ($e in @($existing)) { $null = $pkgExt.RemoveChild($e) }
         if ($Disable) {
-            Write-MsixLog Info 'InstalledLocationVirtualization disabled.'
+            Write-MsixLog -Level Info -Message 'InstalledLocationVirtualization disabled.'
             return
         }
 
@@ -555,7 +555,7 @@ function Set-MsixInstalledLocationVirtualization {
         $null = $body.AppendChild($upd)
         $null = $ext.AppendChild($body)
         $null = $pkgExt.AppendChild($ext)
-        Write-MsixLog Info "uap10:InstalledLocationVirtualization added (Mod=$ModifiedItems, Del=$DeletedItems, Add=$AddedItems)."
+        Write-MsixLog -Level Info -Message "uap10:InstalledLocationVirtualization added (Mod=$ModifiedItems, Del=$DeletedItems, Add=$AddedItems)."
     }
 }
 
@@ -617,10 +617,10 @@ function Add-MsixLoaderSearchPathOverride {
                         -WhatIfPreview:$isWhatIf `
                         -Activity 'uap6:LoaderSearchPathOverride' -Mutate {
         param([xml]$M)
-        Add-MsixManifestNamespace $M 'uap6'
-        Set-MsixManifestMaxVersionTested $M -MinBuild 17134
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'uap6'
+        Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 17134
 
-        $app    = _MsixGetOrCreateApplicationExtensions $M $AppId
+        $app    = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
         $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
 
         # Find an existing override or create one.
@@ -648,13 +648,13 @@ function Add-MsixLoaderSearchPathOverride {
                 $_.LocalName -eq 'LoaderSearchPathEntry' -and $_.LoaderSearchPath -eq $p
             }
             if ($already) {
-                Write-MsixLog Info "LoaderSearchPathEntry already present: $p"
+                Write-MsixLog -Level Info -Message "LoaderSearchPathEntry already present: $p"
                 continue
             }
             $entry = $M.CreateElement('uap6:LoaderSearchPathEntry', $u6)
             $entry.SetAttribute('LoaderSearchPath', $p)
             $null = $body.AppendChild($entry)
-            Write-MsixLog Info "LoaderSearchPathEntry added: $p"
+            Write-MsixLog -Level Info -Message "LoaderSearchPathEntry added: $p"
         }
 
         # Schema caps at 5 entries
@@ -749,9 +749,9 @@ function Add-MsixFirewallRule {
                         -WhatIfPreview:$isWhatIf `
                         -Activity 'desktop2:FirewallRules' -Mutate {
         param([xml]$M)
-        Add-MsixManifestNamespace $M 'desktop2'
-        Add-MsixManifestNamespace $M 'rescap'
-        Set-MsixManifestMaxVersionTested $M -MinBuild 15063
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'desktop2'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'rescap'
+        Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 15063
 
         $app = Get-MsixManifestApplication -Manifest $M -AppId $AppId
         if (-not $app) { throw "Application '$AppId' not found in the manifest." }
@@ -760,7 +760,7 @@ function Add-MsixFirewallRule {
 
         # windows.firewallRules is a package-level extension:
         # Package/Extensions/desktop2:Extension/desktop2:FirewallRules
-        $pkgExt = _MsixGetOrCreatePackageExtensions $M
+        $pkgExt = _MsixGetOrCreatePackageExtensions -Manifest $M
         $rulesParent = $null
         foreach ($e in @($pkgExt.ChildNodes | Where-Object { $_.LocalName -eq 'Extension' -and $_.Category -eq 'windows.firewallRules' })) {
             $rules = $e.SelectSingleNode('*[local-name()="FirewallRules"]')
@@ -788,7 +788,7 @@ function Add-MsixFirewallRule {
             $cap = $M.CreateElement('rescap:Capability', $rescapUri)
             $cap.SetAttribute('Name', 'runFullTrust')
             $null = $capsNode.AppendChild($cap)
-            Write-MsixLog Info 'Capability added: runFullTrust'
+            Write-MsixLog -Level Info -Message 'Capability added: runFullTrust'
         }
 
         # Idempotent rule add
@@ -806,7 +806,7 @@ function Add-MsixFirewallRule {
             }
         }
         $null = $rulesParent.AppendChild($rule)
-        Write-MsixLog Info "FirewallRule: $Direction $Protocol $LocalPort -> $Executable"
+        Write-MsixLog -Level Info -Message "FirewallRule: $Direction $Protocol $LocalPort -> $Executable"
     }
 }
 
@@ -866,9 +866,9 @@ function Add-MsixProtocolHandler {
                         -WhatIfPreview:$isWhatIf `
                         -Activity 'uap:Protocol' -Mutate {
         param([xml]$M)
-        Add-MsixManifestNamespace $M 'uap'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'uap'
 
-        $app   = _MsixGetOrCreateApplicationExtensions $M $AppId
+        $app   = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
         $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
         $uap    = Get-MsixManifestNamespaceUri 'uap'
 
@@ -877,7 +877,7 @@ function Add-MsixProtocolHandler {
                    ForEach-Object { $_.SelectSingleNode('*[local-name()="Protocol" and @Name="' + $Name + '"]') } |
                    Where-Object { $_ }
         if ($already) {
-            Write-MsixLog Info "Protocol '$Name' already registered."
+            Write-MsixLog -Level Info -Message "Protocol '$Name' already registered."
             return
         }
 
@@ -892,7 +892,7 @@ function Add-MsixProtocolHandler {
         }
         $null = $ext.AppendChild($proto)
         $null = $appExt.AppendChild($ext)
-        Write-MsixLog Info "Protocol added: $Name"
+        Write-MsixLog -Level Info -Message "Protocol added: $Name"
     }
 }
 
@@ -963,9 +963,9 @@ function Add-MsixFileTypeAssociation {
                         -WhatIfPreview:$isWhatIf `
                         -Activity 'uap:FileTypeAssociation' -Mutate {
         param([xml]$M)
-        Add-MsixManifestNamespace $M 'uap'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'uap'
 
-        $app   = _MsixGetOrCreateApplicationExtensions $M $AppId
+        $app   = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
         $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
         $uap    = Get-MsixManifestNamespaceUri 'uap'
 
@@ -990,7 +990,7 @@ function Add-MsixFileTypeAssociation {
         $null = $fta.AppendChild($supported)
         $null = $ext.AppendChild($fta)
         $null = $appExt.AppendChild($ext)
-        Write-MsixLog Info "FTA $Name registered for: $($FileTypes -join ', ')"
+        Write-MsixLog -Level Info -Message "FTA $Name registered for: $($FileTypes -join ', ')"
     }
 }
 
@@ -1060,10 +1060,10 @@ function Add-MsixStartupTask {
                         -WhatIfPreview:$isWhatIf `
                         -Activity 'uap5:StartupTask' -Mutate {
         param([xml]$M)
-        Add-MsixManifestNamespace $M 'uap5'
-        Set-MsixManifestMaxVersionTested $M -MinBuild 15063
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'uap5'
+        Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 15063
 
-        $app   = _MsixGetOrCreateApplicationExtensions $M $AppId
+        $app   = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
         $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
         $u5    = Get-MsixManifestNamespaceUri 'uap5'
 
@@ -1072,7 +1072,7 @@ function Add-MsixStartupTask {
                    ForEach-Object { $_.SelectSingleNode('*[local-name()="StartupTask" and @TaskId="' + $TaskId + '"]') } |
                    Where-Object { $_ }
         if ($already) {
-            Write-MsixLog Info "StartupTask '$TaskId' already registered."
+            Write-MsixLog -Level Info -Message "StartupTask '$TaskId' already registered."
             return
         }
 
@@ -1088,7 +1088,7 @@ function Add-MsixStartupTask {
         $task.SetAttribute('DisplayName', $DisplayName)
         $null = $ext.AppendChild($task)
         $null = $appExt.AppendChild($ext)
-        Write-MsixLog Info "StartupTask added: $TaskId (Enabled=$Enabled)"
+        Write-MsixLog -Level Info -Message "StartupTask added: $TaskId (Enabled=$Enabled)"
     }
 }
 
@@ -1137,10 +1137,10 @@ function Add-MsixFontExtension {
                         -WhatIfPreview:$isWhatIf `
                         -Activity 'uap4:SharedFonts' -Mutate {
         param([xml]$M)
-        Add-MsixManifestNamespace $M 'uap4'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'uap4'
         $u4 = Get-MsixManifestNamespaceUri 'uap4'
 
-        $pkgExt = _MsixGetOrCreatePackageExtensions $M
+        $pkgExt = _MsixGetOrCreatePackageExtensions -Manifest $M
         $cat    = 'windows.sharedFonts'
         $existing = $pkgExt.ChildNodes | Where-Object {
             $_.LocalName -eq 'Extension' -and $_.Category -eq $cat
@@ -1162,13 +1162,13 @@ function Add-MsixFontExtension {
         foreach ($p in $FontPaths) {
             $rel = $p.Replace('\','/')
             if ($alreadyFiles -contains $rel) {
-                Write-MsixLog Info "Font already registered: $rel"
+                Write-MsixLog -Level Info -Message "Font already registered: $rel"
                 continue
             }
             $node = $M.CreateElement('uap4:Font', $u4)
             $node.SetAttribute('File', $rel)
             $null = $body.AppendChild($node)
-            Write-MsixLog Info "Font registered: $rel"
+            Write-MsixLog -Level Info -Message "Font registered: $rel"
         }
     }
 }
@@ -1258,7 +1258,7 @@ function Set-MsixBrandMetadata {
                 if ($Description) { $vis.SetAttribute('Description', $Description) }
             }
         }
-        Write-MsixLog Info 'Brand metadata updated.'
+        Write-MsixLog -Level Info -Message 'Brand metadata updated.'
     }
 }
 
@@ -1363,13 +1363,13 @@ function Add-MsixShellVerbExtension {
         -SaveManifestTo $SaveManifestTo `
         -Activity "Add shell verb '$VerbDisplayName'" -Mutate {
         param([xml]$M)
-        Add-MsixManifestNamespace $M 'uap'
-        Add-MsixManifestNamespace $M 'uap2'
-        Add-MsixManifestNamespace $M 'uap3'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'uap'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'uap2'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'uap3'
         # uap2:SupportedVerbs + uap3:Verb require build 16299+ (Win10 1709).
-        Set-MsixManifestMaxVersionTested $M -MinBuild 16299
+        Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 16299
 
-        $app    = _MsixGetOrCreateApplicationExtensions $M $AppId
+        $app    = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
         $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
         $uap    = Get-MsixManifestNamespaceUri 'uap'
         $uap2   = Get-MsixManifestNamespaceUri 'uap2'
@@ -1427,7 +1427,7 @@ function Add-MsixShellVerbExtension {
         $null = $appExt.AppendChild($ext)
 
         $scope = if ($FileTypes) { $FileTypes -join ', ' } else { 'all file types (SupportsAnyFileType)' }
-        Write-MsixLog Info "Shell verb '$VerbDisplayName' (Id=$VerbId) registered for: $scope"
+        Write-MsixLog -Level Info -Message "Shell verb '$VerbDisplayName' (Id=$VerbId) registered for: $scope"
     }
 }
 
@@ -1511,8 +1511,8 @@ function Add-MsixComServerExtension {
         #   "Extension 'windows.comServer' must be
         #    'http://schemas.microsoft.com/appx/manifest/com/windows10/4'
         #    or newer on package level."
-        Add-MsixManifestNamespace $M 'com4'
-        Add-MsixManifestNamespace $M 'rescap'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'com4'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'rescap'
 
         $comUri = Get-MsixManifestNamespaceUri 'com4'
 
@@ -1526,7 +1526,7 @@ function Add-MsixComServerExtension {
         if ($AppId) {
             $null = Get-MsixManifestApplication -Manifest $M -AppId $AppId
         }
-        $appExt = _MsixGetOrCreatePackageExtensions $M
+        $appExt = _MsixGetOrCreatePackageExtensions -Manifest $M
 
         # One com4:Extension wrapping all servers
         $comExt    = $M.CreateElement('com4:Extension', $comUri)
@@ -1542,7 +1542,7 @@ function Add-MsixComServerExtension {
 
             # Idempotency — skip if CLSID already declared anywhere in the manifest
             if ($M.SelectSingleNode("//*[local-name()='Class' and @Id='$clsid']")) {
-                Write-MsixLog Info "COM class $clsid already declared; skipping."
+                Write-MsixLog -Level Info -Message "COM class $clsid already declared; skipping."
                 continue
             }
 
@@ -1556,7 +1556,7 @@ function Add-MsixComServerExtension {
             $null = $ips.AppendChild($path)
             $null = $ips.AppendChild($class)
             $null = $comServer.AppendChild($ips)
-            Write-MsixLog Info "COM InProcessServer declared: $clsid → $vfsDll"
+            Write-MsixLog -Level Info -Message "COM InProcessServer declared: $clsid → $vfsDll"
             $added++
         }
 
@@ -1580,10 +1580,10 @@ function Add-MsixComServerExtension {
                 $cap = $M.CreateElement('rescap:Capability', $rescapUri)
                 $cap.SetAttribute('Name', 'runFullTrust')
                 $null = $capsNode.AppendChild($cap)
-                Write-MsixLog Info 'Capability added: runFullTrust'
+                Write-MsixLog -Level Info -Message 'Capability added: runFullTrust'
             }
         } else {
-            Write-MsixLog Info 'No new COM servers to declare (all already present).'
+            Write-MsixLog -Level Info -Message 'No new COM servers to declare (all already present).'
         }
     }
 }

@@ -77,7 +77,7 @@ Describe 'Get-MsixManifest is polymorphic (v0.11)' -Tag 'Manifest' {
         $script:Tmp = Join-Path $env:TEMP "msix-mf-poly-$([guid]::NewGuid().ToString('N').Substring(0,8))"
         New-Item $script:Tmp -ItemType Directory -Force | Out-Null
     }
-    AfterAll { Remove-Item $script:Tmp -Recurse -Force -ErrorAction SilentlyContinue }
+    AfterAll { Remove-Item -LiteralPath $script:Tmp -Recurse -Force -ErrorAction SilentlyContinue }
 
     It 'Reads an XML file directly' {
         $xmlPath = Join-Path $script:Tmp 'AppxManifest.xml'
@@ -87,7 +87,7 @@ Describe 'Get-MsixManifest is polymorphic (v0.11)' -Tag 'Manifest' {
   <Identity Name="A" Publisher="CN=X" Version="1.0.0.0" />
   <Applications><Application Id="A" Executable="x.exe" /></Applications>
 </Package>
-'@ | Set-Content $xmlPath
+'@ | Set-Content -LiteralPath $xmlPath
         $m = Get-MsixManifest -Path $xmlPath
         $m.Package.Identity.Name | Should -Be 'A'
     }

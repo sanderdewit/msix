@@ -19,7 +19,7 @@
 [CmdletBinding()]
 param(
     [string[]]$Tag,
-    [string]$OutputPath = (Join-Path $PSScriptRoot 'TestResults.xml'),
+    [string]$OutputPath = (Join-Path -Path $PSScriptRoot -ChildPath 'TestResults.xml'),
 
     # Issue #47: hardened developer workstations / build agents may revoke
     # the WMI/CIM privileges Pester's NUnit metadata exporter needs (calls

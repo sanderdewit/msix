@@ -47,10 +47,10 @@ function Resolve-MsixDebugViewPath {
 
     $toolsRoot = Get-MsixToolsRoot
     foreach ($p in @(
-        (Join-Path $toolsRoot 'debugview\Dbgview64.exe'),
-        (Join-Path $toolsRoot 'debugview\Dbgview.exe'),
-        (Join-Path $toolsRoot 'procmon\Dbgview64.exe'),
-        (Join-Path $toolsRoot 'procmon\Dbgview.exe'),
+        (Join-Path -Path $toolsRoot -ChildPath 'debugview\Dbgview64.exe'),
+        (Join-Path -Path $toolsRoot -ChildPath 'debugview\Dbgview.exe'),
+        (Join-Path -Path $toolsRoot -ChildPath 'procmon\Dbgview64.exe'),
+        (Join-Path -Path $toolsRoot -ChildPath 'procmon\Dbgview.exe'),
         "${env:ProgramFiles}\SysInternals\Dbgview64.exe",
         "${env:ProgramFiles}\SysInternals\Dbgview.exe",
         "${env:ProgramFiles}\SysInternalsSuite\Dbgview64.exe",
@@ -134,7 +134,7 @@ function Get-MsixDebugRecommendation {
         "-PfxPassword $passwordPlaceholder"
     }
 
-    $lines = New-Object System.Collections.Generic.List[string]
+    $lines = [System.Collections.Generic.List[string]]::new()
     $i = 0
 
     foreach ($f in @($Report.Findings)) {
@@ -257,7 +257,7 @@ function Set-MsixProcMonFilterRule {
         Set-ItemProperty -Path $regPath -Name 'FilterRules' -Value $bytes.ToArray() -Type Binary
         return $true
     } catch {
-        Write-MsixLog Warning "Could not write Procmon filter rules to registry: $($_.Exception.Message)"
+        Write-MsixLog -Level Warning -Message "Could not write Procmon filter rules to registry: $($_.Exception.Message)"
         return $false
     }
 }
@@ -364,8 +364,8 @@ function Start-MsixDebugSession {
     }
     New-Item -Path $OutputDirectory -ItemType Directory -Force | Out-Null
 
-    Write-MsixLog Info "=== MSIX Debug Session: $($fileinfo.Name) ==="
-    Write-MsixLog Info "Output: $OutputDirectory"
+    Write-MsixLog -Level Info -Message "=== MSIX Debug Session: $($fileinfo.Name) ==="
+    Write-MsixLog -Level Info -Message "Output: $OutputDirectory"
 
     # 0) Auto-detect target process name from manifest when not supplied by caller
     if (-not $ProcessName) {
@@ -377,10 +377,10 @@ function Start-MsixDebugSession {
                 if ($exeAttr) { $ProcessName = [System.IO.Path]::GetFileName($exeAttr) }
             }
         } catch {
-            Write-MsixLog Warning "Could not auto-detect process name from manifest: $($_.Exception.Message)"
+            Write-MsixLog -Level Warning -Message "Could not auto-detect process name from manifest: $($_.Exception.Message)"
         }
     }
-    if ($ProcessName) { Write-MsixLog Info "Target process: $ProcessName" }
+    if ($ProcessName) { Write-MsixLog -Level Info -Message "Target process: $ProcessName" }
 
     # 1) Analysis
     #
@@ -398,9 +398,9 @@ function Start-MsixDebugSession {
     # The old report.txt rendered nested objects as @{Foo=...; Bar=...} which
     # was unreadable; ConvertTo-MsixReportHtml fans the Findings array into a
     # real <table> and embeds the recommended commands as a code block.
-    $jsonPath = Join-Path $OutputDirectory 'report.json'
-    $htmlPath = Join-Path $OutputDirectory 'report.html'
-    $cmdsPath = Join-Path $OutputDirectory 'recommended-commands.ps1'
+    $jsonPath = Join-Path -Path $OutputDirectory -ChildPath 'report.json'
+    $htmlPath = Join-Path -Path $OutputDirectory -ChildPath 'report.html'
+    $cmdsPath = Join-Path -Path $OutputDirectory -ChildPath 'recommended-commands.ps1'
 
     $report   | ConvertTo-Json -Depth 12 | Set-Content -Path $jsonPath -Encoding utf8
     $commands | Set-Content       -Path $cmdsPath -Encoding utf8
@@ -417,7 +417,7 @@ function Start-MsixDebugSession {
 
     # 2) PSF TraceFixup injection (before install so the installed copy carries it)
     if ($AddTraceFixup) {
-        Write-MsixLog Info "Injecting PSF TraceFixup (filesystem + registry allFailures)…"
+        Write-MsixLog -Level Info -Message "Injecting PSF TraceFixup (filesystem + registry allFailures)…"
         $traceFixup = New-MsixPsfTraceConfig -FilesystemLevel allFailures -RegistryLevel allFailures
         $psfArgs = @{
             PackagePath = $fileinfo.FullName
@@ -426,13 +426,13 @@ function Start-MsixDebugSession {
         if ($Pfx)         { $psfArgs['Pfx']         = $Pfx }
         if ($PfxPassword) { $psfArgs['PfxPassword']  = $PfxPassword }
         Add-MsixPsfV2 @psfArgs
-        Write-MsixLog Info 'TraceFixup injected — failures will appear in DebugView via OutputDebugString.'
+        Write-MsixLog -Level Info -Message 'TraceFixup injected — failures will appear in DebugView via OutputDebugString.'
         $LaunchDebugView = $true   # DebugView is the capture sink for TraceFixup output
     }
 
     # 3) Install
     if ($Install) {
-        Write-MsixLog Info "Installing package…"
+        Write-MsixLog -Level Info -Message "Installing package…"
         Add-AppPackage -Path $fileinfo.FullName -ForceApplicationShutdown -ErrorAction Stop
     }
 
@@ -440,7 +440,7 @@ function Start-MsixDebugSession {
     if ($LaunchProcMon) {
         $procmon = Resolve-MsixProcMonPath
         if (-not $procmon) {
-            Write-MsixLog Info "Process Monitor not found; downloading."
+            Write-MsixLog -Level Info -Message "Process Monitor not found; downloading."
             Install-MsixProcMon | Out-Null
             $procmon = Resolve-MsixProcMonPath
         }
@@ -449,16 +449,16 @@ function Start-MsixDebugSession {
             if ($ProcessName) {
         $filtered = Set-MsixProcMonFilterRule -ProcessNames @($ProcessName)
                 if ($filtered) {
-                    Write-MsixLog Info "Procmon filter set: Process Name is '$ProcessName'"
+                    Write-MsixLog -Level Info -Message "Procmon filter set: Process Name is '$ProcessName'"
                 } else {
-                    Write-MsixLog Warning "Could not pre-set Procmon filter; set manually: Process Name is '$ProcessName'"
+                    Write-MsixLog -Level Warning -Message "Could not pre-set Procmon filter; set manually: Process Name is '$ProcessName'"
                 }
             }
 
-            $pmlPath = Join-Path $OutputDirectory 'capture.pml'
+            $pmlPath = Join-Path -Path $OutputDirectory -ChildPath 'capture.pml'
             $pmArgs  = @('/AcceptEula', '/Quiet', '/Minimized', '/BackingFile', "`"$pmlPath`"")
             Start-Process -FilePath $procmon -ArgumentList $pmArgs
-            Write-MsixLog Info "Process Monitor capturing to $pmlPath"
+            Write-MsixLog -Level Info -Message "Process Monitor capturing to $pmlPath"
             Write-Information "  Stop later with: Start-Process -FilePath '$procmon' -ArgumentList '/Terminate'"
         }
     }
@@ -467,19 +467,19 @@ function Start-MsixDebugSession {
     if ($LaunchDebugView) {
         $dv = Resolve-MsixDebugViewPath
         if (-not $dv) {
-            Write-MsixLog Info 'DebugView not found; downloading from Sysinternals.'
+            Write-MsixLog -Level Info -Message 'DebugView not found; downloading from Sysinternals.'
             try {
                 Install-MsixDebugView | Out-Null
                 $dv = Resolve-MsixDebugViewPath
             } catch {
-                Write-MsixLog Warning "DebugView install failed: $($_.Exception.Message)"
+                Write-MsixLog -Level Warning -Message "DebugView install failed: $($_.Exception.Message)"
             }
         }
         if ($dv) {
             Start-Process -FilePath $dv
-            Write-MsixLog Info "DebugView launched: $dv"
+            Write-MsixLog -Level Info -Message "DebugView launched: $dv"
         } else {
-            Write-MsixLog Warning 'DebugView not found. Run Install-MsixDebugView or set $env:MSIX_DEBUGVIEW_PATH manually.'
+            Write-MsixLog -Level Warning -Message 'DebugView not found. Run Install-MsixDebugView or set $env:MSIX_DEBUGVIEW_PATH manually.'
         }
     }
 
@@ -538,7 +538,7 @@ function ConvertTo-MsixReportHtml {
         ($s -replace '&','&amp;') -replace '<','&lt;' -replace '>','&gt;' -replace '"','&quot;'
     }
 
-    $sb = New-Object System.Text.StringBuilder
+    $sb = [System.Text.StringBuilder]::new()
     [void]$sb.AppendLine('<!doctype html><html lang="en"><head><meta charset="utf-8">')
     [void]$sb.AppendLine("<title>MSIX Debug Report -- $(_Esc (Split-Path -Path $PackagePath -Leaf))</title>")
     [void]$sb.AppendLine(@'
@@ -704,7 +704,7 @@ function New-MsixSandboxConfig {
     )
 
     if (-not (Test-Path -LiteralPath $DropFolder)) { throw "DropFolder not found: $DropFolder" }
-    $msix = Join-Path $DropFolder $PackageName
+    $msix = Join-Path -Path $DropFolder -ChildPath $PackageName
     if (-not (Test-Path -LiteralPath $msix)) { throw "Package not in drop folder: $msix" }
 
     if (-not $ModulePath)  { $ModulePath  = $PSScriptRoot }
@@ -723,31 +723,31 @@ function New-MsixSandboxConfig {
     try {
         $required = @(Get-MsixRequiredAppRuntimeChannel -PackagePath $msix)
         if ($required) {
-            Write-MsixLog Info "Package requires WindowsAppRuntime channels: $($required -join ', ')"
+            Write-MsixLog -Level Info -Message "Package requires WindowsAppRuntime channels: $($required -join ', ')"
             $missing = $required | Where-Object {
-                -not (Test-Path -LiteralPath (Join-Path $RuntimePath "WindowsAppRuntimeInstall-x64-$_.exe"))
+                -not (Test-Path -LiteralPath (Join-Path -Path $RuntimePath -ChildPath "WindowsAppRuntimeInstall-x64-$_.exe"))
             }
             if ($missing) {
-                Write-MsixLog Info "Caching missing channels: $($missing -join ', ')"
+                Write-MsixLog -Level Info -Message "Caching missing channels: $($missing -join ', ')"
                 Install-MsixAppRuntime -Destination $RuntimePath -Channels $missing | Out-Null
             }
         }
     } catch {
-        Write-MsixLog Warning "Could not pre-detect WindowsAppRuntime dependencies: $($_.Exception.Message)"
+        Write-MsixLog -Level Warning -Message "Could not pre-detect WindowsAppRuntime dependencies: $($_.Exception.Message)"
     }
     if ($CertPath -and -not (Test-Path -LiteralPath $CertPath)) {
         throw "CertPath not found: $CertPath"
     }
 
     if (-not $OutputPath) {
-        $OutputPath = Join-Path $DropFolder 'msix-debug.wsb'
+        $OutputPath = Join-Path -Path $DropFolder -ChildPath 'msix-debug.wsb'
     }
 
     # Cert handling: if specified, copy into drop folder so the sandbox sees it
     $certFileInSandbox = ''
     if ($CertPath) {
         $certLeaf = Split-Path -Path $CertPath -Leaf
-        $certTarget = Join-Path $DropFolder $certLeaf
+        $certTarget = Join-Path -Path $DropFolder -ChildPath $certLeaf
         if ((Resolve-Path -LiteralPath $CertPath).Path -ne (Resolve-Path -LiteralPath $certTarget -ErrorAction SilentlyContinue).Path) {
             Copy-Item -LiteralPath $CertPath -Destination $certTarget -Force
         }
@@ -755,7 +755,7 @@ function New-MsixSandboxConfig {
     }
 
     # Bootstrap script (PowerShell, runs inside sandbox)
-    $bootstrap = Join-Path $DropFolder 'sandbox-bootstrap.ps1'
+    $bootstrap = Join-Path -Path $DropFolder -ChildPath 'sandbox-bootstrap.ps1'
     $certBlock = if ($certFileInSandbox) { @"
 
 # 3. Trust the self-signed signing certificate so the package will install
@@ -816,7 +816,7 @@ Read-Host 'Press Enter to close the sandbox session'
 "@ | Set-Content -Path $bootstrap -Encoding utf8
 
     # .cmd wrapper because LogonCommand wants a single argv
-    $cmdWrap = Join-Path $DropFolder 'sandbox-bootstrap.cmd'
+    $cmdWrap = Join-Path -Path $DropFolder -ChildPath 'sandbox-bootstrap.cmd'
     "powershell.exe -NoExit -ExecutionPolicy Bypass -File ""C:\msix-drop\sandbox-bootstrap.ps1""" |
         Set-Content -Path $cmdWrap -Encoding ascii
 
@@ -850,8 +850,8 @@ Read-Host 'Press Enter to close the sandbox session'
 </Configuration>
 "@
     Set-Content -Path $OutputPath -Value $wsb -Encoding utf8
-    Write-MsixLog Info "Sandbox config: $OutputPath"
-    Write-MsixLog Info "Bootstrap:      $bootstrap"
+    Write-MsixLog -Level Info -Message "Sandbox config: $OutputPath"
+    Write-MsixLog -Level Info -Message "Bootstrap:      $bootstrap"
 
     return $OutputPath
 }
@@ -945,13 +945,13 @@ function Start-MsixSandbox {
             throw '-DropFolder and -PackageName are required if -ConfigPath is not given.'
         }
 
-        $msix              = Join-Path $DropFolder $PackageName
+        $msix              = Join-Path -Path $DropFolder -ChildPath $PackageName
         $effectiveCertPath = $CertPath
 
         # Inject TraceFixup BEFORE signing so the auto-sign (or caller-supplied
         # cert) covers the modified package in a single pass.
         if ($AddTraceFixup) {
-            Write-MsixLog Info 'Injecting PSF TraceFixup (filesystem + registry allFailures)…'
+            Write-MsixLog -Level Info -Message 'Injecting PSF TraceFixup (filesystem + registry allFailures)…'
             $traceFixup = New-MsixPsfTraceConfig -FilesystemLevel allFailures -RegistryLevel allFailures
             $psfArgs    = @{
                 PackagePath = $msix
@@ -965,17 +965,17 @@ function Start-MsixSandbox {
                 if ($PfxPassword) { $psfArgs['PfxPassword']  = $PfxPassword }
             }
             Add-MsixPsfV2 @psfArgs
-            Write-MsixLog Info 'TraceFixup injected. DebugView inside the sandbox will capture its output.'
+            Write-MsixLog -Level Info -Message 'TraceFixup injected. DebugView inside the sandbox will capture its output.'
         }
 
         if ($AutoSign -and -not $effectiveCertPath) {
             $needsSelfSign = (Test-MsixSignature -PackagePath $msix).NeedsSelfSign
             if ($needsSelfSign) {
-                Write-MsixLog Info 'Package signature missing/invalid; generating self-signed cert and re-signing.'
+                Write-MsixLog -Level Info -Message 'Package signature missing/invalid; generating self-signed cert and re-signing.'
                 $signed = Invoke-MsixSelfSignAndDebug -PackagePath $msix
                 $effectiveCertPath = $signed.CertPath
             } else {
-                Write-MsixLog Info 'Package signature is valid; skipping self-sign.'
+                Write-MsixLog -Level Info -Message 'Package signature is valid; skipping self-sign.'
             }
         }
 
@@ -988,7 +988,7 @@ function Start-MsixSandbox {
     }
 
     if (-not $PSCmdlet.ShouldProcess($ConfigPath, 'Launch Windows Sandbox')) { return }
-    Write-MsixLog Info "Launching Windows Sandbox with $ConfigPath"
+    Write-MsixLog -Level Info -Message "Launching Windows Sandbox with $ConfigPath"
     Start-Process -FilePath 'WindowsSandbox.exe' -ArgumentList "`"$ConfigPath`""
 }
 

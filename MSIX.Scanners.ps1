@@ -222,9 +222,9 @@ function Get-MsixUninstallRegistryEntry {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
-        $datPath = Join-Path $workspace 'Registry.dat'
+        $datPath = Join-Path -Path $workspace -ChildPath 'Registry.dat'
         if (-not (Test-Path -LiteralPath $datPath)) {
-            Write-MsixLog Info 'No Registry.dat in package.'
+            Write-MsixLog -Level Info -Message 'No Registry.dat in package.'
             return @()
         }
 
@@ -303,7 +303,7 @@ function Get-MsixRunKeyEntry {
         # MSIX packages ship Registry.dat + User.dat for the virtual hive.
         $hits = @()
         foreach ($dat in @('Registry.dat','User.dat')) {
-            $datPath = Join-Path $workspace $dat
+            $datPath = Join-Path -Path $workspace -ChildPath $dat
             if (-not (Test-Path -LiteralPath $datPath)) { continue }
             # Best-effort string scan — full hive parsing requires reg.exe load.
             try {
@@ -316,7 +316,7 @@ function Get-MsixRunKeyEntry {
                         Match = $mm.Value
                     }
                 }
-            } catch { Write-MsixLog Debug "Run-key scan failed for $dat`: $_" }
+            } catch { Write-MsixLog -Level Debug -Message "Run-key scan failed for $dat`: $_" }
         }
         return $hits | Sort-Object Hive,Match -Unique
     } finally {
@@ -346,7 +346,7 @@ function _MsixAbsoluteToVfsRelativeDirect {
         if ($AbsPath.StartsWith($m.Abs, [System.StringComparison]::OrdinalIgnoreCase)) {
             $rel    = $AbsPath.Substring($m.Abs.Length).TrimStart('\')
             $vfsRel = "$($m.Vfs)\$rel"
-            if (Test-Path -LiteralPath (Join-Path $WorkspacePath $vfsRel)) { return $vfsRel }
+            if (Test-Path -LiteralPath (Join-Path -Path $WorkspacePath -ChildPath $vfsRel)) { return $vfsRel }
         }
     }
     return $null
@@ -380,7 +380,7 @@ function _MsixRegPathToVfsRelative {
         if ($RegPath -match ('^\[\{' + [regex]::Escape($m.Var) + '\}\](.*)$')) {
             $rel    = $Matches[1].TrimStart('\')
             $vfsRel = "$($m.Vfs)\$rel"
-            if (Test-Path -LiteralPath (Join-Path $WorkspacePath $vfsRel)) { return $vfsRel }
+            if (Test-Path -LiteralPath (Join-Path -Path $WorkspacePath -ChildPath $vfsRel)) { return $vfsRel }
             # Return the mapping even if the file isn't present — caller can use for manifest
             return $vfsRel
         }
@@ -443,7 +443,7 @@ function Get-MsixShellContextMenuEntry {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
-        $datPath = Join-Path $workspace 'Registry.dat'
+        $datPath = Join-Path -Path $workspace -ChildPath 'Registry.dat'
         if (-not (Test-Path -LiteralPath $datPath)) { return @() }
 
         $results = [System.Collections.Generic.List[object]]::new()
@@ -600,7 +600,7 @@ function Get-MsixComServerEntry {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
-        $datPath = Join-Path $workspace 'Registry.dat'
+        $datPath = Join-Path -Path $workspace -ChildPath 'Registry.dat'
         if (-not (Test-Path -LiteralPath $datPath)) { return @() }
 
         $results = [System.Collections.Generic.List[object]]::new()
@@ -747,7 +747,7 @@ function Get-MsixHeuristicFinding {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$PackagePath)
 
-    $out = New-Object System.Collections.Generic.List[object]
+    $out = [System.Collections.Generic.List[object]]::new()
 
     # Uninstaller artefacts
     foreach ($u in Get-MsixUninstallerCandidate -PackagePath $PackagePath) {
@@ -773,7 +773,7 @@ function Get-MsixHeuristicFinding {
                 AppId    = $null
             })
         }
-    } catch { Write-MsixLog Debug "Updater heuristic skipped: $_" }
+    } catch { Write-MsixLog -Level Debug -Message "Updater heuristic skipped: $_" }
 
     # Plugin / extension-point directories. Default fix path is
     # selective FileSystemWriteVirtualization (Win10 19041+); operators on
@@ -790,7 +790,7 @@ function Get-MsixHeuristicFinding {
                 AppId    = $null
             })
         }
-    } catch { Write-MsixLog Debug "Plugin extension-point heuristic skipped: $_" }
+    } catch { Write-MsixLog -Level Debug -Message "Plugin extension-point heuristic skipped: $_" }
 
     # Run keys
     foreach ($r in Get-MsixRunKeyEntry -PackagePath $PackagePath) {
@@ -830,7 +830,7 @@ function Get-MsixHeuristicFinding {
                 AppId    = $null
             })
         }
-    } catch { Write-MsixLog Debug "VC runtime heuristic skipped: $_" }
+    } catch { Write-MsixLog -Level Debug -Message "VC runtime heuristic skipped: $_" }
 
     # ── Fonts inside the package (suggest uap4:SharedFonts) ────────────────
     try {
@@ -845,7 +845,7 @@ function Get-MsixHeuristicFinding {
                 AppId    = $null
             })
         }
-    } catch { Write-MsixLog Debug "Font heuristic skipped: $_" }
+    } catch { Write-MsixLog -Level Debug -Message "Font heuristic skipped: $_" }
 
     # ── Desktop shortcuts inside the package (suggest removal) ──────────────
     try {
@@ -860,7 +860,7 @@ function Get-MsixHeuristicFinding {
                 AppId    = $null
             })
         }
-    } catch { Write-MsixLog Debug "Desktop shortcut heuristic skipped: $_" }
+    } catch { Write-MsixLog -Level Debug -Message "Desktop shortcut heuristic skipped: $_" }
 
     # ── Capability hints from PE imports (suggest Add-MsixCapability) ───────
     try {
@@ -875,7 +875,7 @@ function Get-MsixHeuristicFinding {
                 AppId    = $null
             })
         }
-    } catch { Write-MsixLog Debug "Capability hints heuristic skipped: $_" }
+    } catch { Write-MsixLog -Level Debug -Message "Capability hints heuristic skipped: $_" }
 
     # ── Uninstall registry leftovers ────────────────────────────────────────
     try {
@@ -890,7 +890,7 @@ function Get-MsixHeuristicFinding {
                 AppId    = $null
             })
         }
-    } catch { Write-MsixLog Debug "Uninstall registry heuristic skipped: $_" }
+    } catch { Write-MsixLog -Level Debug -Message "Uninstall registry heuristic skipped: $_" }
 
     # ── Shell context-menu entries invisible outside the MSIX container ───────
     try {
@@ -930,7 +930,7 @@ function Get-MsixHeuristicFinding {
             })
         }
     } catch {
-        Write-MsixLog Debug "Shell context-menu heuristic failed: $_"
+        Write-MsixLog -Level Debug -Message "Shell context-menu heuristic failed: $_"
     }
 
     # ── COM server registrations in Registry.dat ──────────────────────────────
@@ -951,7 +951,7 @@ function Get-MsixHeuristicFinding {
             })
         }
     } catch {
-        Write-MsixLog Debug "COM server heuristic failed: $_"
+        Write-MsixLog -Level Debug -Message "COM server heuristic failed: $_"
     }
 
     # ── Nested installer packages inside the package ─────────────────────────
@@ -968,7 +968,7 @@ function Get-MsixHeuristicFinding {
             })
         }
     } catch {
-        Write-MsixLog Debug "Nested package heuristic failed: $_"
+        Write-MsixLog -Level Debug -Message "Nested package heuristic failed: $_"
     }
 
     # ── Manifest-level findings (alternatives to PSF) ───────────────────────
@@ -1092,7 +1092,7 @@ function Get-MsixHeuristicFinding {
             Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
     } catch {
-        Write-MsixLog Debug "Manifest-fix heuristic failed: $_"
+        Write-MsixLog -Level Debug -Message "Manifest-fix heuristic failed: $_"
     }
 
     return $out

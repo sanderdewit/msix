@@ -29,11 +29,11 @@ Describe 'SDK tools resolution (v0.9.1)' -Tag 'Toolchain' {
             $script:_saved = $env:MSIX_TOOLS_PATH
             $env:MSIX_TOOLS_PATH = 'C:\does\not\exist'
             # Force re-resolution
-            try { Get-MsixToolsRoot -Refresh -ErrorAction SilentlyContinue | Out-Null } catch { Write-Verbose $_ }
+            try { Get-MsixToolsRoot -Refresh -ErrorAction SilentlyContinue | Out-Null } catch { Write-Verbose -Message $_ }
         }
         AfterAll {
             $env:MSIX_TOOLS_PATH = $script:_saved
-            try { Get-MsixToolsRoot -Refresh -ErrorAction SilentlyContinue | Out-Null } catch { Write-Verbose $_ }
+            try { Get-MsixToolsRoot -Refresh -ErrorAction SilentlyContinue | Out-Null } catch { Write-Verbose -Message $_ }
         }
 
         It 'Mentions Install-MsixSdkTool in the error when MakeAppx is missing' {

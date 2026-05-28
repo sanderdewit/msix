@@ -229,7 +229,7 @@ function Update-MsixSigner {
         $workspace = New-MsixWorkspace $fileinfo.BaseName
 
         try {
-            Write-MsixLog Info "Unpacking: $($fileinfo.FullName)"
+            Write-MsixLog -Level Info -Message "Unpacking: $($fileinfo.FullName)"
             $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
             Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
@@ -245,9 +245,9 @@ function Update-MsixSigner {
                 Save-MsixManifest $appinfo "$workspace\AppxManifest.xml"
 
                 $outputPath = $fileinfo.FullName -replace [regex]::Escape($oldPublisherId), $newPublisherId
-                Write-MsixLog Info "Output path: $outputPath"
+                Write-MsixLog -Level Info -Message "Output path: $outputPath"
             } else {
-                Write-MsixLog Info "Publisher unchanged; repacking with same identity"
+                Write-MsixLog -Level Info -Message "Publisher unchanged; repacking with same identity"
             }
 
             # Atomic repack-sign-move (issue #40). Pack to a scratch path,
@@ -263,11 +263,11 @@ function Update-MsixSigner {
                 $packOk = $true
                 Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword
                 Move-Item -LiteralPath $scratch -Destination $outputPath -Force
-                Write-MsixLog Info "Done: $outputPath"
+                Write-MsixLog -Level Info -Message "Done: $outputPath"
             } catch {
                 if ($packOk -and $UnsignedOutputPath) {
                     Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction SilentlyContinue
-                    Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
+                    Write-MsixLog -Level Warning -Message "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
                 }
                 throw
             } finally {
@@ -468,8 +468,8 @@ function Add-MsixAlias {
             -Activity 'Add AppExecutionAlias' -Mutate {
             param([xml]$manifest)
 
-            Add-MsixManifestNamespace $manifest 'uap3'
-            Add-MsixManifestNamespace $manifest 'desktop'
+            Add-MsixManifestNamespace -Manifest $manifest -Prefix 'uap3'
+            Add-MsixManifestNamespace -Manifest $manifest -Prefix 'desktop'
 
             $uap3Uri    = Get-MsixManifestNamespaceUri 'uap3'
             $desktopUri = Get-MsixManifestNamespaceUri 'desktop'
@@ -484,7 +484,7 @@ function Add-MsixAlias {
                 $existingAliasExt = @($app.Extensions.Extension) |
                     Where-Object { $_.Category -eq 'windows.appExecutionAlias' }
                 if ($existingAliasExt) {
-                    Write-MsixLog Warning "AppExecutionAlias already present for $($app.Id); skipping"
+                    Write-MsixLog -Level Warning -Message "AppExecutionAlias already present for $($app.Id); skipping"
                     continue
                 }
 
@@ -521,7 +521,7 @@ function Add-MsixAlias {
                 }
                 $null = $extNode.AppendChild($uap3Ext)
 
-                Write-MsixLog Info "AppExecutionAlias added for $($app.Id): $aliasName"
+                Write-MsixLog -Level Info -Message "AppExecutionAlias added for $($app.Id): $aliasName"
             }
         }
     }
@@ -614,11 +614,11 @@ function Remove-MsixStartMenuEntry {
                 $ve = $app.SelectSingleNode('*[local-name()="VisualElements"]')
                 if (-not $ve) { continue }
                 if ($ve.GetAttribute('AppListEntry') -eq 'none') {
-                    Write-MsixLog Info "$($app.Id) already hidden from Start menu; skipping"
+                    Write-MsixLog -Level Info -Message "$($app.Id) already hidden from Start menu; skipping"
                     continue
                 }
                 $ve.SetAttribute('AppListEntry', 'none')
-                Write-MsixLog Info "Start menu entry removed: $($app.Id)"
+                Write-MsixLog -Level Info -Message "Start menu entry removed: $($app.Id)"
             }
         }
     }
@@ -696,7 +696,7 @@ function Add-MsixStartMenuFolder {
                 $ve = $app.SelectSingleNode('*[local-name()="VisualElements"]')
                 if (-not $ve) { continue }
                 $ve.SetAttribute('VisualGroup', $FolderName)
-                Write-MsixLog Info "VisualGroup '$FolderName' set on $($app.Id)"
+                Write-MsixLog -Level Info -Message "VisualGroup '$FolderName' set on $($app.Id)"
             }
         }
     }

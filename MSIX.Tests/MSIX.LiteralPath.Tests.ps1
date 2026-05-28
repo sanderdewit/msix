@@ -146,7 +146,7 @@ Describe 'Functional: signer / scanner code paths tolerate bracketed paths (issu
         New-Item -ItemType Directory -Path $bracketedDir -Force | Out-Null
         $prev = $env:MSIX_DEBUGVIEW_PATH
         try {
-            $env:MSIX_DEBUGVIEW_PATH = Join-Path $bracketedDir 'Dbgview.exe'
+            $env:MSIX_DEBUGVIEW_PATH = Join-Path -Path $bracketedDir -ChildPath 'Dbgview.exe'
             # Whether or not the file exists, the call should not throw
             # and should return either a string or $null.
             { Resolve-MsixDebugViewPath } | Should -Not -Throw

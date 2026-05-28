@@ -109,18 +109,18 @@
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Run MSIX pipeline')
 
     try {
-        Write-MsixLog Info "=== MSIX Pipeline: $($fileinfo.Name) -> $target ==="
+        Write-MsixLog -Level Info -Message "=== MSIX Pipeline: $($fileinfo.Name) -> $target ==="
         if ($isWhatIf) {
-            Write-MsixLog Info '[WhatIf] Preview mode: unpack/edit/pack will run; signing and final replacement will be skipped.'
+            Write-MsixLog -Level Info -Message '[WhatIf] Preview mode: unpack/edit/pack will run; signing and final replacement will be skipped.'
         }
 
         # ── Unpack into workspace ────────────────────────────────────────
-        Write-MsixLog Info 'Stage: Unpack'
+        Write-MsixLog -Level Info -Message 'Stage: Unpack'
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
         # ── Validate ─────────────────────────────────────────────────────
-        Write-MsixLog Info 'Stage: Validate'
+        Write-MsixLog -Level Info -Message 'Stage: Validate'
         $null = Test-MsixManifest "$workspace\AppxManifest.xml"
         [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
         $manifestDirty = $false
@@ -131,16 +131,16 @@
             if ($oldPublisher -cne $Config.Publisher) {
                 Set-MsixManifestPublisher -Manifest $manifest -Publisher $Config.Publisher | Out-Null
                 $manifestDirty = $true
-                Write-MsixLog Info "Publisher: $oldPublisher → $($Config.Publisher)"
+                Write-MsixLog -Level Info -Message "Publisher: $oldPublisher → $($Config.Publisher)"
             } else {
-                Write-MsixLog Info 'Publisher unchanged (already matches)'
+                Write-MsixLog -Level Info -Message 'Publisher unchanged (already matches)'
             }
         }
 
         # ── App Isolation ────────────────────────────────────────────────
         if ($Config.AppIsolation -and $Config.AppIsolation.Capabilities) {
-            Add-MsixManifestNamespace $manifest 'rescap'
-            Set-MsixManifestMaxVersionTested $manifest -MinBuild 26100
+            Add-MsixManifestNamespace -Manifest $manifest -Prefix 'rescap'
+            Set-MsixManifestMaxVersionTested -Manifest $manifest -MinBuild 26100
             $rescapUri = Get-MsixManifestNamespaceUri 'rescap'
             $capsNode  = $manifest.Package.Capabilities
             if (-not $capsNode) {
@@ -153,7 +153,7 @@
                     $node = $manifest.CreateElement('rescap:Capability', $rescapUri)
                     $node.SetAttribute('Name', $cap)
                     $null = $capsNode.AppendChild($node)
-                    Write-MsixLog Info "Capability added: $cap"
+                    Write-MsixLog -Level Info -Message "Capability added: $cap"
                     $manifestDirty = $true
                 }
             }
@@ -176,7 +176,7 @@
 
         try {
             if ($needsPsf) {
-                Write-MsixLog Info 'Stage: PSF injection'
+                Write-MsixLog -Level Info -Message 'Stage: PSF injection'
                 $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
                 Assert-MsixProcessSuccess $r 'MakeAppx pack (pre-PSF scratch)'
 
@@ -190,17 +190,17 @@
                 }
                 Add-MsixPsfV2 @psfArgs
             } else {
-                Write-MsixLog Info 'Stage: Repack'
+                Write-MsixLog -Level Info -Message 'Stage: Repack'
                 $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
                 Assert-MsixProcessSuccess $r 'MakeAppx pack'
             }
             $packSucceeded = $true
 
             if ($isWhatIf) {
-                Write-MsixLog Info "[WhatIf] Would replace '$target' with pipeline output. Signing and Move-Item skipped."
+                Write-MsixLog -Level Info -Message "[WhatIf] Would replace '$target' with pipeline output. Signing and Move-Item skipped."
                 if ($Config.Signing -and $Config.Signing.UnsignedOutputPath) {
                     Copy-Item -LiteralPath $scratch -Destination $Config.Signing.UnsignedOutputPath -Force -ErrorAction Stop
-                    Write-MsixLog Info "[WhatIf] Preview package copied to: $($Config.Signing.UnsignedOutputPath)"
+                    Write-MsixLog -Level Info -Message "[WhatIf] Preview package copied to: $($Config.Signing.UnsignedOutputPath)"
                 }
                 return $null
             }
@@ -208,7 +208,7 @@
             # ── Sign (once, at the end, AT THE SCRATCH PATH) ──────────────
             $skipSign = $Config.Signing -and $Config.Signing.Skip
             if ($Config.Signing -and -not $skipSign) {
-                Write-MsixLog Info 'Stage: Sign (final)'
+                Write-MsixLog -Level Info -Message 'Stage: Sign (final)'
                 $signArgs = @{ PackagePath = $scratch }
                 foreach ($k in 'Pfx','PfxPassword','TimestampUrl','Signer',
                               'TrustedSigningAccount','TrustedSigningProfile',
@@ -219,15 +219,15 @@
                 }
                 Invoke-MsixSigning @signArgs
             } elseif (-not $Config.Signing) {
-                Write-MsixLog Info 'No Signing block in config; output is unsigned.'
+                Write-MsixLog -Level Info -Message 'No Signing block in config; output is unsigned.'
             } else {
-                Write-MsixLog Info 'Signing.Skip=true; output is unsigned.'
+                Write-MsixLog -Level Info -Message 'Signing.Skip=true; output is unsigned.'
             }
             $signSucceeded = $true
 
             # ── Atomic move: only NOW does the target change ─────────────
             Move-Item -LiteralPath $scratch -Destination $target -Force
-            Write-MsixLog Info "=== Pipeline complete: $target ==="
+            Write-MsixLog -Level Info -Message "=== Pipeline complete: $target ==="
             return Get-Item -LiteralPath $target -ErrorAction Stop
 
         } catch {
@@ -235,12 +235,12 @@
                 $Config.Signing -and $Config.Signing.UnsignedOutputPath) {
                 try {
                     Copy-Item -LiteralPath $scratch -Destination $Config.Signing.UnsignedOutputPath -Force -ErrorAction Stop
-                    Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $($Config.Signing.UnsignedOutputPath)"
+                    Write-MsixLog -Level Warning -Message "Signing failed. Unsigned package preserved at: $($Config.Signing.UnsignedOutputPath)"
                 } catch {
-                    Write-MsixLog Error "Signing failed AND unsigned-output copy to '$($Config.Signing.UnsignedOutputPath)' failed: $_"
+                    Write-MsixLog -Level Error -Message "Signing failed AND unsigned-output copy to '$($Config.Signing.UnsignedOutputPath)' failed: $_"
                 }
             } elseif ($packSucceeded -and -not $signSucceeded) {
-                Write-MsixLog Warning "Signing failed. Original target '$target' is unchanged. Set Config.Signing.UnsignedOutputPath to preserve the unsigned package next time."
+                Write-MsixLog -Level Warning -Message "Signing failed. Original target '$target' is unchanged. Set Config.Signing.UnsignedOutputPath to preserve the unsigned package next time."
             }
             throw
         } finally {
@@ -389,7 +389,7 @@ function _MsixMutatePackage {
         }
 
         if (-not $hasChanges) {
-            Write-MsixLog Info $NoChangeMessage
+            Write-MsixLog -Level Info -Message $NoChangeMessage
             return $null
         }
 
@@ -408,7 +408,7 @@ function _MsixMutatePackage {
         } catch {
             if ($packOk -and $UnsignedOutputPath) {
                 Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction SilentlyContinue
-                Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
+                Write-MsixLog -Level Warning -Message "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
             }
             throw
         } finally {

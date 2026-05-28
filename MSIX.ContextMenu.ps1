@@ -208,12 +208,12 @@
         # pair handles both legacy (IContextMenu) and modern (IExplorerCommand)
         # via the same path because the CLSID's COM class implements whichever
         # interface(s) it supports.
-        Add-MsixManifestNamespace $manifest 'com'
-        Add-MsixManifestNamespace $manifest 'desktop4'
-        Add-MsixManifestNamespace $manifest 'desktop5'
+        Add-MsixManifestNamespace -Manifest $manifest -Prefix 'com'
+        Add-MsixManifestNamespace -Manifest $manifest -Prefix 'desktop4'
+        Add-MsixManifestNamespace -Manifest $manifest -Prefix 'desktop5'
 
         # desktop4:windows.fileExplorerContextMenus requires Win10 1809 (17763).
-        Set-MsixManifestMaxVersionTested $manifest -MinBuild 17763
+        Set-MsixManifestMaxVersionTested -Manifest $manifest -MinBuild 17763
 
         # ── Locate the target Application ─────────────────────────────────
         $apps = @($manifest.Package.Applications.Application)
@@ -227,7 +227,7 @@
         # ── Idempotency: skip if this CLSID is already declared ──────────
         $existingClass = $manifest.SelectSingleNode("//*[local-name()='Class' and @Id='$ClsidBare']")
         if ($existingClass) {
-            Write-MsixLog Info "COM class $ClsidBare already declared in manifest — skipping Add-MsixLegacyContextMenu."
+            Write-MsixLog -Level Info -Message "COM class $ClsidBare already declared in manifest — skipping Add-MsixLegacyContextMenu."
             return
         }
 
@@ -425,9 +425,9 @@ function Add-MsixFileExplorerContextMenu {
         # desktop5 provides the ItemType/Verb children (TMEditX-verified
         # working pattern). desktop4 alone (using desktop4:ItemType/Verb)
         # also exists but desktop5 is the newer, preferred form.
-        Add-MsixManifestNamespace $manifest 'desktop4'
-        Add-MsixManifestNamespace $manifest 'desktop5'
-        Set-MsixManifestMaxVersionTested $manifest -MinBuild 17763
+        Add-MsixManifestNamespace -Manifest $manifest -Prefix 'desktop4'
+        Add-MsixManifestNamespace -Manifest $manifest -Prefix 'desktop5'
+        Set-MsixManifestMaxVersionTested -Manifest $manifest -MinBuild 17763
 
         # Locate the Application (windows.fileExplorerContextMenus lives at
         # Applications/Application/Extensions per the TMEditX-verified

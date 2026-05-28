@@ -27,7 +27,7 @@ function _MsixUnpackForCompare {
 function _ComparePackageManifest {
     param([xml]$LeftManifest, [xml]$RightManifest)
 
-    $changes = New-Object System.Collections.Generic.List[object]
+    $changes = [System.Collections.Generic.List[object]]::new()
 
     function _Add { param([string]$Field, $Left, $Right)
         if ($Left -ne $Right) {
@@ -91,7 +91,7 @@ function _CompareFileSets {
                     $stream = [IO.File]::OpenRead($_.FullName)
                     try { $hash = [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-','') }
                     finally { $stream.Dispose() }
-                } catch { Write-MsixLog Debug "Hash failed for $($_.FullName): $_" }
+                } catch { Write-MsixLog -Level Debug -Message "Hash failed for $($_.FullName): $_" }
                 [pscustomobject]@{
                     Rel   = $rel
                     Size  = $_.Length
@@ -106,7 +106,7 @@ function _CompareFileSets {
     $leftIndex  = @{}; foreach ($f in $left)  { $leftIndex[$f.Rel]  = $f }
     $rightIndex = @{}; foreach ($f in $right) { $rightIndex[$f.Rel] = $f }
 
-    $diff = New-Object System.Collections.Generic.List[object]
+    $diff = [System.Collections.Generic.List[object]]::new()
 
     foreach ($k in $leftIndex.Keys) {
         if (-not $rightIndex.ContainsKey($k)) {
@@ -207,8 +207,8 @@ function Compare-MsixPackage {
         [string[]]$ExcludePathPattern = @('\\AppxBlockMap', '\\\[Content_Types\]', '\\AppxSignature')
     )
 
-    $leftWs  = _MsixUnpackForCompare $LeftPath  'left'
-    $rightWs = _MsixUnpackForCompare $RightPath 'right'
+    $leftWs  = _MsixUnpackForCompare -PackagePath $LeftPath  -Tag 'left'
+    $rightWs = _MsixUnpackForCompare -PackagePath $RightPath -Tag 'right'
 
     try {
         $null = Test-MsixManifest "$leftWs\AppxManifest.xml"
@@ -229,7 +229,7 @@ function Compare-MsixPackage {
         # Signing state
         $sigL = Get-AuthenticodeSignature -FilePath $LeftPath
         $sigR = Get-AuthenticodeSignature -FilePath $RightPath
-        $signingChanges = New-Object System.Collections.Generic.List[object]
+        $signingChanges = [System.Collections.Generic.List[object]]::new()
         if ($sigL.Status -ne $sigR.Status) {
             $signingChanges.Add([pscustomobject]@{ Field='Status';     Left=$sigL.Status;                       Right=$sigR.Status })
         }

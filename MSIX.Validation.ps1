@@ -49,7 +49,7 @@
         throw "Manifest contains no Application elements"
     }
 
-    Write-MsixLog Debug "Manifest OK: $Path"
+    Write-MsixLog -Level Debug -Message "Manifest OK: $Path"
     return $true
 }
 
@@ -96,7 +96,7 @@ function Test-MsixPsfConfig {
         throw "PSF config missing 'processes' array"
     }
 
-    Write-MsixLog Debug "PSF config OK: $Path"
+    Write-MsixLog -Level Debug -Message "PSF config OK: $Path"
     return $true
 }
 

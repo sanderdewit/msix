@@ -44,9 +44,9 @@ Describe 'Trace Fixup parser' -Tag 'Trace' {
                 '[00:00:01.003 1234:A1] RegOpenKeyExW: HKLM\SOFTWARE\Foo -> SUCCESS'
                 '[00:00:01.004 1234:A1] RegSetValueExW: HKLM\SOFTWARE\Foo\Bar -> ACCESS_DENIED'
                 'random unrelated debug output'
-            ) | Set-Content $script:LogPath
+            ) | Set-Content -LiteralPath $script:LogPath
         }
-        AfterAll { Remove-Item $script:LogPath -Force -ErrorAction SilentlyContinue }
+        AfterAll { Remove-Item -LiteralPath $script:LogPath -Force -ErrorAction SilentlyContinue }
 
         It 'Returns only failing rows' {
             $f = Get-MsixTraceFailure -Path $script:LogPath

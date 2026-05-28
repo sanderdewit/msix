@@ -14,13 +14,13 @@
         [string]$XmlText
     )
 
-    $settings = New-Object System.Xml.XmlReaderSettings
+    $settings = [System.Xml.XmlReaderSettings]::new()
     $settings.DtdProcessing                = [System.Xml.DtdProcessing]::Prohibit
     $settings.XmlResolver                  = $null
     $settings.MaxCharactersFromEntities    = 1048576     # 1 MB — sane upper bound
     $settings.MaxCharactersInDocument      = 268435456   # 256 MB — generous but bounded
 
-    $doc = New-Object System.Xml.XmlDocument
+    $doc = [System.Xml.XmlDocument]::new()
     $doc.PreserveWhitespace = $true
     $doc.XmlResolver        = $null
 
@@ -31,7 +31,7 @@
         }
         $reader = [System.Xml.XmlReader]::Create($Path, $settings)
     } else {
-        $stringReader = New-Object System.IO.StringReader $XmlText
+        $stringReader = [System.IO.StringReader]::new($XmlText)
         $reader       = [System.Xml.XmlReader]::Create($stringReader, $settings)
     }
 
@@ -118,7 +118,7 @@ function New-MsixManifestDocument {
         $Document = _MsixLoadXmlSecure -XmlText $XmlText
     }
 
-    $nsMgr = New-Object System.Xml.XmlNamespaceManager($Document.NameTable)
+    $nsMgr = [System.Xml.XmlNamespaceManager]::new($Document.NameTable)
     $nsMgr.AddNamespace('f', 'http://schemas.microsoft.com/appx/manifest/foundation/windows10')
     foreach ($prefix in $script:KnownNamespaces.Keys) {
         $nsMgr.AddNamespace($prefix, $script:KnownNamespaces[$prefix])
@@ -251,7 +251,7 @@ function Get-MsixManifest {
 
     if ($item.PSIsContainer) {
         # Folder — assume it's an unpacked workspace; look for AppxManifest.xml
-        $candidate = Join-Path $item.FullName 'AppxManifest.xml'
+        $candidate = Join-Path -Path $item.FullName -ChildPath 'AppxManifest.xml'
         if (-not (Test-Path -LiteralPath $candidate)) {
             throw "No AppxManifest.xml under '$($item.FullName)'."
         }
@@ -270,7 +270,7 @@ function Get-MsixManifest {
                 if (-not $entry) {
                     throw "AppxManifest.xml not found inside $($item.Name) (is this a bundle? open the inner .msix instead)."
                 }
-                $out = Join-Path $tmp 'AppxManifest.xml'
+                $out = Join-Path -Path $tmp -ChildPath 'AppxManifest.xml'
                 [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $out, $true)
                 return (_MsixLoadXmlSecure -Path $out)
             } finally { $zip.Dispose() }
@@ -312,7 +312,7 @@ function Save-MsixManifest {
         [string]$Path
     )
     $Manifest.Save($Path)
-    Write-MsixLog Debug "Manifest saved: $Path"
+    Write-MsixLog -Level Debug -Message "Manifest saved: $Path"
 }
 
 function Add-MsixManifestNamespace {
@@ -363,7 +363,7 @@ function Add-MsixManifestNamespace {
         $Manifest.Package.IgnorableNamespaces = "$ignorable $Prefix".Trim()
     }
 
-    Write-MsixLog Debug "Namespace added: xmlns:$Prefix"
+    Write-MsixLog -Level Debug -Message "Namespace added: xmlns:$Prefix"
 }
 
 function Get-MsixManifestApplication {
@@ -476,7 +476,7 @@ function Get-MsixManifestApplications {
         [Parameter(Mandatory)]
         $Manifest
     )
-    Write-MsixLog Debug 'Get-MsixManifestApplications is deprecated; use Get-MsixManifestApplication -All.'
+    Write-MsixLog -Level Debug -Message 'Get-MsixManifestApplications is deprecated; use Get-MsixManifestApplication -All.'
     return Get-MsixManifestApplication -Manifest $Manifest -All
 }
 
@@ -643,6 +643,6 @@ function Set-MsixManifestMaxVersionTested {
     $parts = $tdf.MaxVersionTested -split '\.'
     if ($parts.Count -ge 3 -and [int]$parts[2] -lt $MinBuild) {
         $tdf.MaxVersionTested = "$($parts[0]).$($parts[1]).$MinBuild.0"
-        Write-MsixLog Info "MaxVersionTested updated to $($tdf.MaxVersionTested)"
+        Write-MsixLog -Level Info -Message "MaxVersionTested updated to $($tdf.MaxVersionTested)"
     }
 }

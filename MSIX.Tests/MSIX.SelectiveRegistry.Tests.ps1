@@ -34,14 +34,14 @@
                     throw "ExcludedKeys entry exceeds 512 chars ($($key.Length)): '$key'"
                 }
             }
-            $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+            $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
             foreach ($key in $ExcludedKeys) {
                 if ($seen.Add($key)) { $validatedKeys += $key }
             }
         }
 
-        Add-MsixManifestNamespace $M 'desktop6'
-        Add-MsixManifestNamespace $M 'rescap'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'desktop6'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'rescap'
 
         $props = $M.Package.Properties
         $d6    = Get-MsixManifestNamespaceUri 'desktop6'
@@ -62,7 +62,7 @@
         if ($virtNode) { $null = $props.RemoveChild($virtNode) }
 
         if ($validatedKeys.Count -gt 0) {
-            Add-MsixManifestNamespace $M 'virtualization'
+            Add-MsixManifestNamespace -Manifest $M -Prefix 'virtualization'
             $virtNode = $M.CreateElement('virtualization:RegistryWriteVirtualization', $virtUri)
             $keys     = $M.CreateElement('virtualization:ExcludedKeys', $virtUri)
             foreach ($k in $validatedKeys) {

@@ -405,7 +405,7 @@ function Merge-MsixFinding {
             $primary = $byKey[$key]
             # Concatenate evidence (de-dupe identical Source+Path tuples).
             $combined = @($primary.EvidenceItems) + @($f.EvidenceItems)
-            $seen = New-Object System.Collections.Generic.HashSet[string]
+            $seen = [System.Collections.Generic.HashSet[string]]::new()
             $deduped = @($combined | Where-Object {
                 $sig = ('{0}|{1}' -f $_.Source, ($_.PSObject.Properties['Path'] | ForEach-Object Value))
                 $seen.Add($sig)

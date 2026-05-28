@@ -1,6 +1,6 @@
 ﻿BeforeAll {
     $modulePath = Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')
-    Import-Module $modulePath -Force
+    Import-Module -Name $modulePath -Force
 }
 
 AfterAll {

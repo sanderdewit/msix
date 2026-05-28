@@ -628,13 +628,13 @@ function Add-MsixPsfV2 {
     )
 
     $toolsRoot = Get-MsixToolsRoot
-    if (-not $PsfSourcePath) { $PsfSourcePath = Join-Path $toolsRoot 'psf' }
+    if (-not $PsfSourcePath) { $PsfSourcePath = Join-Path -Path $toolsRoot -ChildPath 'psf' }
 
     $fileinfo = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace $fileinfo.BaseName
 
     try {
-        Write-MsixLog Info "Unpacking: $($fileinfo.FullName)"
+        Write-MsixLog -Level Info -Message "Unpacking: $($fileinfo.FullName)"
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
@@ -650,17 +650,17 @@ function Add-MsixPsfV2 {
                         Where-Object { $_.Name -notmatch '^Psf' } |
                         Select-Object -First 1 |
                         ForEach-Object { $_.FullName.Substring($workspace.Length + 1) }
-            Write-MsixLog Warning "Application Executable attribute was empty; resolved via scan: $firstExe"
+            Write-MsixLog -Level Warning -Message "Application Executable attribute was empty; resolved via scan: $firstExe"
         }
         $is64      = $firstExe -match 'x64|ProgramFilesX64'
         $bitSuffix = if ($is64) { '64' } else { '32' }
 
         # Resolve the subfolder that contains the first app's executable
         $relDir    = if ($firstExe -and $firstExe.Contains('\')) { $firstExe.Substring(0, $firstExe.LastIndexOf('\')) } else { '' }
-        $appFolder = if ($relDir) { Join-Path $workspace $relDir } else { $workspace }
+        $appFolder = if ($relDir) { Join-Path -Path $workspace -ChildPath $relDir } else { $workspace }
 
         # --- config.json (placed alongside the app executable) ---
-        $configPath = Join-Path $appFolder 'config.json'
+        $configPath = Join-Path -Path $appFolder -ChildPath 'config.json'
 
         # Detect re-injection: manifest already points to a PsfLauncher, which means
         # a previous Add-MsixPsfV2 run already set up the launcher → real executable
@@ -711,7 +711,7 @@ function Add-MsixPsfV2 {
 
             if ($PSCmdlet.ShouldProcess($configPath, 'Merge PSF config.json')) {
                 $mergedJson | Out-File -FilePath $configPath -Encoding utf8 -Force
-                Write-MsixLog Info "PSF config merged (fixup(s) added to existing config): $configPath"
+                Write-MsixLog -Level Info -Message "PSF config merged (fixup(s) added to existing config): $configPath"
             }
         } else {
             # Fresh injection: generate config.json from manifest
@@ -722,7 +722,7 @@ function Add-MsixPsfV2 {
 
             if ($PSCmdlet.ShouldProcess($configPath, 'Write PSF config.json')) {
                 $psfJson | Out-File -FilePath $configPath -Encoding utf8 -Force
-                Write-MsixLog Info "PSF config written: $configPath"
+                Write-MsixLog -Level Info -Message "PSF config written: $configPath"
             }
         }
 
@@ -735,14 +735,14 @@ function Add-MsixPsfV2 {
             "PsfRunDll$bitSuffix.exe"
         )
         foreach ($f in $runtimeFiles) {
-            $src = Join-Path $PsfSourcePath $f
+            $src = Join-Path -Path $PsfSourcePath -ChildPath $f
             if (Test-Path -LiteralPath $src) {
                 if ($PSCmdlet.ShouldProcess($src, "Copy PSF runtime")) {
                     Copy-Item -LiteralPath $src -Destination $appFolder -Force
-                    Write-MsixLog Debug "Copied: $f"
+                    Write-MsixLog -Level Debug -Message "Copied: $f"
                 }
             } else {
-                Write-MsixLog Warning "PSF runtime not found: $src"
+                Write-MsixLog -Level Warning -Message "PSF runtime not found: $src"
             }
         }
 
@@ -753,18 +753,18 @@ function Add-MsixPsfV2 {
             $meta    = $script:PsfFixupRegistry[$dllBase]
 
             if ($meta -and $meta.HasBitSuffix) {
-                $src = Join-Path $PsfSourcePath "${dllBase}${bitSuffix}.dll"
+                $src = Join-Path -Path $PsfSourcePath -ChildPath "${dllBase}${bitSuffix}.dll"
             } else {
-                $src = Join-Path $PsfSourcePath $dllName
+                $src = Join-Path -Path $PsfSourcePath -ChildPath $dllName
             }
 
             if (Test-Path -LiteralPath $src) {
                 if ($PSCmdlet.ShouldProcess($src, "Copy fixup DLL")) {
-                    Copy-Item -LiteralPath $src -Destination (Join-Path $appFolder $dllName) -Force
-                    Write-MsixLog Debug "Fixup copied: $dllName"
+                    Copy-Item -LiteralPath $src -Destination (Join-Path -Path $appFolder -ChildPath $dllName) -Force
+                    Write-MsixLog -Level Debug -Message "Fixup copied: $dllName"
                 }
             } else {
-                Write-MsixLog Warning "Fixup DLL not found: $src"
+                Write-MsixLog -Level Warning -Message "Fixup DLL not found: $src"
             }
         }
 
@@ -773,9 +773,9 @@ function Add-MsixPsfV2 {
             foreach ($extra in $AdditionalFiles) {
                 if (Test-Path -LiteralPath $extra) {
                     Copy-Item -LiteralPath $extra -Destination $appFolder -Force
-                    Write-MsixLog Debug "Extra file copied: $extra"
+                    Write-MsixLog -Level Debug -Message "Extra file copied: $extra"
                 } else {
-                    Write-MsixLog Warning "Additional file not found: $extra"
+                    Write-MsixLog -Level Warning -Message "Additional file not found: $extra"
                 }
             }
         }
@@ -783,19 +783,19 @@ function Add-MsixPsfV2 {
         # Always ship StartingScriptWrapper.ps1 if any app uses startScript/endScript
         $needsWrapper = @($AppOptions) | Where-Object { $_.kind -in 'startScript','endScript' }
         if ($needsWrapper) {
-            $wrapper = Join-Path $PsfSourcePath 'StartingScriptWrapper.ps1'
+            $wrapper = Join-Path -Path $PsfSourcePath -ChildPath 'StartingScriptWrapper.ps1'
             if (Test-Path -LiteralPath $wrapper) {
                 Copy-Item -LiteralPath $wrapper -Destination $appFolder -Force
-                Write-MsixLog Debug "StartingScriptWrapper.ps1 copied"
+                Write-MsixLog -Level Debug -Message "StartingScriptWrapper.ps1 copied"
             } else {
-                Write-MsixLog Warning "StartingScriptWrapper.ps1 not found in $PsfSourcePath"
+                Write-MsixLog -Level Warning -Message "StartingScriptWrapper.ps1 not found in $PsfSourcePath"
             }
         }
 
         # --- Update manifest: point each Application at PsfLauncher ---
         # Skip when PSF is already present — launcher is already wired in the manifest.
         if ($isPsfPresent) {
-            Write-MsixLog Info 'PSF already present; skipping manifest launcher update.'
+            Write-MsixLog -Level Info -Message 'PSF already present; skipping manifest launcher update.'
         } else {
             $i = 0
             foreach ($app in $apps) {
@@ -805,8 +805,8 @@ function Add-MsixPsfV2 {
                     $launcherName = "PsfLauncher$bitSuffix.exe"
                 } else {
                     $launcherName = "PsfLauncher${bitSuffix}_$i.exe"
-                    Copy-Item -LiteralPath (Join-Path $PsfSourcePath "PsfLauncher$bitSuffix.exe") `
-                              -Destination (Join-Path $appFolder $launcherName) -Force
+                    Copy-Item -LiteralPath (Join-Path -Path $PsfSourcePath -ChildPath "PsfLauncher$bitSuffix.exe") `
+                              -Destination (Join-Path -Path $appFolder -ChildPath $launcherName) -Force
                 }
 
                 $oldExe  = $app.GetAttribute('Executable')
@@ -840,14 +840,14 @@ function Add-MsixPsfV2 {
         # an unsigned modified copy of their signed package.
         $repackTarget = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
         $scratch      = Join-Path $env:TEMP ("msix-psfv2-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($repackTarget)))
-        Write-MsixLog Info "Repacking (via scratch): $repackTarget"
+        Write-MsixLog -Level Info -Message "Repacking (via scratch): $repackTarget"
         $packOk = $false
         try {
             $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
             Assert-MsixProcessSuccess $r 'MakeAppx pack'
             $packOk = $true
             if ($SkipSigning) {
-                Write-MsixLog Info "Skipping signing (use Invoke-MsixSigning later, or chain another PSF call)."
+                Write-MsixLog -Level Info -Message "Skipping signing (use Invoke-MsixSigning later, or chain another PSF call)."
             } else {
                 Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword
             }
@@ -855,7 +855,7 @@ function Add-MsixPsfV2 {
         } catch {
             if ($packOk -and $UnsignedOutputPath) {
                 Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction SilentlyContinue
-                Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
+                Write-MsixLog -Level Warning -Message "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
             }
             throw
         } finally {

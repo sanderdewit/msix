@@ -9,7 +9,7 @@
 # the output goes to the path you choose.
 # =============================================================================
 
-$script:TemplateDir = Join-Path $PSScriptRoot 'templates'
+$script:TemplateDir = Join-Path -Path $PSScriptRoot -ChildPath 'templates'
 
 # Catalogue: name -> { Template, Description, RequiredParams }
 $script:StandardScriptCatalogue = [ordered]@{
@@ -203,7 +203,7 @@ function New-MsixStandardScript {
         $dir = Split-Path -Path $OutputPath -Parent
         if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
         Set-Content -LiteralPath $OutputPath -Value $content -Encoding utf8
-        Write-MsixLog Info "Generated $Name -> $OutputPath"
+        Write-MsixLog -Level Info -Message "Generated $Name -> $OutputPath"
     }
 
     if ($Pfx) {
@@ -265,9 +265,9 @@ function Set-MsixScriptSignature {
                                      -TimestampServer $TimestampUrl `
                                      -HashAlgorithm SHA256 -ErrorAction Stop
     if ($sig.Status -ne 'Valid') {
-        Write-MsixLog Warning "Script signature status: $($sig.Status) ($($sig.StatusMessage))"
+        Write-MsixLog -Level Warning -Message "Script signature status: $($sig.Status) ($($sig.StatusMessage))"
     } else {
-        Write-MsixLog Info "Signed: $ScriptPath  ($($sig.SignerCertificate.Thumbprint))"
+        Write-MsixLog -Level Info -Message "Signed: $ScriptPath  ($($sig.SignerCertificate.Thumbprint))"
     }
     return $sig
 }
@@ -383,7 +383,7 @@ function Add-MsixStandardScript {
 
     # Stage script in a workspace so cleanup is easy
     $stage      = New-MsixWorkspace "$AppId-$Name"
-    $scriptPath = Join-Path $stage $ScriptFileName
+    $scriptPath = Join-Path -Path $stage -ChildPath $ScriptFileName
 
     try {
         $genArgs = @{

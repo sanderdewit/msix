@@ -68,7 +68,7 @@ function _MsixLoadTrustedPublishers {
     }
 
     $rx       = [regex]'^CN=.+,$'
-    $prefixes = New-Object -TypeName 'System.Collections.Generic.List[string]'
+    $prefixes = [System.Collections.Generic.List[string]]::new()
     foreach ($entry in $doc.publishers) {
         $p = [string]$entry.subjectPrefix
         if (-not $p) {
@@ -427,10 +427,10 @@ function _MsixUpdateToolByAge {
     $stamp = [datetime](Get-Content -LiteralPath $MarkerFile -Raw).Trim()
     $age   = (Get-Date) - $stamp
     if ($age.TotalDays -gt $MaxAgeDays) {
-        Write-MsixLog Info "$ToolName is $([int]$age.TotalDays) days old; refreshing."
+        Write-MsixLog -Level Info -Message "$ToolName is $([int]$age.TotalDays) days old; refreshing."
         return & $InstallForce
     }
-    Write-MsixLog Info "$ToolName is fresh ($([int]$age.TotalDays) days old; threshold $MaxAgeDays)."
+    Write-MsixLog -Level Info -Message "$ToolName is fresh ($([int]$age.TotalDays) days old; threshold $MaxAgeDays)."
     return [pscustomobject]@{ Path = $Destination; Updated = $false }
 }
 
@@ -496,17 +496,17 @@ function Install-MsixPsfBinary {
         [string]$AssetPattern = '\.zip$'
     )
 
-    if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'psf' }
+    if (-not $Destination) { $Destination = Join-Path -Path (Get-MsixToolsRoot) -ChildPath 'psf' }
 
-    $release = _MsixGitHubLatest $script:TMurgentRepo
+    $release = _MsixGitHubLatest -Repo $script:TMurgentRepo
     $tag     = $release.tag_name
-    Write-MsixLog Info "Latest TMurgent PSF release: $tag"
+    Write-MsixLog -Level Info -Message "Latest TMurgent PSF release: $tag"
 
-    $marker = Join-Path $Destination 'psf.version'
+    $marker = Join-Path -Path $Destination -ChildPath 'psf.version'
     if ((Test-Path -LiteralPath $marker) -and -not $Force) {
         $current = (Get-Content -LiteralPath $marker -Raw -ErrorAction SilentlyContinue).Trim()
         if ($current -eq $tag) {
-            Write-MsixLog Info "PSF $tag already installed at $Destination. Use -Force to reinstall."
+            Write-MsixLog -Level Info -Message "PSF $tag already installed at $Destination. Use -Force to reinstall."
             return [pscustomobject]@{ Path = $Destination; Version = $tag; Updated = $false }
         }
     }
@@ -518,7 +518,7 @@ function Install-MsixPsfBinary {
 
     $tmp = Join-Path $env:TEMP "tmurgent-psf-$([guid]::NewGuid().ToString('N').Substring(0,8))"
     New-Item -Path $tmp -ItemType Directory -Force | Out-Null
-    $zip = Join-Path $tmp $asset.name
+    $zip = Join-Path -Path $tmp -ChildPath $asset.name
 
     if ($PSCmdlet.ShouldProcess($Destination, "Install PSF $tag")) {
         $destinationCreated = $false
@@ -539,10 +539,10 @@ function Install-MsixPsfBinary {
                 ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $Destination -Force }
 
             Set-Content -Path $marker -Value $tag -Encoding ascii
-            Write-MsixLog Info "PSF $tag installed to $Destination"
+            Write-MsixLog -Level Info -Message "PSF $tag installed to $Destination"
 
         } catch {
-            Write-MsixLog Error "PSF install rolled back: $_"
+            Write-MsixLog -Level Error -Message "PSF install rolled back: $_"
             if ($destinationCreated) {
                 Remove-Item -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue
             }
@@ -587,13 +587,13 @@ function Get-MsixPsfBinariesVersion {
     param(
         [string]$Path
     )
-    if (-not $Path) { $Path = Join-Path (Get-MsixToolsRoot) 'psf' }
-    $marker = Join-Path $Path 'psf.version'
+    if (-not $Path) { $Path = Join-Path -Path (Get-MsixToolsRoot) -ChildPath 'psf' }
+    $marker = Join-Path -Path $Path -ChildPath 'psf.version'
     return [pscustomobject]@{
         Path        = $Path
         Installed   = Test-Path -LiteralPath $marker
         Version     = if (Test-Path -LiteralPath $marker) { (Get-Content -LiteralPath $marker -Raw).Trim() } else { $null }
-        HasLauncher = Test-Path -LiteralPath (Join-Path $Path 'PsfLauncher32.exe')
+        HasLauncher = Test-Path -LiteralPath (Join-Path -Path $Path -ChildPath 'PsfLauncher32.exe')
     }
 }
 
@@ -627,16 +627,16 @@ function Update-MsixPsfBinary {
     if (-not $PSCmdlet.ShouldProcess($Destination, 'Update PSF Binaries')) { return }
     $current = Get-MsixPsfBinariesVersion -Path $Destination
     if (-not $current.Installed) {
-        Write-MsixLog Info "No PSF found locally; installing."
+        Write-MsixLog -Level Info -Message "No PSF found locally; installing."
         return Install-MsixPsfBinary -Destination $Destination
     }
 
-    $latest = (_MsixGitHubLatest $script:TMurgentRepo).tag_name
+    $latest = (_MsixGitHubLatest -Repo $script:TMurgentRepo).tag_name
     if ($current.Version -eq $latest) {
-        Write-MsixLog Info "PSF up to date ($latest)"
+        Write-MsixLog -Level Info -Message "PSF up to date ($latest)"
         return $current
     }
-    Write-MsixLog Info "Update available: $($current.Version) -> $latest"
+    Write-MsixLog -Level Info -Message "Update available: $($current.Version) -> $latest"
     return Install-MsixPsfBinary -Destination $Destination -Force
 }
 
@@ -736,11 +736,11 @@ function Update-MsixProcMon {
         [string]$Destination,
         [int]$MaxAgeDays = 30
     )
-    if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'procmon' }
+    if (-not $Destination) { $Destination = Join-Path -Path (Get-MsixToolsRoot) -ChildPath 'procmon' }
     _MsixUpdateToolByAge `
         -ToolName 'Procmon' `
         -Destination $Destination `
-        -MarkerFile (Join-Path $Destination 'procmon.installed') `
+        -MarkerFile (Join-Path -Path $Destination -ChildPath 'procmon.installed') `
         -MaxAgeDays $MaxAgeDays `
         -InstallFresh { Install-MsixProcMon -Destination $Destination } `
         -InstallForce { Install-MsixProcMon -Destination $Destination -Force }
@@ -783,23 +783,23 @@ function Install-MsixDebugView {
         [string]$Destination,
         [switch]$Force
     )
-    if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'debugview' }
+    if (-not $Destination) { $Destination = Join-Path -Path (Get-MsixToolsRoot) -ChildPath 'debugview' }
     _MsixInstallArchiveTool `
         -ToolName 'DebugView' `
         -Destination $Destination `
-        -MarkerFile (Join-Path $Destination 'debugview.installed') `
+        -MarkerFile (Join-Path -Path $Destination -ChildPath 'debugview.installed') `
         -Url $script:DebugViewZipUrl `
         -ArchiveFileName 'DebugView.zip' `
         -Force:$Force `
         -PostInstall {
             param($dest)
-            $exe = Join-Path $dest 'Dbgview64.exe'
-            if (-not (Test-Path -LiteralPath $exe)) { $exe = Join-Path $dest 'Dbgview.exe' }
+            $exe = Join-Path -Path $dest -ChildPath 'Dbgview64.exe'
+            if (-not (Test-Path -LiteralPath $exe)) { $exe = Join-Path -Path $dest -ChildPath 'Dbgview.exe' }
             if (Test-Path -LiteralPath $exe) {
                 $env:MSIX_DEBUGVIEW_PATH = $exe
-                Write-MsixLog Info "DebugView installed at $exe"
+                Write-MsixLog -Level Info -Message "DebugView installed at $exe"
             } else {
-                Write-MsixLog Warning "Dbgview.exe / Dbgview64.exe not found after extraction; check $dest"
+                Write-MsixLog -Level Warning -Message "Dbgview.exe / Dbgview64.exe not found after extraction; check $dest"
             }
         }
 }
@@ -833,11 +833,11 @@ function Update-MsixDebugView {
         [string]$Destination,
         [int]$MaxAgeDays = 30
     )
-    if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'debugview' }
+    if (-not $Destination) { $Destination = Join-Path -Path (Get-MsixToolsRoot) -ChildPath 'debugview' }
     _MsixUpdateToolByAge `
         -ToolName 'DebugView' `
         -Destination $Destination `
-        -MarkerFile (Join-Path $Destination 'debugview.installed') `
+        -MarkerFile (Join-Path -Path $Destination -ChildPath 'debugview.installed') `
         -MaxAgeDays $MaxAgeDays `
         -InstallFresh { Install-MsixDebugView -Destination $Destination } `
         -InstallForce { Install-MsixDebugView -Destination $Destination -Force }
@@ -866,10 +866,10 @@ function Get-MsixDebugViewVersion {
     #>
     [CmdletBinding()]
     param([string]$Path)
-    if (-not $Path) { $Path = Join-Path (Get-MsixToolsRoot) 'debugview' }
-    $marker = Join-Path $Path 'debugview.installed'
-    $exe    = Join-Path $Path 'Dbgview64.exe'
-    if (-not (Test-Path -LiteralPath $exe)) { $exe = Join-Path $Path 'Dbgview.exe' }
+    if (-not $Path) { $Path = Join-Path -Path (Get-MsixToolsRoot) -ChildPath 'debugview' }
+    $marker = Join-Path -Path $Path -ChildPath 'debugview.installed'
+    $exe    = Join-Path -Path $Path -ChildPath 'Dbgview64.exe'
+    if (-not (Test-Path -LiteralPath $exe)) { $exe = Join-Path -Path $Path -ChildPath 'Dbgview.exe' }
 
     return [pscustomobject]@{
         Path        = $Path
@@ -967,14 +967,14 @@ function Install-MsixSdkTool {
         }
         $Version = $stable.Raw
     }
-    Write-MsixLog Info "Microsoft.Windows.SDK.BuildTools version: $Version"
+    Write-MsixLog -Level Info -Message "Microsoft.Windows.SDK.BuildTools version: $Version"
 
     # ── Idempotency check ─────────────────────────────────────────────────
-    $marker = Join-Path $Destination 'Tools\sdk.version'
+    $marker = Join-Path -Path $Destination -ChildPath 'Tools\sdk.version'
     if ((Test-Path -LiteralPath $marker) -and -not $Force) {
         $current = (Get-Content -LiteralPath $marker -Raw -ErrorAction SilentlyContinue).Trim()
         if ($current -eq "$Version|$Architecture") {
-            Write-MsixLog Info "SDK tools $Version ($Architecture) already installed at $Destination\Tools."
+            Write-MsixLog -Level Info -Message "SDK tools $Version ($Architecture) already installed at $Destination\Tools."
             return [pscustomobject]@{ Path = "$Destination\Tools"; Version = $Version; Architecture = $Architecture; Updated = $false }
         }
     }
@@ -982,23 +982,23 @@ function Install-MsixSdkTool {
     # ── Download + extract ────────────────────────────────────────────────
     $tmp = Join-Path $env:TEMP "sdk-buildtools-$([guid]::NewGuid().ToString('N').Substring(0,8))"
     New-Item -Path $tmp -ItemType Directory -Force | Out-Null
-    $nupkg = Join-Path $tmp "$($script:SdkToolsNuGet).$Version.nupkg"
+    $nupkg = Join-Path -Path $tmp -ChildPath "$($script:SdkToolsNuGet).$Version.nupkg"
     $url   = "https://api.nuget.org/v3-flatcontainer/$($script:SdkToolsNuGet.ToLower())/$Version/$($script:SdkToolsNuGet.ToLower()).$Version.nupkg"
 
     if ($PSCmdlet.ShouldProcess("$Destination\Tools", "Install Microsoft.Windows.SDK.BuildTools $Version ($Architecture)")) {
-        $toolsDir = Join-Path $Destination 'Tools'
+        $toolsDir = Join-Path -Path $Destination -ChildPath 'Tools'
         $toolsDirExisted = Test-Path -LiteralPath $toolsDir
         try {
             _MsixDownloadFile -Url $url -Destination $nupkg
 
-            $extracted = Join-Path $tmp 'extracted'
+            $extracted = Join-Path -Path $tmp -ChildPath 'extracted'
             _MsixExpandZip -ArchivePath $nupkg -DestinationPath $extracted
 
             # Locate the bin\<sdk-ver>\<arch> folder. NuGet packages may have a
             # versioned subdirectory we need to discover.
-            $archDir = Get-ChildItem -LiteralPath (Join-Path $extracted 'bin') -Directory -ErrorAction SilentlyContinue |
-                       ForEach-Object { Join-Path $_.FullName $Architecture } |
-                       Where-Object { Test-Path -LiteralPath (Join-Path $_ 'MakeAppx.exe') } |
+            $archDir = Get-ChildItem -LiteralPath (Join-Path -Path $extracted -ChildPath 'bin') -Directory -ErrorAction SilentlyContinue |
+                       ForEach-Object { Join-Path -Path $_.FullName -ChildPath $Architecture } |
+                       Where-Object { Test-Path -LiteralPath (Join-Path -Path $_ -ChildPath 'MakeAppx.exe') } |
                        Sort-Object -Descending |
                        Select-Object -First 1
             if (-not $archDir) {
@@ -1016,13 +1016,13 @@ function Install-MsixSdkTool {
             Copy-Item "$archDir\*" $toolsDir -Recurse -Force
 
             "$Version|$Architecture" | Set-Content -LiteralPath $marker -Encoding ascii
-            Write-MsixLog Info "MakeAppx.exe + signtool.exe installed at $toolsDir"
+            Write-MsixLog -Level Info -Message "MakeAppx.exe + signtool.exe installed at $toolsDir"
 
             # Reset the cached tools root so the next Get-MsixToolsRoot picks this up
             Set-MsixToolsRoot -Path $Destination
 
         } catch {
-            Write-MsixLog Error "SDK tools install rolled back: $_"
+            Write-MsixLog -Level Error -Message "SDK tools install rolled back: $_"
             if (-not $toolsDirExisted) {
                 Remove-Item -LiteralPath $toolsDir -Recurse -Force -ErrorAction SilentlyContinue
             }
@@ -1076,7 +1076,7 @@ function Update-MsixSdkTool {
     )
     if (-not $Destination) { $Destination = $PSScriptRoot }
     if (-not $PSCmdlet.ShouldProcess($Destination, 'Update SDK Tools')) { return }
-    $marker = Join-Path $Destination 'Tools\sdk.version'
+    $marker = Join-Path -Path $Destination -ChildPath 'Tools\sdk.version'
     if (-not (Test-Path -LiteralPath $marker)) {
         return Install-MsixSdkTool -Destination $Destination -Architecture $Architecture
     }
@@ -1090,10 +1090,10 @@ function Update-MsixSdkTool {
 
     $current = (Get-Content -LiteralPath $marker -Raw).Trim()
     if ($current -eq "$latest|$Architecture") {
-        Write-MsixLog Info "SDK tools up to date ($latest, $Architecture)."
+        Write-MsixLog -Level Info -Message "SDK tools up to date ($latest, $Architecture)."
         return [pscustomobject]@{ Path = "$Destination\Tools"; Version = $latest; Architecture = $Architecture; Updated = $false }
     }
-    Write-MsixLog Info "SDK tools update available: $current -> $latest|$Architecture"
+    Write-MsixLog -Level Info -Message "SDK tools update available: $current -> $latest|$Architecture"
     return Install-MsixSdkTool -Destination $Destination -Architecture $Architecture -Version $latest -Force
 }
 
@@ -1122,7 +1122,7 @@ function Get-MsixSdkToolsVersion {
     [CmdletBinding()]
     param([string]$Destination)
     if (-not $Destination) { $Destination = $PSScriptRoot }
-    $marker = Join-Path $Destination 'Tools\sdk.version'
+    $marker = Join-Path -Path $Destination -ChildPath 'Tools\sdk.version'
     if (-not (Test-Path -LiteralPath $marker)) {
         return [pscustomobject]@{ Path = "$Destination\Tools"; Installed = $false; Version = $null; Architecture = $null }
     }
@@ -1227,23 +1227,23 @@ function Install-MsixAppRuntime {
         [string[]]$Channels = $script:WindowsAppRuntimeDefaultChannels,
         [switch]$Force
     )
-    if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'runtime' }
+    if (-not $Destination) { $Destination = Join-Path -Path (Get-MsixToolsRoot) -ChildPath 'runtime' }
 
-    $marker = Join-Path $Destination 'runtime.installed'
+    $marker = Join-Path -Path $Destination -ChildPath 'runtime.installed'
     if ((Test-Path -LiteralPath $marker) -and -not $Force) {
         # Check whether all requested channels are cached; if any is missing
         # we still need to download just that one (don't bail out).
         $missing = $Channels | Where-Object {
-            -not (Test-Path -LiteralPath (Join-Path $Destination (_MsixAppRuntimeFileName $_)))
+            -not (Test-Path -LiteralPath (Join-Path $Destination (_MsixAppRuntimeFileName -Channel $_)))
         }
         if (-not $missing) {
-            Write-MsixLog Info "Windows App Runtime ($($Channels -join ', ')) + DesktopAppInstaller cached at $Destination."
+            Write-MsixLog -Level Info -Message "Windows App Runtime ($($Channels -join ', ')) + DesktopAppInstaller cached at $Destination."
             return [pscustomobject]@{
                 Path = $Destination; Updated = $false; Channels = $Channels
             }
         }
         $Channels = $missing
-        Write-MsixLog Info "Caching additional WindowsAppRuntime channels: $($missing -join ', ')"
+        Write-MsixLog -Level Info -Message "Caching additional WindowsAppRuntime channels: $($missing -join ', ')"
     }
 
     if (-not $PSCmdlet.ShouldProcess($Destination, "Install Windows App Runtime ($($Channels -join ', ')) + DesktopAppInstaller")) { return }
@@ -1260,11 +1260,10 @@ function Install-MsixAppRuntime {
 
     # Track files we created in THIS call so we can clean them up on a
     # failure mid-flight. Files that existed before the call are left alone.
-    $createdThisRun = New-Object 'System.Collections.Generic.List[string]'
-
+    $createdThisRun = [System.Collections.Generic.List[string]]::new()
     try {
         # ── DesktopAppInstaller msixbundle ────────────────────────────────
-        $bundlePath = Join-Path $Destination 'Microsoft.DesktopAppInstaller.msixbundle'
+        $bundlePath = Join-Path -Path $Destination -ChildPath 'Microsoft.DesktopAppInstaller.msixbundle'
         if ($Force -or -not (Test-Path -LiteralPath $bundlePath)) {
             _MsixDownloadFile -Url $script:DesktopAppInstallerUrl -Destination $bundlePath
             $createdThisRun.Add($bundlePath)
@@ -1275,11 +1274,11 @@ function Install-MsixAppRuntime {
         # Treat any download or verification failure as a hard failure --
         # caller can pass -Channels with only the channels they truly need
         # to scope the install.
-        $runtimePaths = New-Object 'System.Collections.Generic.List[string]'
+        $runtimePaths = [System.Collections.Generic.List[string]]::new()
         foreach ($ch in $Channels) {
-            $rt = Join-Path $Destination (_MsixAppRuntimeFileName $ch)
+            $rt = Join-Path -Path $Destination -ChildPath (_MsixAppRuntimeFileName -Channel $ch)
             if ($Force -or -not (Test-Path -LiteralPath $rt)) {
-                _MsixDownloadFile -Url (_MsixAppRuntimeUrl $ch) -Destination $rt
+                _MsixDownloadFile -Url (_MsixAppRuntimeUrl -Channel $ch) -Destination $rt
                 $createdThisRun.Add($rt)
             }
             _MsixVerifyAuthenticode -Path $rt -ToolName "WindowsAppRuntime/$ch" | Out-Null
@@ -1290,7 +1289,7 @@ function Install-MsixAppRuntime {
         # downloaded AND verified. A subsequent Get-MsixAppRuntimeVersion
         # will then see Installed=$true with a confidence guarantee.
         (Get-Date -Format o) | Set-Content -LiteralPath $marker -Encoding ascii
-        Write-MsixLog Info "AppRuntime cached + verified: $Destination"
+        Write-MsixLog -Level Info -Message "AppRuntime cached + verified: $Destination"
 
         return [pscustomobject]@{
             Path                  = $Destination
@@ -1307,7 +1306,7 @@ function Install-MsixAppRuntime {
                 Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
             }
         }
-        Write-MsixLog Error "AppRuntime install rolled back: $($_.Exception.Message)"
+        Write-MsixLog -Level Error -Message "AppRuntime install rolled back: $($_.Exception.Message)"
         throw
     }
 }
@@ -1385,11 +1384,11 @@ function Update-MsixAppRuntime {
         [string]$Destination,
         [int]$MaxAgeDays = 45
     )
-    if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'runtime' }
+    if (-not $Destination) { $Destination = Join-Path -Path (Get-MsixToolsRoot) -ChildPath 'runtime' }
     _MsixUpdateToolByAge `
         -ToolName 'AppRuntime cache' `
         -Destination $Destination `
-        -MarkerFile (Join-Path $Destination 'runtime.installed') `
+        -MarkerFile (Join-Path -Path $Destination -ChildPath 'runtime.installed') `
         -MaxAgeDays $MaxAgeDays `
         -InstallFresh { Install-MsixAppRuntime -Destination $Destination } `
         -InstallForce { Install-MsixAppRuntime -Destination $Destination -Force }
@@ -1431,16 +1430,16 @@ function Get-MsixAppRuntimeVersion {
     [CmdletBinding()]
     param([string]$Path)
 
-    if (-not $Path) { $Path = Join-Path (Get-MsixToolsRoot) 'runtime' }
-    $marker = Join-Path $Path 'runtime.installed'
-    $bundle = Join-Path $Path 'Microsoft.DesktopAppInstaller.msixbundle'
+    if (-not $Path) { $Path = Join-Path -Path (Get-MsixToolsRoot) -ChildPath 'runtime' }
+    $marker = Join-Path -Path $Path -ChildPath 'runtime.installed'
+    $bundle = Join-Path -Path $Path -ChildPath 'Microsoft.DesktopAppInstaller.msixbundle'
 
     # Channel-aware exe discovery. Filename convention is
     #   WindowsAppRuntimeInstall-x64-<major>.<minor>.exe
     # (set by _MsixAppRuntimeFileName in this file).
     $rx = [regex]'^WindowsAppRuntimeInstall-x64-(?<ch>\d+\.\d+)\.exe$'
-    $channels = New-Object 'System.Collections.Generic.List[string]'
-    $exes     = New-Object 'System.Collections.Generic.List[string]'
+    $channels = [System.Collections.Generic.List[string]]::new()
+    $exes     = [System.Collections.Generic.List[string]]::new()
     if (Test-Path -LiteralPath $Path) {
         foreach ($file in (Get-ChildItem -LiteralPath $Path -File -Filter 'WindowsAppRuntimeInstall-x64-*.exe' -ErrorAction SilentlyContinue)) {
             $m = $rx.Match($file.Name)

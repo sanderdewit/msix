@@ -98,16 +98,16 @@ function Import-MsixSparseShellExtension {
         if (-not $NestedPackagePath) {
             $candidates = @(Get-MsixNestedPackageCandidate -PackagePath $PackagePath)
             if (-not $candidates -or $candidates.Count -eq 0) {
-                Write-MsixLog Info 'No nested package found inside the outer .msix; nothing to merge.'
+                Write-MsixLog -Level Info -Message 'No nested package found inside the outer .msix; nothing to merge.'
                 return
             }
             if ($candidates.Count -gt 1) {
-                Write-MsixLog Warning ("Multiple nested packages found ({0}). Picking the first: {1}. Pass -NestedPackagePath to be explicit." -f $candidates.Count, $candidates[0].Path)
+                Write-MsixLog -Level Warning -Message ("Multiple nested packages found ({0}). Picking the first: {1}. Pass -NestedPackagePath to be explicit." -f $candidates.Count, $candidates[0].Path)
             }
             $NestedPackagePath = $candidates[0].Path
         }
 
-        $innerPkg = Join-Path $workspace $NestedPackagePath
+        $innerPkg = Join-Path -Path $workspace -ChildPath $NestedPackagePath
         if (-not (Test-Path -LiteralPath $innerPkg)) {
             throw "Nested package not found inside outer workspace: $NestedPackagePath"
         }
@@ -117,7 +117,7 @@ function Import-MsixSparseShellExtension {
         # $basePath = 'VFS\ProgramFilesX64\App\sub' (no trailing separator).
         $basePath = Split-Path -Parent $NestedPackagePath
         if ($null -eq $basePath) { $basePath = '' }
-        Write-MsixLog Info "Sparse merge: inner='$NestedPackagePath' basePath='$basePath'"
+        Write-MsixLog -Level Info -Message "Sparse merge: inner='$NestedPackagePath' basePath='$basePath'"
 
         # ── Unpack inner ──────────────────────────────────────────────────
         New-Item -ItemType Directory -Path $inner -Force | Out-Null
@@ -125,8 +125,8 @@ function Import-MsixSparseShellExtension {
         Assert-MsixProcessSuccess $r 'MakeAppx unpack (inner)'
 
         # ── Load both manifests via the XML-safe helper ──────────────────
-        $outerManifestPath = Join-Path $workspace 'AppxManifest.xml'
-        $innerManifestPath = Join-Path $inner     'AppxManifest.xml'
+        $outerManifestPath = Join-Path -Path $workspace -ChildPath 'AppxManifest.xml'
+        $innerManifestPath = Join-Path -Path $inner -ChildPath 'AppxManifest.xml'
         $outerXml = Get-MsixManifest -Path $outerManifestPath
         $innerXml = Get-MsixManifest -Path $innerManifestPath
 
@@ -137,7 +137,7 @@ function Import-MsixSparseShellExtension {
         # For every xmlns:* on the inner <Package> not already present on the
         # outer <Package>, copy it across. Prefer Add-MsixManifestNamespace
         # when the prefix is one we know (it also updates IgnorableNamespaces).
-        $outerExistingUris = New-Object 'System.Collections.Generic.HashSet[string]'
+        $outerExistingUris = [System.Collections.Generic.HashSet[string]]::new()
         foreach ($a in $outerPkgEl.Attributes) {
             if ($a.Prefix -eq 'xmlns' -or $a.Name -eq 'xmlns') {
                 $null = $outerExistingUris.Add($a.Value)
@@ -155,7 +155,7 @@ function Import-MsixSparseShellExtension {
             } elseif ($prefix) {
                 # Unknown prefix — set the xmlns attribute directly
                 $outerPkgEl.SetAttribute("xmlns:$prefix", $a.Value)
-                Write-MsixLog Debug "Merged unknown namespace prefix '$prefix' -> $($a.Value)"
+                Write-MsixLog -Level Debug -Message "Merged unknown namespace prefix '$prefix' -> $($a.Value)"
             }
             $null = $outerExistingUris.Add($a.Value)
         }
@@ -198,7 +198,7 @@ function Import-MsixSparseShellExtension {
                 # Rewrite every com:Class/@Path inside this just-imported subtree.
                 # com:Class can live at varying depths under com:Extension —
                 # walk the subtree.
-                $stack = New-Object 'System.Collections.Generic.Stack[System.Xml.XmlNode]'
+                $stack = [System.Collections.Generic.Stack[System.Xml.XmlNode]]::new()
                 $stack.Push($cloned)
                 while ($stack.Count -gt 0) {
                     $n = $stack.Pop()
@@ -214,12 +214,12 @@ function Import-MsixSparseShellExtension {
                                     $old.StartsWith('\\')
                                 )
                                 if (-not $alreadyRelative) {
-                                    $new = if ($basePath) { (Join-Path $basePath $old) } else { $old }
+                                    $new = if ($basePath) { (Join-Path -Path $basePath -ChildPath $old) } else { $old }
                                     $pathAttr.Value = $new
                                     $pathsFixed++
-                                    Write-MsixLog Info "Sparse merge: Path '$old' -> '$new'"
+                                    Write-MsixLog -Level Info -Message "Sparse merge: Path '$old' -> '$new'"
                                 } else {
-                                    Write-MsixLog Debug "Sparse merge: leaving already-rooted Path '$old' alone"
+                                    Write-MsixLog -Level Debug -Message "Sparse merge: leaving already-rooted Path '$old' alone"
                                 }
                             }
                         }
@@ -238,7 +238,7 @@ function Import-MsixSparseShellExtension {
             'Resources.pri',
             'resources.pri'
         )
-        $destRoot = if ($basePath) { (Join-Path $workspace $basePath) } else { $workspace }
+        $destRoot = if ($basePath) { (Join-Path -Path $workspace -ChildPath $basePath) } else { $workspace }
         if (-not (Test-Path -LiteralPath $destRoot)) {
             New-Item -ItemType Directory -Path $destRoot -Force | Out-Null
         }
@@ -255,7 +255,7 @@ function Import-MsixSparseShellExtension {
             # Skip AppxMetadata\* (always under that folder name at root)
             if ($rel -match '^AppxMetadata[\\/]') { continue }
 
-            $destPath = Join-Path $destRoot $rel
+            $destPath = Join-Path -Path $destRoot -ChildPath $rel
             $destDir  = Split-Path -Parent $destPath
             if ($destDir -and -not (Test-Path -LiteralPath $destDir)) {
                 New-Item -ItemType Directory -Path $destDir -Force | Out-Null
@@ -263,13 +263,13 @@ function Import-MsixSparseShellExtension {
             Copy-Item -LiteralPath $item.FullName -Destination $destPath -Force
             $filesCopied++
         }
-        Write-MsixLog Info "Sparse merge: copied $filesCopied file(s) into '$basePath'"
+        Write-MsixLog -Level Info -Message "Sparse merge: copied $filesCopied file(s) into '$basePath'"
 
         # ── Delete the inner .msix unless asked to keep ──────────────────
         if (-not $KeepInnerPackage) {
             if ($PSCmdlet.ShouldProcess($innerPkg, 'Remove nested .msix')) {
                 Remove-Item -LiteralPath $innerPkg -Force -ErrorAction SilentlyContinue
-                Write-MsixLog Info "Sparse merge: removed inner package '$NestedPackagePath'"
+                Write-MsixLog -Level Info -Message "Sparse merge: removed inner package '$NestedPackagePath'"
             }
         }
 
@@ -302,7 +302,7 @@ function Import-MsixSparseShellExtension {
         } catch {
             if ($packOk -and $UnsignedOutputPath) {
                 Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction SilentlyContinue
-                Write-MsixLog Warning "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
+                Write-MsixLog -Level Warning -Message "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
             }
             throw
         } finally {

@@ -56,7 +56,7 @@ Describe 'Issue #28: registry cleanup + idempotent ManifestFix detection' -Tag '
                     }
                 }
             } finally {
-                if (Test-Path $hivePath) { Remove-Item -LiteralPath $hivePath -Force -ErrorAction SilentlyContinue }
+                if (Test-Path -LiteralPath $hivePath) { Remove-Item -LiteralPath $hivePath -Force -ErrorAction SilentlyContinue }
             }
         }
 
@@ -73,7 +73,7 @@ Describe 'Issue #28: registry cleanup + idempotent ManifestFix detection' -Tag '
                 }
                 $result | Should -BeTrue
             } finally {
-                if (Test-Path $hivePath) { Remove-Item -LiteralPath $hivePath -Force -ErrorAction SilentlyContinue }
+                if (Test-Path -LiteralPath $hivePath) { Remove-Item -LiteralPath $hivePath -Force -ErrorAction SilentlyContinue }
             }
         }
 

@@ -6,7 +6,7 @@
 }
 
 AfterAll {
-    Remove-Item $script:Tmp -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $script:Tmp -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Module MSIX -ErrorAction SilentlyContinue
 }
 
@@ -19,7 +19,7 @@ Describe 'Validation' -Tag 'Validation' {
 
         It 'Throws on malformed XML' {
             $bad = Join-Path $script:Tmp 'bad.xml'
-            'not xml' | Set-Content $bad
+            'not xml' | Set-Content -LiteralPath $bad
             { Test-MsixManifest -Path $bad } | Should -Throw '*not valid XML*'
         }
 
@@ -31,7 +31,7 @@ Describe 'Validation' -Tag 'Validation' {
   <Identity Name="App" />
   <Applications><Application Id="A" Executable="x.exe" /></Applications>
 </Package>
-'@ | Set-Content $broken
+'@ | Set-Content -LiteralPath $broken
             { Test-MsixManifest -Path $broken } | Should -Throw '*Publisher*'
         }
 
@@ -42,7 +42,7 @@ Describe 'Validation' -Tag 'Validation' {
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
   <Identity Name="A" Publisher="CN=X" Version="1.0.0.0" />
 </Package>
-'@ | Set-Content $noapp
+'@ | Set-Content -LiteralPath $noapp
             { Test-MsixManifest -Path $noapp } | Should -Throw '*Application*'
         }
 
@@ -54,7 +54,7 @@ Describe 'Validation' -Tag 'Validation' {
   <Identity Name="A" Publisher="CN=X" Version="1.0.0.0" />
   <Applications><Application Id="A" Executable="x.exe" /></Applications>
 </Package>
-'@ | Set-Content $ok
+'@ | Set-Content -LiteralPath $ok
             Test-MsixManifest -Path $ok | Should -BeTrue
         }
     }
@@ -62,7 +62,7 @@ Describe 'Validation' -Tag 'Validation' {
     Context 'Test-MsixPsfConfig' {
         It 'Throws on missing keys' {
             $bad = Join-Path $script:Tmp 'badcfg.json'
-            '{}' | Set-Content $bad
+            '{}' | Set-Content -LiteralPath $bad
             { Test-MsixPsfConfig -Path $bad } | Should -Throw '*applications*'
         }
         It 'Accepts a valid PSF config' {
@@ -72,7 +72,7 @@ Describe 'Validation' -Tag 'Validation' {
   "applications": [{ "id": "App", "executable": "x.exe" }],
   "processes":    [{ "executable": "x" }]
 }
-'@ | Set-Content $ok
+'@ | Set-Content -LiteralPath $ok
             Test-MsixPsfConfig -Path $ok | Should -BeTrue
         }
     }

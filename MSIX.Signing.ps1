@@ -166,10 +166,10 @@
     }
 
     $toolsRoot = Get-MsixToolsRoot
-    $signtool  = Join-Path $toolsRoot 'Tools\signtool.exe'
+    $signtool  = Join-Path -Path $toolsRoot -ChildPath 'Tools\signtool.exe'
     $fileinfo  = Get-Item -LiteralPath $PackagePath
 
-    Write-MsixLog Info "Signing: $($fileinfo.Name) (backend: $effectiveSigner)"
+    Write-MsixLog -Level Info -Message "Signing: $($fileinfo.Name) (backend: $effectiveSigner)"
 
     switch ($effectiveSigner) {
 
@@ -200,7 +200,7 @@
                     $detail = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
                     throw "signtool failed (exit $($r.ExitCode)): $detail`nCheck: Microsoft-Windows-AppxPackagingOM event log."
                 } else {
-                    Write-MsixLog Info "Signed successfully: $($fileinfo.Name)"
+                    Write-MsixLog -Level Info -Message "Signed successfully: $($fileinfo.Name)"
                 }
             }
         }
@@ -215,14 +215,14 @@
             # Resolve the dlib path: explicit param, then bundled fallback.
             $resolvedDlib = $TrustedSigningClientDll
             if (-not $resolvedDlib) {
-                $candidate = Join-Path $toolsRoot 'Tools\TrustedSigning\Azure.CodeSigning.Dlib.dll'
+                $candidate = Join-Path -Path $toolsRoot -ChildPath 'Tools\TrustedSigning\Azure.CodeSigning.Dlib.dll'
                 if (Test-Path -LiteralPath $candidate) { $resolvedDlib = $candidate }
             }
             if (-not $resolvedDlib -or -not (Test-Path -LiteralPath $resolvedDlib)) {
-                throw "Azure.CodeSigning.Dlib.dll not found. Pass -TrustedSigningClientDll <path>, or stage it at:`n  $(Join-Path $toolsRoot 'Tools\TrustedSigning\Azure.CodeSigning.Dlib.dll')`nInstall via: dotnet tool install --global TrustedSigning.Client"
+                throw "Azure.CodeSigning.Dlib.dll not found. Pass -TrustedSigningClientDll <path>, or stage it at:`n  $(Join-Path -Path $toolsRoot -ChildPath 'Tools\TrustedSigning\Azure.CodeSigning.Dlib.dll')`nInstall via: dotnet tool install --global TrustedSigning.Client"
             }
 
-            Write-MsixLog Info "TrustedSigning account=$TrustedSigningAccount profile=$TrustedSigningProfile endpoint=$TrustedSigningEndpoint"
+            Write-MsixLog -Level Info -Message "TrustedSigning account=$TrustedSigningAccount profile=$TrustedSigningProfile endpoint=$TrustedSigningEndpoint"
 
             $metadataPath = Join-Path $env:TEMP "ts-metadata-$([guid]::NewGuid().ToString('N').Substring(0,8)).json"
             $metadata = @{
@@ -243,7 +243,7 @@
                         $detail = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
                         throw "signtool (TrustedSigning) failed (exit $($r.ExitCode)): $detail"
                     } else {
-                        Write-MsixLog Info "Signed successfully via Trusted Signing: $($fileinfo.Name)"
+                        Write-MsixLog -Level Info -Message "Signed successfully via Trusted Signing: $($fileinfo.Name)"
                     }
                 }
             } finally {
@@ -262,14 +262,14 @@
             $cmd  = Get-Command -Name 'AzureSignTool.exe' -ErrorAction SilentlyContinue
             if ($cmd) { $azst = $cmd.Source }
             if (-not $azst) {
-                $candidate = Join-Path $toolsRoot 'Tools\AzureSignTool\AzureSignTool.exe'
+                $candidate = Join-Path -Path $toolsRoot -ChildPath 'Tools\AzureSignTool\AzureSignTool.exe'
                 if (Test-Path -LiteralPath $candidate) { $azst = $candidate }
             }
             if (-not $azst) {
-                throw "AzureSignTool.exe not found in PATH or at $(Join-Path $toolsRoot 'Tools\AzureSignTool\AzureSignTool.exe').`nInstall via: dotnet tool install --global AzureSignTool"
+                throw "AzureSignTool.exe not found in PATH or at $(Join-Path -Path $toolsRoot -ChildPath 'Tools\AzureSignTool\AzureSignTool.exe').`nInstall via: dotnet tool install --global AzureSignTool"
             }
 
-            Write-MsixLog Info "AzureSignTool vault=$KeyVaultUrl cert=$KeyVaultCertificate"
+            Write-MsixLog -Level Info -Message "AzureSignTool vault=$KeyVaultUrl cert=$KeyVaultCertificate"
 
             # Build base arguments — omit auth-mode args when not provided so
             # AzureSignTool falls back to managed identity / interactive auth.
@@ -304,7 +304,7 @@
                         $detail = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
                         throw "AzureSignTool failed (exit $($r.ExitCode)): $detail"
                     } else {
-                        Write-MsixLog Info "Signed successfully via AzureSignTool: $($fileinfo.Name)"
+                        Write-MsixLog -Level Info -Message "Signed successfully via AzureSignTool: $($fileinfo.Name)"
                     }
                 }
             } finally {
@@ -426,13 +426,13 @@ function New-MsixSelfSignedCertificate {
     if (-not $subject) {
         throw "Could not read Publisher from manifest at $PackagePath"
     }
-    Write-MsixLog Info "Generating self-signed cert with Subject = $subject"
+    Write-MsixLog -Level Info -Message "Generating self-signed cert with Subject = $subject"
 
     if (-not $OutputFolder) {
         $base         = (Get-Item -LiteralPath $PackagePath).BaseName
         $OutputFolder = Join-Path $env:TEMP "msix-selfsign-$base-$([guid]::NewGuid().ToString('N').Substring(0,8))"
     }
-    New-Item $OutputFolder -ItemType Directory -Force | Out-Null
+    New-Item -Path $OutputFolder -ItemType Directory -Force | Out-Null
 
     $cert = New-SelfSignedCertificate `
         -Type CodeSigningCert `
@@ -446,8 +446,8 @@ function New-MsixSelfSignedCertificate {
             '2.5.29.19={text}'                     # Basic Constraints: end-entity
         )
 
-    $pfxPath  = Join-Path $OutputFolder 'debug-cert.pfx'
-    $cerPath  = Join-Path $OutputFolder 'debug-cert.cer'
+    $pfxPath  = Join-Path -Path $OutputFolder -ChildPath 'debug-cert.pfx'
+    $cerPath  = Join-Path -Path $OutputFolder -ChildPath 'debug-cert.cer'
     $pwdPlain = [guid]::NewGuid().ToString('N')    # random per-run password
     $pwdSec   = ConvertTo-SecureString $pwdPlain -AsPlainText -Force
     # Drop the plaintext reference immediately. The SecureString is what we
@@ -458,8 +458,8 @@ function New-MsixSelfSignedCertificate {
     Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $pwdSec | Out-Null
     Export-Certificate    -Cert $cert -FilePath $cerPath                    | Out-Null
 
-    Write-MsixLog Info "Cert PFX:  $pfxPath"
-    Write-MsixLog Info "Cert CER:  $cerPath"
+    Write-MsixLog -Level Info -Message "Cert PFX:  $pfxPath"
+    Write-MsixLog -Level Info -Message "Cert CER:  $cerPath"
 
     return [pscustomobject]@{
         Subject      = $subject
@@ -506,7 +506,7 @@ function Invoke-MsixSelfSignAndDebug {
 
     $check = Test-MsixSignature -PackagePath $PackagePath
     if (-not $check.NeedsSelfSign -and -not $Force) {
-        Write-MsixLog Info "Package signature is valid ($($check.Status)); skipping self-sign. Use -Force to override."
+        Write-MsixLog -Level Info -Message "Package signature is valid ($($check.Status)); skipping self-sign. Use -Force to override."
         return [pscustomobject]@{
             PackagePath = $PackagePath
             CertPath    = $null

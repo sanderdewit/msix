@@ -17,7 +17,7 @@ Describe 'Empty / minimal manifests' -Tag 'EdgeCases' {
     }
 
     It 'Handles 10 Applications without truncation' {
-        $sb = New-Object System.Text.StringBuilder
+        $sb = [System.Text.StringBuilder]::new()
         [void]$sb.AppendLine('<?xml version="1.0" encoding="utf-8"?>')
         [void]$sb.AppendLine('<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">')
         [void]$sb.AppendLine('<Identity Name="X" Publisher="CN=X" Version="1.0.0.0" />')

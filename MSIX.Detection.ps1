@@ -199,7 +199,7 @@ function Remove-MsixDesktopShortcut {
                 }
 
             if (-not $removed) { return $null }
-            Write-MsixLog Info "Removed: $($removed -join ', ')"
+            Write-MsixLog -Level Info -Message "Removed: $($removed -join ', ')"
             @{ Removed = $removed }
         }.GetNewClosure()
 }
@@ -256,7 +256,7 @@ function Get-MsixCapabilityHint {
         $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess $r 'MakeAppx unpack'
 
-        $hits = New-Object System.Collections.Generic.HashSet[string]
+        $hits = [System.Collections.Generic.HashSet[string]]::new()
         $allDlls = $script:DllToCapability.Keys
         Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Extension -in '.exe','.dll' } |
@@ -264,14 +264,14 @@ function Get-MsixCapabilityHint {
                 try {
                     $stream = [IO.File]::OpenRead($_.FullName)
                     try {
-                        $buf = New-Object byte[] ([math]::Min($stream.Length, 8MB))
+                        $buf = [byte[]]::new(([math]::Min($stream.Length, 8MB)))
                         $n   = $stream.Read($buf, 0, $buf.Length)
                         $txt = [Text.Encoding]::ASCII.GetString($buf, 0, $n)
                     } finally { $stream.Dispose() }
                     foreach ($d in $allDlls) {
                         if ($txt -match [regex]::Escape($d)) { $null = $hits.Add($script:DllToCapability[$d]) }
                     }
-                } catch { Write-MsixLog Debug "PE scan skipped for file: $_" }
+                } catch { Write-MsixLog -Level Debug -Message "PE scan skipped for file: $_" }
             }
         return @($hits) | Sort-Object -Unique
     } finally {
@@ -420,12 +420,12 @@ function Get-MsixPluginExtensionPoint {
         # VFS\Windows\System32\<random>\Plugins (false positive).
         [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
         $apps = @($manifest.Package.Applications.Application)
-        $appRoots = New-Object 'System.Collections.Generic.List[string]'
+        $appRoots = [System.Collections.Generic.List[string]]::new()
         foreach ($app in $apps) {
             $exe = $app.GetAttribute('Executable')
             if (-not $exe -or -not $exe.Contains('\')) { continue }
             $rel = $exe.Substring(0, $exe.LastIndexOf('\'))
-            $abs = Join-Path $workspace $rel
+            $abs = Join-Path -Path $workspace -ChildPath $rel
             if (Test-Path -LiteralPath $abs) {
                 $appRoots.Add($abs) | Out-Null
             }
@@ -438,7 +438,7 @@ function Get-MsixPluginExtensionPoint {
         # Manifest files that indicate a managed plugin discovery system.
         $pluginManifestNames = @('plugin.xml','manifest.json','pluginlist.cfg','plugin.json','plugins.cfg','plugins.xml')
 
-        $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+        $seen = [System.Collections.Generic.HashSet[string]]::new()
         foreach ($root in $appRoots) {
             Get-ChildItem -LiteralPath $root -Directory -Recurse -ErrorAction SilentlyContinue |
                 Where-Object { $script:MsixPluginDirectoryNames -contains $_.Name } |

@@ -44,7 +44,7 @@
 
 # Default playbook search roots. Callers can append more via -SearchPath.
 $script:MsixPlaybookSearchRoots = @(
-    (Join-Path $PSScriptRoot 'playbooks')
+    (Join-Path -Path $PSScriptRoot -ChildPath 'playbooks')
 )
 
 function Get-MsixPlaybook {
@@ -80,9 +80,9 @@ function Get-MsixPlaybook {
         foreach ($file in Get-ChildItem -LiteralPath $root -Filter '*.ps1' -File -Recurse -ErrorAction SilentlyContinue) {
             try {
                 $pb = & $file.FullName
-                if (-not $pb)                       { Write-MsixLog Warning "Playbook '$($file.Name)' returned nothing — skipped."; continue }
-                if (-not $pb.Name)                  { Write-MsixLog Warning "Playbook '$($file.Name)' has no Name — skipped."; continue }
-                if (-not $pb.Steps -or $pb.Steps.Count -eq 0) { Write-MsixLog Warning "Playbook '$($pb.Name)' has no Steps — skipped."; continue }
+                if (-not $pb)                       { Write-MsixLog -Level Warning -Message "Playbook '$($file.Name)' returned nothing — skipped."; continue }
+                if (-not $pb.Name)                  { Write-MsixLog -Level Warning -Message "Playbook '$($file.Name)' has no Name — skipped."; continue }
+                if (-not $pb.Steps -or $pb.Steps.Count -eq 0) { Write-MsixLog -Level Warning -Message "Playbook '$($pb.Name)' has no Steps — skipped."; continue }
                 $loaded += [pscustomobject]@{
                     PSTypeName  = 'MsixPlaybook'
                     Name        = [string]$pb.Name
@@ -92,7 +92,7 @@ function Get-MsixPlaybook {
                     SourceFile  = $file.FullName
                 }
             } catch {
-                Write-MsixLog Warning "Failed to load playbook '$($file.Name)': $_"
+                Write-MsixLog -Level Warning -Message "Failed to load playbook '$($file.Name)': $_"
             }
         }
     }
@@ -215,7 +215,7 @@ function Invoke-MsixPlaybook {
         $Playbook = $candidates[0]
     }
 
-    Write-MsixLog Info "Playbook: $($Playbook.Name) ($($Playbook.Steps.Count) step(s))"
+    Write-MsixLog -Level Info -Message "Playbook: $($Playbook.Name) ($($Playbook.Steps.Count) step(s))"
 
     $current = if ($OutputPath -and ($OutputPath -ne $PackagePath)) {
         if (-not $DryRun) { Copy-Item -LiteralPath $PackagePath -Destination $OutputPath -Force }
@@ -247,8 +247,8 @@ function Invoke-MsixPlaybook {
             $callArgs['SkipSigning'] = $true
         }
 
-        Write-MsixLog Info "  Step $i / $($Playbook.Steps.Count): $cmdletName"
-        foreach ($k in $callArgs.Keys) { Write-MsixLog Debug "    $k = $($callArgs[$k])" }
+        Write-MsixLog -Level Info -Message "  Step $i / $($Playbook.Steps.Count): $cmdletName"
+        foreach ($k in $callArgs.Keys) { Write-MsixLog -Level Debug -Message "    $k = $($callArgs[$k])" }
 
         if (-not $DryRun -and $PSCmdlet.ShouldProcess($current, "Playbook '$($Playbook.Name)' step ${i}: $cmdletName")) {
             & $cmd @callArgs
@@ -256,7 +256,7 @@ function Invoke-MsixPlaybook {
     }
 
     if ($DryRun) {
-        Write-MsixLog Info '[DryRun] Plan only — package unchanged.'
+        Write-MsixLog -Level Info -Message '[DryRun] Plan only — package unchanged.'
         return [pscustomobject]@{
             Playbook    = $Playbook.Name
             PackagePath = $current
@@ -266,10 +266,10 @@ function Invoke-MsixPlaybook {
     }
 
     if (-not $SkipSigning) {
-        Write-MsixLog Info '==> Sign'
+        Write-MsixLog -Level Info -Message '==> Sign'
         Invoke-MsixSigning -PackagePath $current -Pfx $Pfx -PfxPassword $PfxPassword
     } else {
-        Write-MsixLog Info 'NoSign requested; package left unsigned.'
+        Write-MsixLog -Level Info -Message 'NoSign requested; package left unsigned.'
     }
 
     return [pscustomobject]@{

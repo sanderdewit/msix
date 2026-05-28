@@ -63,7 +63,7 @@ Describe 'Shell-extension context menu placement (TMEditX-verified pattern)' -Ta
         [xml]$xml = $script:SampleXml
         & (Get-Module MSIX) {
             param($m)
-            Add-MsixManifestNamespace $m 'com'
+            Add-MsixManifestNamespace -Manifest $m -Prefix 'com'
             $app = Get-MsixManifestApplication -Manifest $m
             $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
             if (-not $appExt) {

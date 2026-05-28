@@ -159,11 +159,11 @@ function _GetPeImports {
     try {
         $stream = [System.IO.File]::OpenRead($Path)
         try {
-            $buf = New-Object byte[] ([math]::Min($stream.Length, 8MB))
+            $buf = [byte[]]::new(([math]::Min($stream.Length, 8MB)))
             $n   = $stream.Read($buf, 0, $buf.Length)
             $txt = [System.Text.Encoding]::ASCII.GetString($buf, 0, $n)
         } finally { $stream.Dispose() }
-        $hits = New-Object System.Collections.Generic.HashSet[string]
+        $hits = [System.Collections.Generic.HashSet[string]]::new()
         foreach ($dll in $script:KnownVcRuntimeDlls) {
             if ($txt -match [regex]::Escape($dll)) { $null = $hits.Add($dll) }
         }
@@ -260,10 +260,10 @@ function Add-MsixVcRuntimeBundle {
 
         # Determine architecture if auto
         if ($Architecture -eq 'auto') {
-            $sample = Join-Path $workspace $apps[0].GetAttribute('Executable')
+            $sample = Join-Path -Path $workspace -ChildPath $apps[0].GetAttribute('Executable')
             $Architecture = if (Test-Path -LiteralPath $sample) { (_GetPeArchitecture $sample) } else { 'x86' }
             if ($Architecture -notin 'x86','x64') { $Architecture = 'x86' }
-            Write-MsixLog Info "Architecture auto-detected: $Architecture"
+            Write-MsixLog -Level Info -Message "Architecture auto-detected: $Architecture"
         }
 
         # Resolve DLLs to copy
@@ -271,10 +271,10 @@ function Add-MsixVcRuntimeBundle {
             $analysis = Get-MsixVcRuntimeReference -PackagePath $PackagePath
             $Names    = $analysis.Missing
             if (-not $Names) {
-                Write-MsixLog Info 'No missing VC runtime DLLs detected; nothing to bundle.'
+                Write-MsixLog -Level Info -Message 'No missing VC runtime DLLs detected; nothing to bundle.'
                 return
             }
-            Write-MsixLog Info "Will bundle missing DLLs: $($Names -join ', ')"
+            Write-MsixLog -Level Info -Message "Will bundle missing DLLs: $($Names -join ', ')"
         }
 
         # Locate each DLL under SourceFolder. Heuristic search.
@@ -285,22 +285,22 @@ function Add-MsixVcRuntimeBundle {
                        (_GetPeArchitecture $_.FullName) -eq $Architecture
                    } | Select-Object -First 1
             if (-not $hit) {
-                Write-MsixLog Warning "$name not found under $SourceFolder for $Architecture"
+                Write-MsixLog -Level Warning -Message "$name not found under $SourceFolder for $Architecture"
                 continue
             }
             # Copy into the same folder as the first executable
             $exeRel  = $apps[0].Executable
             $destDir = if ($exeRel.Contains('\')) {
-                Join-Path $workspace $exeRel.Substring(0, $exeRel.LastIndexOf('\'))
+                Join-Path -Path $workspace -ChildPath $exeRel.Substring(0, $exeRel.LastIndexOf('\'))
             } else { $workspace }
             if ($PSCmdlet.ShouldProcess($destDir, "Copy $name")) {
-                Copy-Item $hit.FullName $destDir -Force
+                Copy-Item -LiteralPath $hit.FullName -Destination $destDir -Force
                 $copied += $name
             }
         }
 
         if ($copied.Count -eq 0) {
-            Write-MsixLog Warning 'No VC runtime DLLs were copied; aborting.'
+            Write-MsixLog -Level Warning -Message 'No VC runtime DLLs were copied; aborting.'
             return
         }
 

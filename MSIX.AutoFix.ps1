@@ -126,7 +126,7 @@ function Invoke-MsixAutoFix {
         [SecureString]$PfxPassword
     )
 
-    $stages = New-Object System.Collections.Generic.List[object]
+    $stages = [System.Collections.Generic.List[object]]::new()
     function _Stage([string]$Name, [scriptblock]$Action) {
         $stages.Add([pscustomobject]@{ Name = $Name; Action = $Action })
     }
@@ -170,7 +170,7 @@ function Invoke-MsixAutoFix {
             if ($fonts) {
                 Add-MsixFontExtension -PackagePath $current -FontPaths @($fonts | Select-Object -ExpandProperty Path) -SkipSigning
             } else {
-                Write-MsixLog Info 'AddFontExtension: no font files found in package.'
+                Write-MsixLog -Level Info -Message 'AddFontExtension: no font files found in package.'
             }
         }
     }
@@ -188,7 +188,7 @@ function Invoke-MsixAutoFix {
                         -AppIds @($candidates | Select-Object -ExpandProperty AppId) `
                         -SkipSigning
                 } else {
-                    Write-MsixLog Info 'AddAliases: no eligible alias candidates (all apps already aliased or filtered out).'
+                    Write-MsixLog -Level Info -Message 'AddAliases: no eligible alias candidates (all apps already aliased or filtered out).'
                 }
             }
         }
@@ -218,7 +218,7 @@ function Invoke-MsixAutoFix {
     }
 
     if ($DryRun) {
-        Write-MsixLog Info "DryRun: would run $($stages.Count) stages."
+        Write-MsixLog -Level Info -Message "DryRun: would run $($stages.Count) stages."
         return [pscustomobject]@{
             PackagePath = $PackagePath
             Stages      = $stages.Name
@@ -228,17 +228,17 @@ function Invoke-MsixAutoFix {
 
     if ($PSCmdlet.ShouldProcess($current, "Apply $($stages.Count) auto-fix stages")) {
         foreach ($s in $stages) {
-            Write-MsixLog Info "==> $($s.Name)"
+            Write-MsixLog -Level Info -Message "==> $($s.Name)"
             & $s.Action
         }
     }
 
     # Sign once at the end
     if (-not $stages -or -not $stages.Count) {
-        Write-MsixLog Info 'No stages selected; nothing to do.'
+        Write-MsixLog -Level Info -Message 'No stages selected; nothing to do.'
         return
     }
-    Write-MsixLog Info '==> Sign'
+    Write-MsixLog -Level Info -Message '==> Sign'
     Invoke-MsixSigning -PackagePath $current -Pfx $Pfx -PfxPassword $PfxPassword
 
     return [pscustomobject]@{
@@ -394,7 +394,7 @@ function Invoke-MsixAutoFixFromAnalysis {
     })
 
     # Categorise the autofixable findings into a stable plan
-    $plan = New-Object System.Collections.Generic.List[object]
+    $plan = [System.Collections.Generic.List[object]]::new()
 
     $byCat = @{}
     foreach ($f in @($confidentFindings)) {
@@ -496,7 +496,7 @@ function Invoke-MsixAutoFixFromAnalysis {
                 }
             })
         } else {
-            Write-MsixLog Warning 'Skipping StartupTask: -StartupTaskAppId and -StartupTaskName are required.'
+            Write-MsixLog -Level Warning -Message 'Skipping StartupTask: -StartupTaskAppId and -StartupTaskName are required.'
         }
     }
     if ($hasLoaderFix) {
@@ -507,7 +507,7 @@ function Invoke-MsixAutoFixFromAnalysis {
                 Action = { Add-MsixLoaderSearchPathOverride -PackagePath $current -Paths $LoaderPaths -SkipSigning }
             })
         } else {
-            Write-MsixLog Warning 'Skipping LoaderSearchPathOverride: -LoaderPaths is required.'
+            Write-MsixLog -Level Warning -Message 'Skipping LoaderSearchPathOverride: -LoaderPaths is required.'
         }
     }
 
@@ -558,7 +558,7 @@ function Invoke-MsixAutoFixFromAnalysis {
     if ($byCat.ContainsKey('ShellVerb')) {
         $shellVerbFinding = @($Report.Findings | Where-Object Category -eq 'ShellVerb') | Select-Object -First 1
         $verbNames = ($shellVerbFinding.ShellEntries | ForEach-Object { $_.VerbName } | Where-Object { $_ }) -join ', '
-        Write-MsixLog Info "ShellVerb: $($shellVerbFinding.ShellEntries.Count) plain command shell verb(s) detected ($verbNames). Cannot be auto-fixed — desktop9:fileExplorerClassicContextMenuHandler requires a COM CLSID. Convert to a COM surrogate server and use Add-MsixLegacyContextMenu."
+        Write-MsixLog -Level Info -Message "ShellVerb: $($shellVerbFinding.ShellEntries.Count) plain command shell verb(s) detected ($verbNames). Cannot be auto-fixed — desktop9:fileExplorerClassicContextMenuHandler requires a COM CLSID. Convert to a COM surrogate server and use Add-MsixLegacyContextMenu."
     }
 
     # Stage 2f.5 — merge nested (sparse) shell-extension packages
@@ -618,7 +618,7 @@ function Invoke-MsixAutoFixFromAnalysis {
                 }
             })
         } else {
-            Write-MsixLog Info "ShellExt: CLSID/VFS DLL path could not be resolved (the bundled DLL may not be Authenticode-stamped with the CLSID, or the package omits the COM class registration). Call Add-MsixLegacyContextMenu manually with the CLSID and -ShellExtDll path."
+            Write-MsixLog -Level Info -Message "ShellExt: CLSID/VFS DLL path could not be resolved (the bundled DLL may not be Authenticode-stamped with the CLSID, or the package omits the COM class registration). Call Add-MsixLegacyContextMenu manually with the CLSID and -ShellExtDll path."
         }
     }
 
@@ -648,7 +648,7 @@ function Invoke-MsixAutoFixFromAnalysis {
                 }
             })
         } else {
-            Write-MsixLog Info "ComServer: no auto-fixable InProc servers (none of the detected CLSIDs resolved to a VFS-bundled DLL)."
+            Write-MsixLog -Level Info -Message "ComServer: no auto-fixable InProc servers (none of the detected CLSIDs resolved to a VFS-bundled DLL)."
         }
     }
 
@@ -678,7 +678,7 @@ function Invoke-MsixAutoFixFromAnalysis {
                 Action = { Add-MsixVcRuntimeBundle -PackagePath $current -SourceFolder $VcRuntimeSourceFolder -SkipSigning }
             })
         } else {
-            Write-MsixLog Warning 'Skipping VcRuntime bundle: -VcRuntimeSourceFolder is required.'
+            Write-MsixLog -Level Warning -Message 'Skipping VcRuntime bundle: -VcRuntimeSourceFolder is required.'
         }
     }
 
@@ -702,7 +702,7 @@ function Invoke-MsixAutoFixFromAnalysis {
     }
 
     if (-not $plan -or -not $plan.Count) {
-        Write-MsixLog Info 'Nothing actionable in the report. Either no findings or all need manual parameters.'
+        Write-MsixLog -Level Info -Message 'Nothing actionable in the report. Either no findings or all need manual parameters.'
         return [pscustomobject]@{
             PackagePath = $PackagePath
             Plan        = @()
@@ -711,9 +711,9 @@ function Invoke-MsixAutoFixFromAnalysis {
     }
 
     # Emit the plan
-    Write-MsixLog Info '─── AutoFix plan ───'
+    Write-MsixLog -Level Info -Message '─── AutoFix plan ───'
     foreach ($p in $plan) {
-        Write-MsixLog Info "  $($p.Stage)  ($($p.Reason))"
+        Write-MsixLog -Level Info -Message "  $($p.Stage)  ($($p.Reason))"
     }
 
     if ($DryRun) {
@@ -732,15 +732,15 @@ function Invoke-MsixAutoFixFromAnalysis {
     }
 
     foreach ($p in $plan) {
-        Write-MsixLog Info "==> $($p.Stage)"
+        Write-MsixLog -Level Info -Message "==> $($p.Stage)"
         & $p.Action
     }
 
     if (-not $SkipSigning) {
-        Write-MsixLog Info '==> Sign'
+        Write-MsixLog -Level Info -Message '==> Sign'
         Invoke-MsixSigning -PackagePath $current -Pfx $Pfx -PfxPassword $PfxPassword
     } else {
-        Write-MsixLog Info 'NoSign requested; package left unsigned.'
+        Write-MsixLog -Level Info -Message 'NoSign requested; package left unsigned.'
     }
 
     return [pscustomobject]@{

@@ -245,7 +245,7 @@ function _MsixOfflineEnumSubKeys {
     $names = [System.Collections.Generic.List[string]]::new()
     $i = [uint32]0
     while ($true) {
-        $sb = New-Object System.Text.StringBuilder 512
+        $sb = [System.Text.StringBuilder]::new(512)
         $cName = [uint32]512
         $rc = [MsixOffReg]::OREnumKey($Key, $i, $sb, [ref]$cName, [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero)
         if ($rc -ne 0) { break }
@@ -296,7 +296,7 @@ function _MsixOfflineGetValue {
             default { return $null }
         }
     }
-    $buf = New-Object byte[] $size
+    $buf = [byte[]]::new($size)
     $rc = [MsixOffReg]::ORGetValue($Parent, $SubKey, $Name, [ref]$type, $buf, [ref]$size)
     if ($rc -ne 0) { return $null }
 

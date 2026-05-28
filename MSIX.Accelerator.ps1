@@ -288,11 +288,11 @@ function Invoke-MsixAccelerator {
     $accel = Import-MsixAccelerator -Path $AcceleratorPath
 
     if ($accel.Status -in 'Failed','Not Eligible') {
-        Write-MsixLog Warning "Accelerator declares ConversionStatus '$($accel.Status)'. Proceeding anyway, but review FixSteps first."
+        Write-MsixLog -Level Warning -Message "Accelerator declares ConversionStatus '$($accel.Status)'. Proceeding anyway, but review FixSteps first."
     }
 
     if ($accel.SuggestedFixups.Count -eq 0 -and $accel.AppOptions.Count -eq 0) {
-        Write-MsixLog Warning 'Accelerator contains no PSF fixups; nothing to inject. Returning report only.'
+        Write-MsixLog -Level Warning -Message 'Accelerator contains no PSF fixups; nothing to inject. Returning report only.'
         return $accel
     }
 

@@ -148,15 +148,15 @@ function Invoke-MsixProcMonCapture {
         throw 'Process Monitor (procmon.exe) not found. Set $env:MSIX_PROCMON_PATH or place it on PATH.'
     }
 
-    Write-MsixLog Info "Starting Process Monitor capture: $OutputPml"
+    Write-MsixLog -Level Info -Message "Starting Process Monitor capture: $OutputPml"
 
     # Pre-configure filter rules in registry before launch (best-effort)
     if ($ProcessName) {
         $filtered = Set-MsixProcMonFilterRule -ProcessNames @($ProcessName)
         if ($filtered) {
-            Write-MsixLog Info "Procmon filter set: Process Name is '$ProcessName'"
+            Write-MsixLog -Level Info -Message "Procmon filter set: Process Name is '$ProcessName'"
         } else {
-            Write-MsixLog Warning "Could not pre-set Procmon filter; set manually: Process Name is '$ProcessName'"
+            Write-MsixLog -Level Warning -Message "Could not pre-set Procmon filter; set manually: Process Name is '$ProcessName'"
         }
     }
 
@@ -167,7 +167,7 @@ function Invoke-MsixProcMonCapture {
     # Allow procmon to start
     Start-Sleep -Seconds 2
 
-    Write-MsixLog Info "Launching $PackageFamilyName!$AppId"
+    Write-MsixLog -Level Info -Message "Launching $PackageFamilyName!$AppId"
     Invoke-CommandInDesktopPackage -PackageFamilyName $PackageFamilyName `
                                    -AppId $AppId `
                                    -Command 'cmd.exe' `
@@ -176,7 +176,7 @@ function Invoke-MsixProcMonCapture {
 
     Start-Sleep -Seconds $DurationSeconds
 
-    Write-MsixLog Info "Stopping Process Monitor capture"
+    Write-MsixLog -Level Info -Message "Stopping Process Monitor capture"
     Start-Process -FilePath $procmon -ArgumentList @('/Terminate') -Wait
 
     if (-not (Test-Path -LiteralPath $OutputPml)) {
@@ -211,7 +211,7 @@ function Get-MsixProcMonFailure {
     if (-not $procmon) { throw 'procmon.exe not found.' }
 
     $csv = [System.IO.Path]::ChangeExtension($PmlPath, '.csv')
-    Write-MsixLog Info "Converting PML -> CSV: $csv"
+    Write-MsixLog -Level Info -Message "Converting PML -> CSV: $csv"
 
     $null = Invoke-MsixProcess $procmon -ArgumentList @('/OpenLog', $PmlPath, '/SaveAs', $csv, '/SaveApplyFilter', '/Quiet', '/Terminate')
     if (-not (Test-Path -LiteralPath $csv)) {
@@ -419,7 +419,7 @@ function Get-MsixStaticAnalysis {
                         }
                     }
                 }
-        } catch { Write-MsixLog Debug "Static updater scan skipped: $_" }
+        } catch { Write-MsixLog -Level Debug -Message "Static updater scan skipped: $_" }
 
         # Merge in TMEditX-style heuristic findings (uninstaller artefacts,
         # Run keys, alias suggestions, missing VC runtimes). Defined in
@@ -429,7 +429,7 @@ function Get-MsixStaticAnalysis {
                 $heuristicFindings = Get-MsixHeuristicFinding -PackagePath $PackagePath
                 if ($heuristicFindings) { $findings += @($heuristicFindings) }
             } catch {
-                Write-MsixLog Debug "Heuristics raised: $_"
+                Write-MsixLog -Level Debug -Message "Heuristics raised: $_"
             }
         }
 
@@ -472,19 +472,19 @@ function Get-MsixCompatibilityReport {
         [string]$ProcessName
     )
 
-    Write-MsixLog Info "Static analysis: $PackagePath"
+    Write-MsixLog -Level Info -Message "Static analysis: $PackagePath"
     $static = Get-MsixStaticAnalysis -PackagePath $PackagePath
 
     # ── Dynamic: trace fixup output (DebugView log) ──
     $traceFindings = @()
     if ($TraceLogPath) {
-        Write-MsixLog Info "Trace analysis: $TraceLogPath"
+        Write-MsixLog -Level Info -Message "Trace analysis: $TraceLogPath"
         $traceFindings = @(Get-MsixTraceFailure -Path $TraceLogPath | ConvertFrom-MsixTraceToFinding)
     }
 
     $dynamic = @()
     if ($PmlPath) {
-        Write-MsixLog Info "Dynamic analysis: $PmlPath"
+        Write-MsixLog -Level Info -Message "Dynamic analysis: $PmlPath"
         $failures = Get-MsixProcMonFailure -PmlPath $PmlPath -ProcessName $ProcessName
         foreach ($f in $failures) {
             foreach ($map in $script:FailurePatternMap) {

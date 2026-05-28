@@ -103,10 +103,10 @@ function Add-MsixAppIsolation {
 
     foreach ($c in $Capabilities) {
         if ($c -notmatch '^isolatedWin32-') {
-            Write-MsixLog Warning "'$c' doesn't look like a Win32 isolation capability (expected 'isolatedWin32-*'). Adding anyway."
+            Write-MsixLog -Level Warning -Message "'$c' doesn't look like a Win32 isolation capability (expected 'isolatedWin32-*'). Adding anyway."
         }
         if ($script:KnownIsolationCapabilities -notcontains $c) {
-            Write-MsixLog Warning "'$c' is not in the documented capability set. Verify against MS Learn before publishing."
+            Write-MsixLog -Level Warning -Message "'$c' is not in the documented capability set. Verify against MS Learn before publishing."
         }
     }
 
@@ -118,9 +118,9 @@ function Add-MsixAppIsolation {
         -Activity 'Add App Isolation capabilities' -Mutate {
         param([xml]$manifest)
 
-        Add-MsixManifestNamespace $manifest 'rescap'
+        Add-MsixManifestNamespace -Manifest $manifest -Prefix 'rescap'
         # Win32 App Isolation requires Win11 24H2 (build 26100)
-        Set-MsixManifestMaxVersionTested $manifest -MinBuild 26100
+        Set-MsixManifestMaxVersionTested -Manifest $manifest -MinBuild 26100
 
         $rescapUri = Get-MsixManifestNamespaceUri 'rescap'
         $capsNode  = $manifest.Package.Capabilities
@@ -135,13 +135,13 @@ function Add-MsixAppIsolation {
                 $_.LocalName -eq 'Capability' -and $_.Name -eq $cap
             }
             if ($existing) {
-                Write-MsixLog Info "Capability already present: $cap"
+                Write-MsixLog -Level Info -Message "Capability already present: $cap"
                 continue
             }
             $node = $manifest.CreateElement('rescap:Capability', $rescapUri)
             $node.SetAttribute('Name', $cap)
             $null = $capsNode.AppendChild($node)
-            Write-MsixLog Info "Capability added: $cap"
+            Write-MsixLog -Level Info -Message "Capability added: $cap"
         }
     }
 }
@@ -182,7 +182,7 @@ function Remove-MsixAppIsolation {
         $hasCaps = @($preCheck.Package.Capabilities.ChildNodes) |
             Where-Object { $_.LocalName -eq 'Capability' -and $_.Name -like 'isolatedWin32-*' }
         if (-not $hasCaps) {
-            Write-MsixLog Info 'No isolation capabilities found; nothing to do.'
+            Write-MsixLog -Level Info -Message 'No isolation capabilities found; nothing to do.'
             return
         }
 
@@ -198,7 +198,7 @@ function Remove-MsixAppIsolation {
                 foreach ($n in @($capsNode.ChildNodes)) {
                     if ($n.LocalName -eq 'Capability' -and $n.Name -like 'isolatedWin32-*') {
                         $null = $capsNode.RemoveChild($n)
-                        Write-MsixLog Info "Removed: $($n.Name)"
+                        Write-MsixLog -Level Info -Message "Removed: $($n.Name)"
                     }
                 }
             }

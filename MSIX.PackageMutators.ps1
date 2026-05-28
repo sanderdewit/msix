@@ -177,22 +177,22 @@ function Add-MsixCapability {
                     ($_.LocalName -eq 'Capability') -and ($_.'Name' -eq $name)
                 }
                 if ($existing) {
-                    Write-MsixLog Info "Capability already present: $name"
+                    Write-MsixLog -Level Info -Message "Capability already present: $name"
                     continue
                 }
                 if ($ns -and $ns -ne 'standard') {
-                    Add-MsixManifestNamespace $manifest $ns
-                    $nsUri = Get-MsixManifestNamespaceUri $ns
+                    Add-MsixManifestNamespace -Manifest $manifest -Prefix $ns
+                    $nsUri = Get-MsixManifestNamespaceUri -Prefix $ns
                     $node  = $manifest.CreateElement("${ns}:Capability", $nsUri)
                 } else {
                     if (-not $ns) {
-                        Write-MsixLog Warning "Capability '$name' is not in the known-capabilities table (MSIX.Heuristics.ps1#KnownCapabilities). Creating a plain <Capability> element (standard namespace). If this is a uap/rescap capability, the install may fail at deployment time — verify against https://learn.microsoft.com/en-us/windows/uwp/packaging/app-capability-declarations and either add it to the lookup table or pass -Namespace explicitly."
+                        Write-MsixLog -Level Warning -Message "Capability '$name' is not in the known-capabilities table (MSIX.Heuristics.ps1#KnownCapabilities). Creating a plain <Capability> element (standard namespace). If this is a uap/rescap capability, the install may fail at deployment time — verify against https://learn.microsoft.com/en-us/windows/uwp/packaging/app-capability-declarations and either add it to the lookup table or pass -Namespace explicitly."
                     }
                     $node = $manifest.CreateElement('Capability', $manifest.Package.NamespaceURI)
                 }
                 $node.SetAttribute('Name', $name)
                 $null = $caps.AppendChild($node)
-                Write-MsixLog Info "Capability added: $name"
+                Write-MsixLog -Level Info -Message "Capability added: $name"
                 $added += $name
             }
 
@@ -321,7 +321,7 @@ function Remove-MsixUninstallerArtifact {
 
             # ── Strip Registry.dat Uninstall\* entries ────────────────────
             $removedKeys = @()
-            $datPath = Join-Path $workspace 'Registry.dat'
+            $datPath = Join-Path -Path $workspace -ChildPath 'Registry.dat'
             if (-not $KeepRegistry -and (Test-Path -LiteralPath $datPath)) {
                 # Parse + mutate the hive via offreg.dll (no elevation required).
                 # ORSaveHive cannot overwrite, so we save to a sibling path and replace.
@@ -356,7 +356,7 @@ function Remove-MsixUninstallerArtifact {
                                     $removedKeys += if ($name) { $name } else { $child }
                                     $modified = $true
                                 } else {
-                                    Write-MsixLog Warning "Recursive ORDeleteKey failed for '$logical' — the hive is now in a partial state and will be discarded; the package is unchanged."
+                                    Write-MsixLog -Level Warning -Message "Recursive ORDeleteKey failed for '$logical' — the hive is now in a partial state and will be discarded; the package is unchanged."
                                     # Bail out so we never persist a half-deleted hive.
                                     $modified = $false
                                     break
@@ -366,7 +366,7 @@ function Remove-MsixUninstallerArtifact {
                     }
                     if ($modified) {
                         if (-not (_MsixOfflineSaveHive -Hive $hive -Path $newDat)) {
-                            Write-MsixLog Warning 'ORSaveHive failed; Registry.dat is unchanged.'
+                            Write-MsixLog -Level Warning -Message 'ORSaveHive failed; Registry.dat is unchanged.'
                             $modified = $false
                         }
                     }
@@ -381,8 +381,8 @@ function Remove-MsixUninstallerArtifact {
             }
 
             if (-not $removedFiles -and -not $removedKeys) { return $null }
-            if ($removedFiles) { Write-MsixLog Info "Files removed:    $($removedFiles -join ', ')" }
-            if ($removedKeys)  { Write-MsixLog Info "Reg keys removed: $($removedKeys -join ', ')" }
+            if ($removedFiles) { Write-MsixLog -Level Info -Message "Files removed:    $($removedFiles -join ', ')" }
+            if ($removedKeys)  { Write-MsixLog -Level Info -Message "Reg keys removed: $($removedKeys -join ', ')" }
             @{ FilesRemoved = $removedFiles; KeysRemoved = $removedKeys }
         }.GetNewClosure()
 }
@@ -518,8 +518,8 @@ function Remove-MsixUpdaterArtifact {
                 }
 
             if (-not $removedFiles -and -not $removedTasks) { return $null }
-            if ($removedFiles) { Write-MsixLog Info "Files removed: $($removedFiles -join ', ')" }
-            if ($removedTasks) { Write-MsixLog Info "Tasks removed: $($removedTasks -join ', ')" }
+            if ($removedFiles) { Write-MsixLog -Level Info -Message "Files removed: $($removedFiles -join ', ')" }
+            if ($removedTasks) { Write-MsixLog -Level Info -Message "Tasks removed: $($removedTasks -join ', ')" }
             @{ FilesRemoved = $removedFiles; TasksRemoved = $removedTasks }
         }.GetNewClosure()
 }
@@ -590,7 +590,7 @@ function Remove-MsixShellRegistryArtifact {
     )
 
     if (-not $Entries -or $Entries.Count -eq 0) {
-        Write-MsixLog Info 'No shell registry entries supplied; nothing to do.'
+        Write-MsixLog -Level Info -Message 'No shell registry entries supplied; nothing to do.'
         return
     }
 
@@ -602,9 +602,9 @@ function Remove-MsixShellRegistryArtifact {
         -Mutator {
             param($workspace)
 
-            $datPath = Join-Path $workspace 'Registry.dat'
+            $datPath = Join-Path -Path $workspace -ChildPath 'Registry.dat'
             if (-not (Test-Path -LiteralPath $datPath)) {
-                Write-MsixLog Info 'No Registry.dat in package — nothing to clean.'
+                Write-MsixLog -Level Info -Message 'No Registry.dat in package — nothing to clean.'
                 return $null
             }
 
@@ -613,7 +613,7 @@ function Remove-MsixShellRegistryArtifact {
 
             # Build a CLSID set for fast membership testing (lower-cased, both bare
             # and braced forms accepted in inputs).
-            $clsidSet = New-Object 'System.Collections.Generic.HashSet[string]'
+            $clsidSet = [System.Collections.Generic.HashSet[string]]::new()
             foreach ($e in $Entries) {
                 if ($e.Clsid) {
                     $bare = $e.Clsid.ToString().Trim().Trim('{', '}').ToLowerInvariant()
@@ -621,7 +621,7 @@ function Remove-MsixShellRegistryArtifact {
                 }
             }
             if ($clsidSet.Count -eq 0) {
-                Write-MsixLog Warning 'None of the supplied entries had a Clsid; nothing to clean (resolve CLSIDs via Get-MsixShellContextMenuEntry).'
+                Write-MsixLog -Level Warning -Message 'None of the supplied entries had a Clsid; nothing to clean (resolve CLSIDs via Get-MsixShellContextMenuEntry).'
                 return $null
             }
 
@@ -656,7 +656,7 @@ function Remove-MsixShellRegistryArtifact {
                                         $removedKeys += $logical
                                         $modified = $true
                                     } else {
-                                        Write-MsixLog Warning "Recursive ORDeleteKey failed for '$logical' — discarding partial changes."
+                                        Write-MsixLog -Level Warning -Message "Recursive ORDeleteKey failed for '$logical' — discarding partial changes."
                                         $modified = $false
                                         break
                                     }
@@ -684,7 +684,7 @@ function Remove-MsixShellRegistryArtifact {
                                         $removedKeys += $logical
                                         $modified = $true
                                     } else {
-                                        Write-MsixLog Warning "Recursive ORDeleteKey failed for '$logical' — discarding partial changes."
+                                        Write-MsixLog -Level Warning -Message "Recursive ORDeleteKey failed for '$logical' — discarding partial changes."
                                         $modified = $false
                                         break
                                     }
@@ -695,7 +695,7 @@ function Remove-MsixShellRegistryArtifact {
                 }
                 if ($modified) {
                     if (-not (_MsixOfflineSaveHive -Hive $hive -Path $newDat)) {
-                        Write-MsixLog Warning 'ORSaveHive failed; Registry.dat is unchanged.'
+                        Write-MsixLog -Level Warning -Message 'ORSaveHive failed; Registry.dat is unchanged.'
                         $modified = $false
                     }
                 }
@@ -710,8 +710,8 @@ function Remove-MsixShellRegistryArtifact {
 
             if (-not $removedKeys -or $removedKeys.Count -eq 0) { return $null }
 
-            Write-MsixLog Info "Legacy shell registry entries removed: $($removedKeys.Count)"
-            $removedKeys | ForEach-Object { Write-MsixLog Info "  $_" }
+            Write-MsixLog -Level Info -Message "Legacy shell registry entries removed: $($removedKeys.Count)"
+            $removedKeys | ForEach-Object { Write-MsixLog -Level Info -Message "  $_" }
             @{ KeysRemoved = $removedKeys }
         }.GetNewClosure()
 }
@@ -901,7 +901,7 @@ function Update-MsixPackageVersion {
                 }
             }
             $manifest.Package.Identity.Version = $next.ToString(4)
-            Write-MsixLog Info "Version: $current -> $next"
+            Write-MsixLog -Level Info -Message "Version: $current -> $next"
             Save-MsixManifest $manifest "$workspace\AppxManifest.xml"
             @{ PreviousVersion = $current.ToString(4); NewVersion = $next.ToString(4) }
         }.GetNewClosure()

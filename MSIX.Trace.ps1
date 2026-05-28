@@ -246,7 +246,7 @@ function ConvertFrom-MsixTraceToFinding {
     )
     BEGIN {
         $seen = @{}
-        $out  = New-Object System.Collections.Generic.List[object]
+        $out  = [System.Collections.Generic.List[object]]::new()
     }
     PROCESS {
         foreach ($f in $Failures) {

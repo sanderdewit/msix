@@ -248,24 +248,24 @@ function Compare-MsixTrace {
         [switch]$Sarif
     )
 
-    Write-MsixLog Info "TraceDelta: loading baseline  '$Baseline'"
+    Write-MsixLog -Level Info -Message "TraceDelta: loading baseline  '$Baseline'"
     $baseRows = @(_MsixLoadTraceFailureRows -Path $Baseline -ProcessName $ProcessName)
 
-    Write-MsixLog Info "TraceDelta: loading candidate '$Candidate'"
+    Write-MsixLog -Level Info -Message "TraceDelta: loading candidate '$Candidate'"
     $candRows = @(_MsixLoadTraceFailureRows -Path $Candidate -ProcessName $ProcessName)
 
-    Write-MsixLog Info ("TraceDelta: baseline={0} rows  candidate={1} rows" -f $baseRows.Count, $candRows.Count)
+    Write-MsixLog -Level Info -Message ("TraceDelta: baseline={0} rows  candidate={1} rows" -f $baseRows.Count, $candRows.Count)
 
     # Build lookup sets by match key.
     $baseKeySet = [System.Collections.Generic.HashSet[string]]::new()
     $candKeySet = [System.Collections.Generic.HashSet[string]]::new()
 
-    foreach ($r in $baseRows) { $baseKeySet.Add((_MsixTraceRowKey $r)) | Out-Null }
-    foreach ($r in $candRows) { $candKeySet.Add((_MsixTraceRowKey $r)) | Out-Null }
+    foreach ($r in $baseRows) { $baseKeySet.Add((_MsixTraceRowKey -Row $r)) | Out-Null }
+    foreach ($r in $candRows) { $candKeySet.Add((_MsixTraceRowKey -Row $r)) | Out-Null }
 
-    $resolvedRows   = @($baseRows | Where-Object { -not $candKeySet.Contains((_MsixTraceRowKey $_)) })
-    $persistedRows  = @($baseRows | Where-Object {       $candKeySet.Contains((_MsixTraceRowKey $_)) })
-    $introducedRows = @($candRows | Where-Object { -not $baseKeySet.Contains((_MsixTraceRowKey $_)) })
+    $resolvedRows   = @($baseRows | Where-Object { -not $candKeySet.Contains((_MsixTraceRowKey -Row $_)) })
+    $persistedRows  = @($baseRows | Where-Object {       $candKeySet.Contains((_MsixTraceRowKey -Row $_)) })
+    $introducedRows = @($candRows | Where-Object { -not $baseKeySet.Contains((_MsixTraceRowKey -Row $_)) })
 
     # Convert raw rows to deduplicated findings.
     $filterArgs = @{ IncludeCategory = $IncludeCategory; MinSeverity = $MinSeverity }
@@ -296,10 +296,10 @@ function Compare-MsixTrace {
 
     if ($summary.IntroducedRowCount -gt $summary.IntroducedCount) {
         $uncat = $summary.IntroducedRowCount - $summary.IntroducedCount
-        Write-MsixLog Warning ("TraceDelta: {0} introduced row(s) did not map to any known fixup category and are NOT reflected in IntroducedCount. Inspect the raw trace for paths outside System32 / WindowsApps / HKLM / LoadLibrary." -f $uncat)
+        Write-MsixLog -Level Warning -Message ("TraceDelta: {0} introduced row(s) did not map to any known fixup category and are NOT reflected in IntroducedCount. Inspect the raw trace for paths outside System32 / WindowsApps / HKLM / LoadLibrary." -f $uncat)
     }
 
-    Write-MsixLog Info ("TraceDelta: resolved={0}  persisted={1}  introduced={2}  improvement={3}%%" `
+    Write-MsixLog -Level Info -Message ("TraceDelta: resolved={0}  persisted={1}  introduced={2}  improvement={3}%%" `
         -f $summary.ResolvedCount, $summary.PersistedCount, $summary.IntroducedCount, $summary.ImprovementPct)
 
     $diff = [pscustomobject]@{

@@ -24,7 +24,7 @@
 }
 
 AfterAll {
-    if (Test-Path $script:Sandbox) {
+    if (Test-Path -LiteralPath $script:Sandbox) {
         Remove-Item -LiteralPath $script:Sandbox -Recurse -Force -ErrorAction SilentlyContinue
     }
     Remove-Module MSIX -ErrorAction SilentlyContinue

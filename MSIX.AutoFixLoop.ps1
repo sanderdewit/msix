@@ -182,9 +182,9 @@ function Invoke-MsixAutoFixLoop {
         $PackagePath
     }
 
-    Write-MsixLog Info ("AutoFixLoop started: runId={0}  maxPasses={1}  stopOn={2}" `
+    Write-MsixLog -Level Info -Message ("AutoFixLoop started: runId={0}  maxPasses={1}  stopOn={2}" `
         -f $runId, $MaxPasses, ($StopOn -join ','))
-    Write-MsixLog Info "AutoFixLoop artefacts: $runDir"
+    Write-MsixLog -Level Info -Message "AutoFixLoop artefacts: $runDir"
 
     # --- Build the static arg hashtable for Invoke-MsixAutoFixFromAnalysis ---
     $fixArgs = @{
@@ -207,9 +207,9 @@ function Invoke-MsixAutoFixLoop {
     $stopReason    = $null
 
     for ($pass = 1; $pass -le $MaxPasses; $pass++) {
-        Write-MsixLog Info "AutoFixLoop pass $pass / $MaxPasses"
+        Write-MsixLog -Level Info -Message "AutoFixLoop pass $pass / $MaxPasses"
 
-        $passDir = Join-Path $runDir "pass-$pass"
+        $passDir = Join-Path -Path $runDir -ChildPath "pass-$pass"
         $null = New-Item -ItemType Directory -Path $passDir -Force
 
         # ── 1. Compatibility report ──
@@ -221,13 +221,13 @@ function Invoke-MsixAutoFixLoop {
 
         # Persist report for post-mortem
         $report | ConvertTo-Json -Depth 10 -Compress |
-            Out-File -FilePath (Join-Path $passDir 'report.json') -Encoding utf8
+            Out-File -FilePath (Join-Path -Path $passDir -ChildPath 'report.json') -Encoding utf8
 
         # ── 2. Plan ──
         $plan = Invoke-MsixAutoFixFromAnalysis -Report $report @fixArgs -DryRun
 
         $plan | ConvertTo-Json -Depth 10 -Compress |
-            Out-File -FilePath (Join-Path $passDir 'plan.json') -Encoding utf8
+            Out-File -FilePath (Join-Path -Path $passDir -ChildPath 'plan.json') -Encoding utf8
 
         $passSummary = [pscustomobject]@{
             Pass          = $pass
@@ -240,7 +240,7 @@ function Invoke-MsixAutoFixLoop {
 
         # ── DryRun: only first pass plan, then stop ──
         if ($DryRun) {
-            Write-MsixLog Info '[DryRun] Pass 1 plan produced - exiting without writing.'
+            Write-MsixLog -Level Info -Message '[DryRun] Pass 1 plan produced - exiting without writing.'
             $passSummary.StopReason = 'DryRun'
             $passSummaries.Add($passSummary)
             break
@@ -248,7 +248,7 @@ function Invoke-MsixAutoFixLoop {
 
         # ── 3. Stop: NoNewFixes ──
         if ('NoNewFixes' -in $StopOn -and $passSummary.StageCount -eq 0) {
-            Write-MsixLog Info "AutoFixLoop stopping: no new fixes planned (pass $pass)."
+            Write-MsixLog -Level Info -Message "AutoFixLoop stopping: no new fixes planned (pass $pass)."
             $passSummary.StopReason = 'NoNewFixes'
             $stopReason = 'NoNewFixes'
             $passSummaries.Add($passSummary)
@@ -261,27 +261,27 @@ function Invoke-MsixAutoFixLoop {
                 Out-Null
         }
 
-        Write-MsixLog Info "AutoFixLoop pass $pass applied."
+        Write-MsixLog -Level Info -Message "AutoFixLoop pass $pass applied."
 
         # ── 5. Optional trace capture + delta ──
         if ($CaptureTrace -and 'NoRegressions' -in $StopOn) {
-            $tracePath = Join-Path $passDir 'trace.pml'
-            Write-MsixLog Info "AutoFixLoop: capturing trace ($TraceDurationSeconds s)..."
+            $tracePath = Join-Path -Path $passDir -ChildPath 'trace.pml'
+            Write-MsixLog -Level Info -Message "AutoFixLoop: capturing trace ($TraceDurationSeconds s)..."
             try {
                 Invoke-MsixProcMonCapture -PackagePath $targetPath -OutputPml $tracePath `
                     -DurationSeconds $TraceDurationSeconds
             } catch {
-                Write-MsixLog Warning "AutoFixLoop: trace capture failed on pass $pass - $_"
+                Write-MsixLog -Level Warning -Message "AutoFixLoop: trace capture failed on pass $pass - $_"
             }
 
             if ($prevTracePath -and (Test-Path -LiteralPath $tracePath)) {
                 $delta = Compare-MsixTrace -Baseline $prevTracePath -Candidate $tracePath
                 $delta | ConvertTo-Json -Depth 10 -Compress |
-                    Out-File -FilePath (Join-Path $passDir 'trace-delta.json') -Encoding utf8
+                    Out-File -FilePath (Join-Path -Path $passDir -ChildPath 'trace-delta.json') -Encoding utf8
                 $passSummary.TraceDelta = $delta.Summary
 
                 if ('NoRegressions' -in $StopOn -and $delta.Summary.IntroducedCount -eq 0) {
-                    Write-MsixLog Info "AutoFixLoop stopping: no regressions introduced (pass $pass)."
+                    Write-MsixLog -Level Info -Message "AutoFixLoop stopping: no regressions introduced (pass $pass)."
                     $passSummary.StopReason = 'NoRegressions'
                     $stopReason = 'NoRegressions'
                     $passSummaries.Add($passSummary)
@@ -295,7 +295,7 @@ function Invoke-MsixAutoFixLoop {
         $passSummaries.Add($passSummary)
 
         if ($pass -eq $MaxPasses) {
-            Write-MsixLog Warning "AutoFixLoop: reached MaxPasses ($MaxPasses) without a stop condition."
+            Write-MsixLog -Level Warning -Message "AutoFixLoop: reached MaxPasses ($MaxPasses) without a stop condition."
             $stopReason = 'MaxPasses'
         }
     }
@@ -308,20 +308,20 @@ function Invoke-MsixAutoFixLoop {
                 if ($PSCmdlet.ShouldProcess($targetPath, 'Sign package')) {
                     Invoke-MsixSigning -PackagePath $targetPath -Pfx $Pfx -PfxPassword $PfxPassword
                     $signedOk = $true
-                    Write-MsixLog Info "AutoFixLoop: package signed - $targetPath"
+                    Write-MsixLog -Level Info -Message "AutoFixLoop: package signed - $targetPath"
                 }
             } catch {
-                Write-MsixLog Warning "AutoFixLoop: signing failed - $_"
+                Write-MsixLog -Level Warning -Message "AutoFixLoop: signing failed - $_"
             }
         } elseif (-not $SkipSigning -and -not $Pfx) {
-            Write-MsixLog Warning 'AutoFixLoop: no -Pfx supplied - package left unsigned.'
+            Write-MsixLog -Level Warning -Message 'AutoFixLoop: no -Pfx supplied - package left unsigned.'
         } else {
-            Write-MsixLog Info 'AutoFixLoop: skipping signing (-SkipSigning).'
+            Write-MsixLog -Level Info -Message 'AutoFixLoop: skipping signing (-SkipSigning).'
         }
     }
 
     $stopReasonStr = if ($null -ne $stopReason) { $stopReason } else { 'MaxPasses' }
-    Write-MsixLog Info ("AutoFixLoop complete: passes={0}  stopReason={1}  output={2}" `
+    Write-MsixLog -Level Info -Message ("AutoFixLoop complete: passes={0}  stopReason={1}  output={2}" `
         -f $passSummaries.Count, $stopReasonStr, $targetPath)
 
     return [pscustomobject]@{

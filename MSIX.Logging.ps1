@@ -1,4 +1,4 @@
-enum LogLevel { Debug; Info; Warning; Error }
+﻿enum LogLevel { Debug; Info; Warning; Error }
 
 $script:LogLevel = [LogLevel]::Info
 $script:LogFile  = $null
@@ -71,10 +71,10 @@ function Write-MsixLog {
         Text to log. Timestamp and level are added automatically.
 
     .EXAMPLE
-        Write-MsixLog Info 'Starting pipeline'
+        Write-MsixLog -Level Info -Message 'Starting pipeline'
 
     .EXAMPLE
-        Write-MsixLog Debug "Unpacked to: $workspace"
+        Write-MsixLog -Level Debug -Message "Unpacked to: $workspace"
     #>
     param(
         [LogLevel]$Level,

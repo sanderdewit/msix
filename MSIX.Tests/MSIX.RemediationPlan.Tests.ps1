@@ -75,15 +75,15 @@ Describe 'Remediation plan round-trip' -Tag 'RemediationPlan' {
         It 'Writes a YAML file that starts with the remediation: root key' {
             $plan = New-MsixRemediationPlan -PackagePath $script:FixtureDir
             Export-MsixRemediationPlan -Plan $plan -Path $script:PlanYamlPath
-            Test-Path $script:PlanYamlPath | Should -BeTrue
-            $content = Get-Content $script:PlanYamlPath -Raw
+            Test-Path -LiteralPath $script:PlanYamlPath | Should -BeTrue
+            $content = Get-Content -LiteralPath $script:PlanYamlPath -Raw
             $content | Should -Match 'remediation:'
         }
 
         It 'Includes the identity name in the YAML output' {
             $plan = New-MsixRemediationPlan -PackagePath $script:FixtureDir
             Export-MsixRemediationPlan -Plan $plan -Path $script:PlanYamlPath
-            $content = Get-Content $script:PlanYamlPath -Raw
+            $content = Get-Content -LiteralPath $script:PlanYamlPath -Raw
             $content | Should -Match 'TestPlan'
         }
     }

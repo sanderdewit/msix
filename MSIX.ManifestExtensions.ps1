@@ -168,7 +168,10 @@ function Invoke-MsixManifestTransform {
     } elseif ($Manifest -is [System.Xml.XmlDocument]) {
         $Manifest
     } else {
-        [xml]$Manifest
+        # SECURITY: a raw [xml] cast on a string invokes XmlDocument.LoadXml with
+        # the default resolver and DTD processing enabled (XXE). Route untrusted
+        # manifest text through the hardened loader instead.
+        _MsixLoadXmlSecure -XmlText ([string]$Manifest)
     }
     & $Transform $xml
     return $xml

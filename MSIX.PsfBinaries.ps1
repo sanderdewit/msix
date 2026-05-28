@@ -215,7 +215,39 @@ function _MsixExpandZip {
     if (-not (Test-Path -LiteralPath $DestinationPath)) {
         New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null
     }
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $DestinationPath)
+    # SECURITY: .NET Framework's ZipFile.ExtractToDirectory does not sanitise
+    # entry names, so a malicious archive (these come from third-party GitHub /
+    # NuGet sources) can use '..\' or rooted paths to write outside the
+    # destination (Zip-Slip) and overwrite e.g. toolchain binaries. Validate
+    # every entry's resolved path stays under the destination root before
+    # extracting.
+    $root = [System.IO.Path]::GetFullPath($DestinationPath)
+    if (-not $root.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $root += [System.IO.Path]::DirectorySeparatorChar
+    }
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        foreach ($entry in $zip.Entries) {
+            $target = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($DestinationPath, $entry.FullName))
+            if (-not $target.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "Refusing to extract entry that escapes the destination (Zip-Slip): $($entry.FullName)"
+            }
+            # Directory entries have an empty Name; just ensure the folder exists.
+            if ([string]::IsNullOrEmpty($entry.Name)) {
+                if (-not (Test-Path -LiteralPath $target)) {
+                    New-Item -Path $target -ItemType Directory -Force | Out-Null
+                }
+                continue
+            }
+            $dir = [System.IO.Path]::GetDirectoryName($target)
+            if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+                New-Item -Path $dir -ItemType Directory -Force | Out-Null
+            }
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+        }
+    } finally {
+        $zip.Dispose()
+    }
 }
 
 function _MsixGitHubLatest {

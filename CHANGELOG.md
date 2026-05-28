@@ -5,6 +5,28 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## Unreleased - Security review fixes (#49, #50, #51, #52)
+
+### Security fixes (release-blocking)
+
+- **#49 — template injection.** `_MsixRenderTemplate` substituted parameter
+  values into the bundled `templates/*.tmpl` with a raw `String.Replace`. Every
+  placeholder lives inside a single-quoted PowerShell literal, so a value
+  containing `'` broke out and injected arbitrary code into the generated —
+  and subsequently code-signed — startup script. Values now have embedded
+  single quotes doubled before substitution.
+- **#50 — XXE in `Invoke-MsixManifestTransform`.** The exported transform
+  re-parsed string input with a raw `[xml]` cast (default resolver + DTD
+  enabled), bypassing `_MsixLoadXmlSecure`. String input now routes through the
+  hardened loader (DTD prohibited, no external entity resolution).
+- **#51 — Zip-Slip in `_MsixExpandZip`.** .NET's `ZipFile.ExtractToDirectory`
+  does not sanitise entry names; a malicious third-party archive could write
+  outside the destination. Each entry's resolved path is now validated against
+  the destination root before extraction.
+- **#52 — TLS floor.** The module now raises `ServicePointManager.SecurityProtocol`
+  to TLS 1.2+ at import so PS5.1 hosts no longer negotiate TLS 1.0/SSL3 for
+  toolchain downloads.
+
 ## v0.70.6 - Atomic pack-sign hardening + heuristics refactor (#34, #35, #36, #37, #38)
 
 ### Correctness fixes (post-v0.70.5 review)

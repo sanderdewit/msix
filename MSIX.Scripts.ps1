@@ -114,9 +114,16 @@ function _MsixRenderTemplate {
         if (-not $Parameters.ContainsKey($name)) {
             throw "Template '$TemplatePath' requires -$name but it was not provided."
         }
-        $value = [string]$Parameters[$name]
-        # Literal (non-regex) substitution — values may contain backslashes,
-        # quotes, regex metacharacters etc.
+        # SECURITY: every <#PARAM:#> placeholder in the bundled templates sits
+        # inside a single-quoted PowerShell string literal (e.g.
+        # $displayName = '<#PARAM:DisplayName#>'). A raw substitution of a value
+        # containing a single quote would terminate that literal and inject
+        # arbitrary PowerShell into the generated — and subsequently
+        # code-signed — script. Doubling embedded single quotes keeps the value
+        # a literal within its single-quoted context. A newline is harmless
+        # inside a single-quoted literal, so quote-doubling is the complete fix.
+        $value = ([string]$Parameters[$name]).Replace("'", "''")
+        # Literal (non-regex) placeholder replacement.
         $text = $text.Replace("<#PARAM:$name#>", $value)
     }
 

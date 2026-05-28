@@ -1,4 +1,22 @@
-﻿#region --- Load sub-modules ------------------------------------------------
+﻿#region --- Transport security ----------------------------------------------
+# SECURITY: Windows PowerShell 5.1 / .NET Framework 4.x frequently default
+# ServicePointManager.SecurityProtocol to 'Ssl3, Tls' (TLS 1.0). Every
+# toolchain download relies on this process-wide setting, so raise the floor
+# to TLS 1.2+ once at import, before any download runs. Tls13 is guarded
+# because the enum value is absent on older .NET 4.x builds.
+try {
+    $script:MsixTlsFloor = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    if ([enum]::IsDefined([Net.SecurityProtocolType], 'Tls13')) {
+        $script:MsixTlsFloor = $script:MsixTlsFloor -bor [Net.SecurityProtocolType]::Tls13
+    }
+    [Net.ServicePointManager]::SecurityProtocol = $script:MsixTlsFloor
+} catch {
+    Write-Warning "MSIX: could not raise the TLS security protocol floor: $($_.Exception.Message)"
+}
+#endregion
+
+
+#region --- Load sub-modules ------------------------------------------------
 . "$PSScriptRoot\MSIX.Logging.ps1"
 . "$PSScriptRoot\MSIX.Core.ps1"
 . "$PSScriptRoot\MSIX.Validation.ps1"

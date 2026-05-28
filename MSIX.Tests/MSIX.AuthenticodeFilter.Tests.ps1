@@ -1,5 +1,5 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 
     $script:Sandbox = Join-Path $env:TEMP "msix-authenticode-filter-test-$([guid]::NewGuid().ToString('N').Substring(0,8))"
     New-Item -ItemType Directory -Path $script:Sandbox -Force | Out-Null
@@ -62,7 +62,7 @@ Describe 'Authenticode folder filter' -Tag 'PsfBinaries' {
         # (We only positively assert the new form here; a negative match on
         # "-Include '*.exe','*.dll'" would false-fire on the explanatory
         # comment that documents why we no longer use it.)
-        $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.PsfBinaries.ps1')) -Raw
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.PsfBinaries.ps1')) -Raw
         $src | Should -Match "\.Extension -in '\.exe', '\.dll'"
     }
 }
@@ -96,7 +96,7 @@ Describe 'Install-MsixMgr Authenticode opt-out' -Tag 'PsfBinaries' {
         # WRAPPER passes its -VerifyAuthenticode switch into the helper AND
         # supplies the upstream-issue warning text — otherwise the skip
         # would be silent and the test would no longer enforce its intent.
-        $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.AppAttach.ps1')) -Raw
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.AppAttach.ps1')) -Raw
         # Wrapper must forward the switch (so verification stays opt-in).
         $src | Should -Match '-VerifyAuthenticode\s+\(\[bool\]\$VerifyAuthenticode\)'
         # And the skip warning must mention msixmgr + the upstream issue
@@ -107,9 +107,9 @@ Describe 'Install-MsixMgr Authenticode opt-out' -Tag 'PsfBinaries' {
     It 'Source: helper gates verification on the -VerifyAuthenticode parameter (issue #36)' {
         # The skip is now centralised in _MsixInstallArchiveTool. The helper
         # must still gate the verify call AND emit a warning on the skip path.
-        $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.PsfBinaries.ps1')) -Raw
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.PsfBinaries.ps1')) -Raw
         $src | Should -Match 'if \(\$VerifyAuthenticode\)\s*\{[^}]*_MsixVerifyAuthenticodeFolder'
-        $src | Should -Match 'Write-Warning\s+\$SkipVerificationWarning'
+        $src | Should -Match 'Write-Warning\s+(-Message\s+)?\$SkipVerificationWarning'
     }
 
     It 'Source: every NON-msixmgr toolchain downloader still verifies (default ON)' {
@@ -118,7 +118,7 @@ Describe 'Install-MsixMgr Authenticode opt-out' -Tag 'PsfBinaries' {
         # DELIBERATELY do NOT pass -VerifyAuthenticode, so they inherit the
         # helper's default of $true. PSF and SDK installers remain bespoke
         # and call _MsixVerifyAuthenticodeFolder directly without any guard.
-        $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.PsfBinaries.ps1')) -Raw
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.PsfBinaries.ps1')) -Raw
 
         # Bespoke installers (PSF, SDK) call the verify helper directly.
         $directCalls = [regex]::Matches($src, '_MsixVerifyAuthenticodeFolder -Folder')

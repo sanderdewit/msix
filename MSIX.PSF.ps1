@@ -710,7 +710,7 @@ function Add-MsixPsfV2 {
             } | ConvertTo-Json -Depth 15
 
             if ($PSCmdlet.ShouldProcess($configPath, 'Merge PSF config.json')) {
-                $mergedJson | Out-File $configPath -Encoding utf8 -Force
+                $mergedJson | Out-File -FilePath $configPath -Encoding utf8 -Force
                 Write-MsixLog Info "PSF config merged (fixup(s) added to existing config): $configPath"
             }
         } else {
@@ -721,12 +721,12 @@ function Add-MsixPsfV2 {
                                           -AppOptions $AppOptions
 
             if ($PSCmdlet.ShouldProcess($configPath, 'Write PSF config.json')) {
-                $psfJson | Out-File $configPath -Encoding utf8 -Force
+                $psfJson | Out-File -FilePath $configPath -Encoding utf8 -Force
                 Write-MsixLog Info "PSF config written: $configPath"
             }
         }
 
-        Test-MsixPsfConfig $configPath
+        Test-MsixPsfConfig -Path $configPath
 
         # --- Copy PSF runtime binaries ---
         $runtimeFiles = @(
@@ -805,8 +805,8 @@ function Add-MsixPsfV2 {
                     $launcherName = "PsfLauncher$bitSuffix.exe"
                 } else {
                     $launcherName = "PsfLauncher${bitSuffix}_$i.exe"
-                    Copy-Item (Join-Path $PsfSourcePath "PsfLauncher$bitSuffix.exe") `
-                              (Join-Path $appFolder $launcherName) -Force
+                    Copy-Item -LiteralPath (Join-Path $PsfSourcePath "PsfLauncher$bitSuffix.exe") `
+                              -Destination (Join-Path $appFolder $launcherName) -Force
                 }
 
                 $oldExe  = $app.GetAttribute('Executable')

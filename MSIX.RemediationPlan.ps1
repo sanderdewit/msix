@@ -172,7 +172,7 @@ function _MsixParseYaml([string[]]$Lines, [ref]$Pos, [int]$MinIndent) {
                                         $fk = $matches[1].Trim(); $fv = $matches[2].Trim()
                                         $itemObj[$fk] = if ($fv -eq '' -or $fv -eq 'null') { $null } else { _MsixUnquoteYaml $fv }
                                     }
-                                    $nested = _MsixParseYaml $Lines $Pos ($seqInd + 1)
+                                    $nested = _MsixParseYaml -Lines $Lines -Pos $Pos -MinIndent ($seqInd + 1)
                                     foreach ($nk in $nested.Keys) { $itemObj[$nk] = $nested[$nk] }
                                     $seq += [pscustomobject]$itemObj
                                 } else {
@@ -186,7 +186,7 @@ function _MsixParseYaml([string[]]$Lines, [ref]$Pos, [int]$MinIndent) {
                         continue
                     } elseif ($nextIndent -gt $currentIndent) {
                         # Nested mapping.
-                        $result[$key] = _MsixParseYaml $Lines $Pos $nextIndent
+                        $result[$key] = _MsixParseYaml -Lines $Lines -Pos $Pos -MinIndent $nextIndent
                         continue
                     }
                 }
@@ -220,7 +220,7 @@ function _MsixUnquoteYaml([string]$s) {
 # Private: cmdlet safety guard — same pattern as Invoke-MsixPlaybook.
 # ---------------------------------------------------------------------------
 function _MsixGuardPlanCmdlet([string]$CmdletName, [int]$StepIndex) {
-    $cmd = Get-Command $CmdletName -ErrorAction SilentlyContinue
+    $cmd = Get-Command -Name $CmdletName -ErrorAction SilentlyContinue
     if (-not $cmd) {
         throw "appliedFixes[$StepIndex] references unknown cmdlet '$CmdletName'."
     }
@@ -401,7 +401,7 @@ function Import-MsixRemediationPlan {
     }
 
     $pos   = [ref]$startIdx
-    $inner = _MsixParseYaml $lines $pos 2
+    $inner = _MsixParseYaml -Lines $lines -Pos $pos -MinIndent 2
 
     # --- Schema validation ---
     foreach ($req in 'version','generatedAt','generatedBy','packageFingerprint','appliedFixes') {

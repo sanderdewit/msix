@@ -1,5 +1,5 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
@@ -19,7 +19,7 @@ Describe 'Get-MsixStaticAnalysis robustness vs Application Executable shapes' -T
     # references to LastIndexOf('\') sit behind it.
 
     It "Source guards LastIndexOf('\') with a presence check before Substring" {
-        $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.Investigation.ps1')) -Raw
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.Investigation.ps1')) -Raw
 
         # Both usages must follow the $hasDir / $exe.Contains('\') guard.
         $src | Should -Match '\$hasDir = \$exe\.Contains'
@@ -28,14 +28,14 @@ Describe 'Get-MsixStaticAnalysis robustness vs Application Executable shapes' -T
         # $hasDir (the central guard), not call .Contains('\') a second
         # time — that's how the bug crept in (only one call site
         # guarded).
-        $src | Should -Match 'if \(\$hasDir\) \{ Join-Path \$workspace'
+        $src | Should -Match 'if \(\$hasDir\) \{ Join-Path (-Path )?\$workspace'
 
         # The $base assignment must also be conditional on $hasDir.
         $src | Should -Match '\$base = if \(\$hasDir\)'
     }
 
     It 'Recommendation falls back to no -Base when the executable is at the package root' {
-        $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.Investigation.ps1')) -Raw
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.Investigation.ps1')) -Raw
         # The else branch must emit a -Base-less form.
         $src | Should -Match "Apply FileRedirectionFixup -Patterns"
     }

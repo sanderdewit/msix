@@ -1,5 +1,5 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 
     # Build the SARIF fixture HERE — once at the top — so every Context
     # inside the Describe shares a single instance. Pester 5 in some
@@ -112,7 +112,7 @@ Describe 'SARIF export' -Tag 'Sarif' {
         }
 
         It 'Source-level guard: -Sarif routes through ConvertTo-MsixSarif' {
-            $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.Investigation.ps1')) -Raw
+            $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.Investigation.ps1')) -Raw
             $src | Should -Match 'if \(\$Sarif\)'
             $src | Should -Match 'ConvertTo-MsixSarif -Findings'
         }

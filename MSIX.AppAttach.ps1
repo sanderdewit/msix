@@ -79,12 +79,12 @@ function Install-MsixMgr {
         [switch]$Force,
         [switch]$VerifyAuthenticode
     )
-    if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'msixmgr' }
+    if (-not $Destination) { $Destination = Join-Path -Path (Get-MsixToolsRoot) 'msixmgr' }
 
     _MsixInstallArchiveTool `
         -ToolName 'msixmgr' `
         -Destination $Destination `
-        -MarkerFile (Join-Path $Destination 'msixmgr.installed') `
+        -MarkerFile (Join-Path -Path $Destination 'msixmgr.installed') `
         -Url $script:MsixMgrZipUrl `
         -ArchiveFileName 'msixmgrSetup.zip' `
         -VerifyAuthenticode ([bool]$VerifyAuthenticode) `
@@ -140,11 +140,11 @@ function Update-MsixMgr {
         # (upstream signing is broken — microsoft/msix-packaging#710).
         [switch]$VerifyAuthenticode
     )
-    if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'msixmgr' }
+    if (-not $Destination) { $Destination = Join-Path -Path (Get-MsixToolsRoot) 'msixmgr' }
     _MsixUpdateToolByAge `
         -ToolName 'msixmgr' `
         -Destination $Destination `
-        -MarkerFile (Join-Path $Destination 'msixmgr.installed') `
+        -MarkerFile (Join-Path -Path $Destination 'msixmgr.installed') `
         -MaxAgeDays $MaxAgeDays `
         -InstallFresh { Install-MsixMgr -Destination $Destination -VerifyAuthenticode:$VerifyAuthenticode } `
         -InstallForce { Install-MsixMgr -Destination $Destination -Force -VerifyAuthenticode:$VerifyAuthenticode }
@@ -211,8 +211,8 @@ function Resolve-MsixMgrPath {
     [CmdletBinding()]
     [OutputType([string])]
     param()
-    if ($env:MSIX_MSIXMGR_PATH -and (Test-Path $env:MSIX_MSIXMGR_PATH)) {
-        return (Resolve-Path $env:MSIX_MSIXMGR_PATH).Path
+    if ($env:MSIX_MSIXMGR_PATH -and (Test-Path -LiteralPath $env:MSIX_MSIXMGR_PATH)) {
+        return (Resolve-Path -LiteralPath $env:MSIX_MSIXMGR_PATH).Path
     }
     $toolsRoot = Get-MsixToolsRoot
     foreach ($p in @(
@@ -340,8 +340,8 @@ function New-MsixAppAttachImage {
             if ($first)     { $msixMgrArgs += '-create' }
             if ($ApplyAcls) { $msixMgrArgs += '-applyacls' }
             if ($PSCmdlet.ShouldProcess($OutputPath, "Add $p to CIM")) {
-                $r = Invoke-MsixProcess $msixmgr -ArgumentList $msixMgrArgs
-                Assert-MsixProcessSuccess $r 'msixmgr CIM'
+                $r = Invoke-MsixProcess -FilePath $msixmgr -ArgumentList $msixMgrArgs
+                Assert-MsixProcessSuccess -Result $r -Operation 'msixmgr CIM'
             }
             $first = $false
         }
@@ -382,8 +382,8 @@ function New-MsixAppAttachImage {
             Write-MsixLog Info "Expanding $p -> $folder"
             $msixMgrArgs = @('-Unpack', '-packagePath', $p, '-destination', $folder)
             if ($ApplyAcls) { $msixMgrArgs += '-applyacls' }
-            $r = Invoke-MsixProcess $msixmgr -ArgumentList $msixMgrArgs
-            Assert-MsixProcessSuccess $r 'msixmgr unpack-to-vhd'
+            $r = Invoke-MsixProcess -FilePath $msixmgr -ArgumentList $msixMgrArgs
+            Assert-MsixProcessSuccess -Result $r -Operation 'msixmgr unpack-to-vhd'
         }
 
     } finally {

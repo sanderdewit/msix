@@ -1,5 +1,5 @@
-BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+﻿BeforeAll {
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
@@ -64,7 +64,7 @@ Describe '-NoSign alias: <Name>' -Tag 'NoSign' -ForEach @(
     @{ Name = 'Remove-MsixDesktopShortcut' }
 ) {
     It 'has -NoSign alias' {
-        $cmd = Get-Command $Name -Module MSIX -ErrorAction SilentlyContinue
+        $cmd = Get-Command -Name $Name -Module MSIX -ErrorAction SilentlyContinue
         $cmd | Should -Not -BeNullOrEmpty
         $skip = $cmd.Parameters['SkipSigning']
         $skip | Should -Not -BeNullOrEmpty

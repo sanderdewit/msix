@@ -1,5 +1,5 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
@@ -68,7 +68,7 @@ Describe 'Source-level guard: user-facing provider calls use -LiteralPath' -Tag 
     # takes two $-prefixed variables in a row.
 
     BeforeAll {
-        $script:ModuleSources = Get-ChildItem -LiteralPath (Resolve-Path (Join-Path $PSScriptRoot '..')) `
+        $script:ModuleSources = Get-ChildItem -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..')) `
             -Filter 'MSIX.*.ps1' -File |
             Where-Object { $_.Name -notlike '*.Tests.ps1' }
     }
@@ -134,7 +134,7 @@ Describe 'Functional: signer / scanner code paths tolerate bracketed paths (issu
         # MSIX.Core.ps1 that operates on a string and has no filesystem
         # surface -- this confirms the module loads and the bracket-aware
         # tests below come from a clean state.
-        Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+        Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
     }
 
     It 'Resolve-MsixDebugViewPath returns a string or null for a bracketed env override' {

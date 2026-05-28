@@ -346,7 +346,7 @@ function _MsixAbsoluteToVfsRelativeDirect {
         if ($AbsPath.StartsWith($m.Abs, [System.StringComparison]::OrdinalIgnoreCase)) {
             $rel    = $AbsPath.Substring($m.Abs.Length).TrimStart('\')
             $vfsRel = "$($m.Vfs)\$rel"
-            if (Test-Path (Join-Path $WorkspacePath $vfsRel)) { return $vfsRel }
+            if (Test-Path -LiteralPath (Join-Path $WorkspacePath $vfsRel)) { return $vfsRel }
         }
     }
     return $null
@@ -380,7 +380,7 @@ function _MsixRegPathToVfsRelative {
         if ($RegPath -match ('^\[\{' + [regex]::Escape($m.Var) + '\}\](.*)$')) {
             $rel    = $Matches[1].TrimStart('\')
             $vfsRel = "$($m.Vfs)\$rel"
-            if (Test-Path (Join-Path $WorkspacePath $vfsRel)) { return $vfsRel }
+            if (Test-Path -LiteralPath (Join-Path $WorkspacePath $vfsRel)) { return $vfsRel }
             # Return the mapping even if the file isn't present — caller can use for manifest
             return $vfsRel
         }

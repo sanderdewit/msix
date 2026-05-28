@@ -159,7 +159,7 @@ function Import-MsixAccelerator {
     $raw = ConvertFrom-MsixYamlAccelerator -Path $Path
 
     $report = [pscustomobject]@{
-        Source           = (Resolve-Path $Path).Path
+        Source           = (Resolve-Path -LiteralPath $Path).Path
         PackageName      = $raw.PackageName
         PackageVersion   = $raw.PackageVersion
         Publisher        = $raw.PublisherName

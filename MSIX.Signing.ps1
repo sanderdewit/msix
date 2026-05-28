@@ -259,7 +259,7 @@
                 throw "-Signer AzureSignTool requires -KeyVaultUrl and -KeyVaultCertificate."
             }
             $azst = $null
-            $cmd  = Get-Command 'AzureSignTool.exe' -ErrorAction SilentlyContinue
+            $cmd  = Get-Command -Name 'AzureSignTool.exe' -ErrorAction SilentlyContinue
             if ($cmd) { $azst = $cmd.Source }
             if (-not $azst) {
                 $candidate = Join-Path $toolsRoot 'Tools\AzureSignTool\AzureSignTool.exe'
@@ -493,8 +493,8 @@ function Invoke-MsixSelfSignAndDebug {
 
     .EXAMPLE
         $r = Invoke-MsixSelfSignAndDebug -PackagePath app.msix
-        Start-MsixSandbox -DropFolder (Split-Path $r.PackagePath) `
-                          -PackageName (Split-Path $r.PackagePath -Leaf) `
+        Start-MsixSandbox -DropFolder (Split-Path -Path $r.PackagePath) `
+                          -PackageName (Split-Path -Path $r.PackagePath -Leaf) `
                           -CertPath $r.CertPath
     #>
     [CmdletBinding(SupportsShouldProcess)]

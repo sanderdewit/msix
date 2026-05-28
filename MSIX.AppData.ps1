@@ -63,7 +63,7 @@ function Get-MsixContainerAppData {
             VirtualLocal      = Join-Path $cache 'Local'
             VirtualRoaming    = Join-Path $cache 'Roaming'
             VirtualTemp       = Join-Path $cache 'Temp'
-            AcExists          = Test-Path (Join-Path $base 'AC')
+            AcExists          = Test-Path -LiteralPath (Join-Path $base 'AC')
             CacheExists       = Test-Path -LiteralPath $cache
         }
     }

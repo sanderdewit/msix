@@ -1,5 +1,5 @@
-BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+﻿BeforeAll {
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
     $script:Tmp = Join-Path $env:TEMP "msix-scripts-$([guid]::NewGuid().ToString('N').Substring(0,8))"
     New-Item $script:Tmp -ItemType Directory -Force | Out-Null
 }

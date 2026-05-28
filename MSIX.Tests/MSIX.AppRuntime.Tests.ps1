@@ -1,5 +1,5 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
@@ -12,7 +12,7 @@ Describe 'Install-MsixAppRuntime fail-closed + Authenticode (issue #42)' -Tag 'A
     # swallowed, and the marker MUST be the last write.
 
     BeforeAll {
-        $script:Src = Get-Content -LiteralPath (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.PsfBinaries.ps1')) -Raw
+        $script:Src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.PsfBinaries.ps1')) -Raw
         $idx = $script:Src.IndexOf('function Install-MsixAppRuntime')
         $idx | Should -BeGreaterThan -1
         $next = $script:Src.IndexOf("`nfunction ", $idx + 10)

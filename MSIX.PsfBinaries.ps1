@@ -52,7 +52,7 @@ function _MsixLoadTrustedPublishers {
     [OutputType([string[]])]
     param([string]$Path)
 
-    if (-not $Path) { $Path = Join-Path $PSScriptRoot 'signers.json' }
+    if (-not $Path) { $Path = Join-Path -Path $PSScriptRoot -ChildPath 'signers.json' }
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "MSIX trusted-publisher allowlist not found at '$Path'. The module cannot Authenticode-verify downloaded toolchain binaries without it. Re-install the module or restore signers.json from source."
     }
@@ -68,7 +68,7 @@ function _MsixLoadTrustedPublishers {
     }
 
     $rx       = [regex]'^CN=.+,$'
-    $prefixes = New-Object 'System.Collections.Generic.List[string]'
+    $prefixes = New-Object -TypeName 'System.Collections.Generic.List[string]'
     foreach ($entry in $doc.publishers) {
         $p = [string]$entry.subjectPrefix
         if (-not $p) {
@@ -88,7 +88,7 @@ function _MsixLoadTrustedPublishers {
 }
 
 $script:MsixTrustedPublishers = _MsixLoadTrustedPublishers
-$script:MsixTrustedPublishersPath = Join-Path $PSScriptRoot 'signers.json'
+$script:MsixTrustedPublishersPath = Join-Path -Path $PSScriptRoot -ChildPath 'signers.json'
 
 function _MsixVerifyAuthenticode {
     <#
@@ -133,7 +133,7 @@ Signer is NOT in the trusted-publisher allowlist:
 If you trust this publisher, add the CN prefix to `$script:MsixTrustedPublishers in MSIX.PsfBinaries.ps1.
 "@
     }
-    Write-MsixLog Info "Authenticode verified: $ToolName ($subject)"
+    Write-MsixLog -Level Info -Message "Authenticode verified: $ToolName ($subject)"
     return $sig
 }
 
@@ -164,7 +164,7 @@ function _MsixVerifyAuthenticodeFolder {
     $files = @(Get-ChildItem -LiteralPath $Folder -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Extension -in '.exe', '.dll' })
     if ($files.Count -eq 0) {
-        Write-MsixLog Warning "No .exe/.dll under $Folder to verify ($ToolName)"
+        Write-MsixLog -Level Warning -Message "No .exe/.dll under $Folder to verify ($ToolName)"
         return
     }
     foreach ($file in $files) {
@@ -192,7 +192,7 @@ function _MsixDownloadFile {
         [string]$Url,
         [string]$Destination
     )
-    Write-MsixLog Info "Downloading $Url"
+    Write-MsixLog -Level Info -Message "Downloading $Url"
     $oldPref = $ProgressPreference
     $ProgressPreference = 'SilentlyContinue'   # MUCH faster on Windows PowerShell 5.1
     try {
@@ -213,7 +213,7 @@ function _MsixExpandZip {
     )
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     if (-not (Test-Path -LiteralPath $DestinationPath)) {
-        New-Item $DestinationPath -ItemType Directory -Force | Out-Null
+        New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null
     }
     [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $DestinationPath)
 }
@@ -321,7 +321,7 @@ function _MsixInstallArchiveTool {
     }
 
     if ((Test-Path -LiteralPath $MarkerFile) -and -not $Force) {
-        Write-MsixLog Info $IdempotencyLogMessage
+        Write-MsixLog -Level Info -Message $IdempotencyLogMessage
         return [pscustomobject]@{ Path = $Destination; Updated = $false }
     }
 
@@ -331,11 +331,11 @@ function _MsixInstallArchiveTool {
         return [pscustomobject]@{ Path = $Destination; Updated = $true; Source = $Url }
     }
 
-    $tmpRoot = Join-Path $env:TEMP ("{0}-{1}" -f ([System.IO.Path]::GetFileNameWithoutExtension($ArchiveFileName).ToLowerInvariant()), ([guid]::NewGuid().ToString('N').Substring(0,8)))
-    $stage   = Join-Path $tmpRoot 'extracted'
-    $archive = Join-Path $tmpRoot $ArchiveFileName
-    New-Item $tmpRoot -ItemType Directory -Force | Out-Null
-    New-Item $stage   -ItemType Directory -Force | Out-Null
+    $tmpRoot = Join-Path -Path $env:TEMP -ChildPath ("{0}-{1}" -f ([System.IO.Path]::GetFileNameWithoutExtension($ArchiveFileName).ToLowerInvariant()), ([guid]::NewGuid().ToString('N').Substring(0,8)))
+    $stage   = Join-Path -Path $tmpRoot -ChildPath 'extracted'
+    $archive = Join-Path -Path $tmpRoot -ChildPath $ArchiveFileName
+    New-Item -Path $tmpRoot -ItemType Directory -Force | Out-Null
+    New-Item -Path $stage   -ItemType Directory -Force | Out-Null
 
     $destinationExisted = Test-Path -LiteralPath $Destination
     try {
@@ -345,16 +345,16 @@ function _MsixInstallArchiveTool {
         if ($VerifyAuthenticode) {
             _MsixVerifyAuthenticodeFolder -Folder $stage -ToolName $ToolName
         } elseif ($SkipVerificationWarning) {
-            Write-Warning $SkipVerificationWarning
+            Write-Warning -Message $SkipVerificationWarning
         }
 
-        New-Item $Destination -ItemType Directory -Force | Out-Null
-        Copy-Item (Join-Path $stage '*') $Destination -Recurse -Force
+        New-Item -Path $Destination -ItemType Directory -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path -Path $stage -ChildPath '*') -Destination $Destination -Recurse -Force
         (Get-Date -Format o) | Set-Content -LiteralPath $MarkerFile -Encoding ascii
 
         if ($PostInstall) { & $PostInstall $Destination }
     } catch {
-        Write-MsixLog Error "$ToolName install rolled back: $_"
+        Write-MsixLog -Level Error -Message "$ToolName install rolled back: $_"
         if (-not $destinationExisted) {
             Remove-Item -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue
         }
@@ -517,7 +517,7 @@ function Install-MsixPsfBinary {
     }
 
     $tmp = Join-Path $env:TEMP "tmurgent-psf-$([guid]::NewGuid().ToString('N').Substring(0,8))"
-    New-Item $tmp -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmp -ItemType Directory -Force | Out-Null
     $zip = Join-Path $tmp $asset.name
 
     if ($PSCmdlet.ShouldProcess($Destination, "Install PSF $tag")) {
@@ -531,12 +531,12 @@ function Install-MsixPsfBinary {
             _MsixVerifyAuthenticodeFolder -Folder $tmp -ToolName 'PSF'
 
             if (-not (Test-Path -LiteralPath $Destination)) {
-                New-Item $Destination -ItemType Directory -Force | Out-Null
+                New-Item -Path $Destination -ItemType Directory -Force | Out-Null
                 $destinationCreated = $true
             }
             # Copy every file from extracted layout into Destination flatly
             Get-ChildItem -LiteralPath $tmp -Recurse -File | Where-Object { $_.FullName -ne $zip } |
-                ForEach-Object { Copy-Item $_.FullName $Destination -Force }
+                ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $Destination -Force }
 
             Set-Content -Path $marker -Value $tag -Encoding ascii
             Write-MsixLog Info "PSF $tag installed to $Destination"
@@ -593,7 +593,7 @@ function Get-MsixPsfBinariesVersion {
         Path        = $Path
         Installed   = Test-Path -LiteralPath $marker
         Version     = if (Test-Path -LiteralPath $marker) { (Get-Content -LiteralPath $marker -Raw).Trim() } else { $null }
-        HasLauncher = Test-Path (Join-Path $Path 'PsfLauncher32.exe')
+        HasLauncher = Test-Path -LiteralPath (Join-Path $Path 'PsfLauncher32.exe')
     }
 }
 
@@ -682,22 +682,22 @@ function Install-MsixProcMon {
         [string]$Destination,
         [switch]$Force
     )
-    if (-not $Destination) { $Destination = Join-Path (Get-MsixToolsRoot) 'procmon' }
+    if (-not $Destination) { $Destination = Join-Path -Path (Get-MsixToolsRoot) -ChildPath 'procmon' }
     _MsixInstallArchiveTool `
         -ToolName 'Process Monitor' `
         -Destination $Destination `
-        -MarkerFile (Join-Path $Destination 'procmon.installed') `
+        -MarkerFile (Join-Path -Path $Destination -ChildPath 'procmon.installed') `
         -Url $script:ProcmonZipUrl `
         -ArchiveFileName 'ProcessMonitor.zip' `
         -Force:$Force `
         -PostInstall {
             param($dest)
-            $exe = Join-Path $dest 'Procmon.exe'
+            $exe = Join-Path -Path $dest -ChildPath 'Procmon.exe'
             if (Test-Path -LiteralPath $exe) {
                 $env:MSIX_PROCMON_PATH = $exe
-                Write-MsixLog Info "Process Monitor installed at $exe"
+                Write-MsixLog -Level Info -Message "Process Monitor installed at $exe"
             } else {
-                Write-MsixLog Warning "Procmon.exe not found after extraction; check $dest"
+                Write-MsixLog -Level Warning -Message "Procmon.exe not found after extraction; check $dest"
             }
         }
 }
@@ -981,7 +981,7 @@ function Install-MsixSdkTool {
 
     # ── Download + extract ────────────────────────────────────────────────
     $tmp = Join-Path $env:TEMP "sdk-buildtools-$([guid]::NewGuid().ToString('N').Substring(0,8))"
-    New-Item $tmp -ItemType Directory -Force | Out-Null
+    New-Item -Path $tmp -ItemType Directory -Force | Out-Null
     $nupkg = Join-Path $tmp "$($script:SdkToolsNuGet).$Version.nupkg"
     $url   = "https://api.nuget.org/v3-flatcontainer/$($script:SdkToolsNuGet.ToLower())/$Version/$($script:SdkToolsNuGet.ToLower()).$Version.nupkg"
 
@@ -996,9 +996,9 @@ function Install-MsixSdkTool {
 
             # Locate the bin\<sdk-ver>\<arch> folder. NuGet packages may have a
             # versioned subdirectory we need to discover.
-            $archDir = Get-ChildItem (Join-Path $extracted 'bin') -Directory -ErrorAction SilentlyContinue |
+            $archDir = Get-ChildItem -LiteralPath (Join-Path $extracted 'bin') -Directory -ErrorAction SilentlyContinue |
                        ForEach-Object { Join-Path $_.FullName $Architecture } |
-                       Where-Object { Test-Path (Join-Path $_ 'MakeAppx.exe') } |
+                       Where-Object { Test-Path -LiteralPath (Join-Path $_ 'MakeAppx.exe') } |
                        Sort-Object -Descending |
                        Select-Object -First 1
             if (-not $archDir) {
@@ -1009,7 +1009,7 @@ function Install-MsixSdkTool {
             # them into Tools\ where Get-MsixToolsRoot will surface them.
             _MsixVerifyAuthenticodeFolder -Folder $archDir -ToolName "SDK BuildTools $Version/$Architecture"
 
-            New-Item $toolsDir -ItemType Directory -Force | Out-Null
+            New-Item -Path $toolsDir -ItemType Directory -Force | Out-Null
 
             # Copy the whole arch folder (MakeAppx, signtool, makepri, plus
             # the AppxPackaging dependency DLLs that signtool needs at runtime).
@@ -1234,7 +1234,7 @@ function Install-MsixAppRuntime {
         # Check whether all requested channels are cached; if any is missing
         # we still need to download just that one (don't bail out).
         $missing = $Channels | Where-Object {
-            -not (Test-Path (Join-Path $Destination (_MsixAppRuntimeFileName $_)))
+            -not (Test-Path -LiteralPath (Join-Path $Destination (_MsixAppRuntimeFileName $_)))
         }
         if (-not $missing) {
             Write-MsixLog Info "Windows App Runtime ($($Channels -join ', ')) + DesktopAppInstaller cached at $Destination."

@@ -1,5 +1,5 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 }
 
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
@@ -15,7 +15,7 @@ Describe 'Module contract' -Tag 'ModuleContract' {
         # the test cares about are:
         #   - The module's runtime version matches the .psd1 manifest
         #   - Exported cmdlets carry the same module version
-        $manifestPath = Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')
+        $manifestPath = Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')
         $manifestData = Import-PowerShellDataFile -Path $manifestPath
         $expectedVersion = $manifestData.ModuleVersion
 
@@ -50,7 +50,7 @@ Describe 'Export source-of-truth contract (issue #41)' -Tag 'ModuleContract' {
     # also exist in the module's loaded surface, and vice versa.
 
     BeforeAll {
-        $script:Manifest = Import-PowerShellDataFile -Path (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1'))
+        $script:Manifest = Import-PowerShellDataFile -Path (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1'))
         $script:Loaded   = Get-Command -Module MSIX
         $script:LoadedFunctions = @($script:Loaded | Where-Object { $_.CommandType -eq 'Function' } | Select-Object -ExpandProperty Name)
         $script:LoadedAliases   = @($script:Loaded | Where-Object { $_.CommandType -eq 'Alias'    } | Select-Object -ExpandProperty Name)
@@ -92,7 +92,7 @@ Describe 'Export source-of-truth contract (issue #41)' -Tag 'ModuleContract' {
         # Source-level guard so the explicit list never re-appears via a
         # well-intentioned PR. The wildcard form is what makes the
         # manifest the source of truth.
-        $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\msix.psm1')) -Raw
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\msix.psm1')) -Raw
         $src | Should -Match 'Export-ModuleMember\s+-Function\s+\*\s+-Alias\s+\*'
         # And the old explicit-array form must NOT appear.
         $src | Should -Not -Match 'Export-ModuleMember\s+-Function\s+@\('

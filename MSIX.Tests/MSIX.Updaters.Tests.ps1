@@ -1,12 +1,12 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
     # Issue #38: heuristics split into MSIX.Scanners.ps1, MSIX.PackageMutators.ps1,
     # and MSIX.AutoFix.ps1. The source-level guards downstream operate over the
     # union of the three files; concatenate so the assertions don't have to know
     # which split a given function lives in.
     $script:HeuristicsPaths = @(
         'MSIX.Scanners.ps1','MSIX.PackageMutators.ps1','MSIX.AutoFix.ps1'
-    ) | ForEach-Object { (Resolve-Path (Join-Path $PSScriptRoot "..\$_")).Path }
+    ) | ForEach-Object { (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath "..\$_")).Path }
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 

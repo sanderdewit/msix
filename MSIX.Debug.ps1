@@ -34,15 +34,15 @@ function Resolve-MsixDebugViewPath {
     .EXAMPLE
         # Find DebugView so a one-off TraceFixup viewer can be launched.
         $exe = Resolve-MsixDebugViewPath
-        if ($exe) { Start-Process $exe }
+        if ($exe) { Start-Process -FilePath $exe }
     #>
     [CmdletBinding()]
     [OutputType([string])]
     param()
-    if ($env:MSIX_DEBUGVIEW_PATH -and (Test-Path $env:MSIX_DEBUGVIEW_PATH)) {
-        return (Resolve-Path $env:MSIX_DEBUGVIEW_PATH).Path
+    if ($env:MSIX_DEBUGVIEW_PATH -and (Test-Path -LiteralPath $env:MSIX_DEBUGVIEW_PATH)) {
+        return (Resolve-Path -LiteralPath $env:MSIX_DEBUGVIEW_PATH).Path
     }
-    $cmd = Get-Command Dbgview.exe, Dbgview64.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    $cmd = Get-Command -Name Dbgview.exe, Dbgview64.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($cmd) { return $cmd.Source }
 
     $toolsRoot = Get-MsixToolsRoot
@@ -337,7 +337,7 @@ function Start-MsixDebugSession {
         $cert  = New-MsixSelfSignedCertificate -PackagePath C:\Drop\broken.msix
         $wsb   = New-MsixSandboxConfig -DropFolder C:\Drop -PackageName broken.msix `
                                        -CertPath $cert.CerPath
-        Start-Process $wsb
+        Start-Process -FilePath $wsb
         # Inside the sandbox the bootstrap auto-calls:
         #   Start-MsixDebugSession -PackagePath C:\msix-drop\broken.msix `
         #       -Install -LaunchProcMon -LaunchDebugView
@@ -362,7 +362,7 @@ function Start-MsixDebugSession {
     if (-not $OutputDirectory) {
         $OutputDirectory = Join-Path ([Environment]::GetFolderPath('Desktop')) "msix-debug-$($fileinfo.BaseName)"
     }
-    New-Item $OutputDirectory -ItemType Directory -Force | Out-Null
+    New-Item -Path $OutputDirectory -ItemType Directory -Force | Out-Null
 
     Write-MsixLog Info "=== MSIX Debug Session: $($fileinfo.Name) ==="
     Write-MsixLog Info "Output: $OutputDirectory"
@@ -457,9 +457,9 @@ function Start-MsixDebugSession {
 
             $pmlPath = Join-Path $OutputDirectory 'capture.pml'
             $pmArgs  = @('/AcceptEula', '/Quiet', '/Minimized', '/BackingFile', "`"$pmlPath`"")
-            Start-Process $procmon -ArgumentList $pmArgs
+            Start-Process -FilePath $procmon -ArgumentList $pmArgs
             Write-MsixLog Info "Process Monitor capturing to $pmlPath"
-            Write-Information "  Stop later with: Start-Process '$procmon' -ArgumentList '/Terminate'"
+            Write-Information "  Stop later with: Start-Process -FilePath '$procmon' -ArgumentList '/Terminate'"
         }
     }
 
@@ -476,7 +476,7 @@ function Start-MsixDebugSession {
             }
         }
         if ($dv) {
-            Start-Process $dv
+            Start-Process -FilePath $dv
             Write-MsixLog Info "DebugView launched: $dv"
         } else {
             Write-MsixLog Warning 'DebugView not found. Run Install-MsixDebugView or set $env:MSIX_DEBUGVIEW_PATH manually.'
@@ -540,7 +540,7 @@ function ConvertTo-MsixReportHtml {
 
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.AppendLine('<!doctype html><html lang="en"><head><meta charset="utf-8">')
-    [void]$sb.AppendLine("<title>MSIX Debug Report -- $(_Esc (Split-Path $PackagePath -Leaf))</title>")
+    [void]$sb.AppendLine("<title>MSIX Debug Report -- $(_Esc (Split-Path -Path $PackagePath -Leaf))</title>")
     [void]$sb.AppendLine(@'
 <style>
 :root { color-scheme: light dark; }
@@ -681,7 +681,7 @@ function New-MsixSandboxConfig {
         # The package was signed with a self-signed cert (cert.cer next to .msix)
         $wsb = New-MsixSandboxConfig -DropFolder C:\drop -PackageName broken.msix `
                                      -CertPath C:\drop\debug-cert.cer
-        Start-Process $wsb
+        Start-Process -FilePath $wsb
 
     .EXAMPLE
         # No network, no GPU: forensic capture environment.
@@ -725,7 +725,7 @@ function New-MsixSandboxConfig {
         if ($required) {
             Write-MsixLog Info "Package requires WindowsAppRuntime channels: $($required -join ', ')"
             $missing = $required | Where-Object {
-                -not (Test-Path (Join-Path $RuntimePath "WindowsAppRuntimeInstall-x64-$_.exe"))
+                -not (Test-Path -LiteralPath (Join-Path $RuntimePath "WindowsAppRuntimeInstall-x64-$_.exe"))
             }
             if ($missing) {
                 Write-MsixLog Info "Caching missing channels: $($missing -join ', ')"
@@ -746,9 +746,9 @@ function New-MsixSandboxConfig {
     # Cert handling: if specified, copy into drop folder so the sandbox sees it
     $certFileInSandbox = ''
     if ($CertPath) {
-        $certLeaf = Split-Path $CertPath -Leaf
+        $certLeaf = Split-Path -Path $CertPath -Leaf
         $certTarget = Join-Path $DropFolder $certLeaf
-        if ((Resolve-Path $CertPath).Path -ne (Resolve-Path $certTarget -ErrorAction SilentlyContinue).Path) {
+        if ((Resolve-Path -LiteralPath $CertPath).Path -ne (Resolve-Path -LiteralPath $certTarget -ErrorAction SilentlyContinue).Path) {
             Copy-Item -LiteralPath $CertPath -Destination $certTarget -Force
         }
         $certFileInSandbox = "C:\msix-drop\$certLeaf"

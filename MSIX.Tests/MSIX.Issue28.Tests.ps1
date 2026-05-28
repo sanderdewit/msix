@@ -1,5 +1,5 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
@@ -79,7 +79,7 @@ Describe 'Issue #28: registry cleanup + idempotent ManifestFix detection' -Tag '
 
         It 'Remove-MsixUninstallerArtifact source calls the recursive helper' {
             # Issue #38: function moved from MSIX.Heuristics.ps1 to MSIX.PackageMutators.ps1.
-            $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.PackageMutators.ps1')) -Raw
+            $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.PackageMutators.ps1')) -Raw
             $idx = $src.IndexOf('function Remove-MsixUninstallerArtifact')
             $nextIdx = $src.IndexOf("`nfunction ", $idx + 1)
             if ($nextIdx -lt 0) { $nextIdx = $src.Length }
@@ -146,7 +146,7 @@ Describe 'Issue #28: registry cleanup + idempotent ManifestFix detection' -Tag '
     Context 'Get-MsixStaticAnalysis idempotent ManifestFix detection' {
 
         It 'Source guards the FileSystemWriteVirtualization finding with -not $hasFsVirt' {
-            $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.Investigation.ps1')) -Raw
+            $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.Investigation.ps1')) -Raw
             # The writable-file emission must be wrapped in an if (-not $hasFsVirt) block
             # so packages that already declare the desktop6 element don't get the noise.
             $src | Should -Match 'if \(-not \$hasFsVirt\)'
@@ -154,7 +154,7 @@ Describe 'Issue #28: registry cleanup + idempotent ManifestFix detection' -Tag '
         }
 
         It 'Source guards the manifest-alternative entries the same way' {
-            $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.Investigation.ps1')) -Raw
+            $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.Investigation.ps1')) -Raw
             # Both alternatives must be suppressed when the corresponding fix
             # is already in <Properties>. Single-quoted regex so PowerShell
             # doesn''t expand the literal $hasFsVirt / $hasRegVirt tokens.

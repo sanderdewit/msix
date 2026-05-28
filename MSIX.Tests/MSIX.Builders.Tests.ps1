@@ -1,5 +1,5 @@
-BeforeAll {
-    $modulePath = Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')
+﻿BeforeAll {
+    $modulePath = Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')
     Import-Module $modulePath -Force
 }
 

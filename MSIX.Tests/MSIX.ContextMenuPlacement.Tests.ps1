@@ -1,5 +1,5 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 
     # Minimal valid manifest used to exercise the manifest-mutation logic
     # entirely in-memory (no MakeAppx needed for these tests).
@@ -89,7 +89,7 @@ Describe 'Shell-extension context menu placement (TMEditX-verified pattern)' -Ta
     }
 
     It 'ContextMenu.ps1 source uses bare com: for the SurrogateServer block' {
-        $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.ContextMenu.ps1')) -Raw
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.ContextMenu.ps1')) -Raw
         $src | Should -Match "CreateElement\('com:Extension'"
         $src | Should -Match "CreateElement\('com:ComServer'"
         $src | Should -Match "CreateElement\('com:SurrogateServer'"
@@ -100,7 +100,7 @@ Describe 'Shell-extension context menu placement (TMEditX-verified pattern)' -Ta
     }
 
     It 'ContextMenu.ps1 emits desktop4:Extension + desktop5:ItemType/Verb (NOT desktop9)' {
-        $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.ContextMenu.ps1')) -Raw
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.ContextMenu.ps1')) -Raw
         # The new working pattern uses desktop4 outer, desktop5 inner verbs.
         $src | Should -Match "CreateElement\('desktop4:Extension'"
         $src | Should -Match "CreateElement\('desktop4:FileExplorerContextMenus'"
@@ -115,13 +115,13 @@ Describe 'Shell-extension context menu placement (TMEditX-verified pattern)' -Ta
     }
 
     It 'CLSID is lowercased in both Add-MsixLegacyContextMenu and Add-MsixFileExplorerContextMenu' {
-        $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.ContextMenu.ps1')) -Raw
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.ContextMenu.ps1')) -Raw
         # Both functions normalise via .ToLowerInvariant() after stripping braces.
         ($src | Select-String -Pattern '\.ToLowerInvariant\(\)' -AllMatches).Matches.Count | Should -BeGreaterOrEqual 2
     }
 
     It 'Add-MsixComServerExtension (InProcessServer only) still uses com4 at Package level' {
-        $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.ManifestExtensions.ps1')) -Raw
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.ManifestExtensions.ps1')) -Raw
         $startIdx = $src.IndexOf('function Add-MsixComServerExtension')
         $nextIdx  = $src.IndexOf("`nfunction ", $startIdx + 1)
         if ($nextIdx -lt 0) { $nextIdx = $src.Length }

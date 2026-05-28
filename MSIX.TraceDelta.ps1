@@ -162,9 +162,9 @@ function _ConvertMsixTraceDeltaToSarif {
         '$schema' = 'https://docs.oasis-open.org/sarif/sarif/v2.1.0/csprd01/schemas/sarif-schema-2.1.0.json'
         version   = '2.1.0'
         runs      = @(
-            (_Run 'Resolved'   $Diff.Resolved   'note')
-            (_Run 'Persisted'  $Diff.Persisted  'warning')
-            (_Run 'Introduced' $Diff.Introduced 'error')
+            (_Run -Label 'Resolved'   -Findings $Diff.Resolved  -DefaultLevel 'note')
+            (_Run -Label 'Persisted'  -Findings $Diff.Persisted -DefaultLevel 'warning')
+            (_Run -Label 'Introduced' -Findings $Diff.Introduced -DefaultLevel 'error')
         )
     }
 }
@@ -230,7 +230,7 @@ function Compare-MsixTrace {
 
     .EXAMPLE
         Compare-MsixTrace -Baseline before.pml -Candidate after.pml -Sarif |
-            ConvertTo-Json -Depth 100 | Out-File delta.sarif -Encoding utf8
+            ConvertTo-Json -Depth 100 | Out-File -FilePath delta.sarif -Encoding utf8
 
     .EXAMPLE
         # Only care about write-virtualisation regressions:

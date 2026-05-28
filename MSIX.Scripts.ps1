@@ -200,9 +200,9 @@ function New-MsixStandardScript {
     $content = _MsixRenderTemplate -TemplatePath $tmpl -Parameters $merged
 
     if ($PSCmdlet.ShouldProcess($OutputPath, "Generate $Name from template")) {
-        $dir = Split-Path $OutputPath -Parent
-        if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item $dir -ItemType Directory -Force | Out-Null }
-        Set-Content -Path $OutputPath -Value $content -Encoding utf8
+        $dir = Split-Path -Path $OutputPath -Parent
+        if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
+        Set-Content -LiteralPath $OutputPath -Value $content -Encoding utf8
         Write-MsixLog Info "Generated $Name -> $OutputPath"
     }
 

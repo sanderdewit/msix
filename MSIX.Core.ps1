@@ -65,11 +65,11 @@ function Get-MsixToolsRoot {
     #    or any other vendored toolchain elsewhere on the same path).
     $cursor = $PSScriptRoot
     for ($i = 0; $i -lt 4; $i++) {
-        $cursor = Split-Path $cursor -Parent
+        $cursor = Split-Path -Path $cursor -Parent
         if (-not $cursor) { break }
         # Same-level siblings under this ancestor
         $sibling = Get-ChildItem -LiteralPath $cursor -Directory -ErrorAction SilentlyContinue |
-                   Where-Object { Test-Path "$($_.FullName)\Tools\MakeAppx.exe" } |
+                   Where-Object { Test-Path -LiteralPath "$($_.FullName)\Tools\MakeAppx.exe" } |
                    Sort-Object Name -Descending |
                    Select-Object -First 1
         if ($sibling) {

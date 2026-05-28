@@ -1,5 +1,5 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 
     function New-SamplePluginReport {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions','',
@@ -90,12 +90,12 @@ Describe 'Plugin / extension-point detection + autofix' -Tag 'Plugins' {
     Context 'Source-level regression guards' {
         It 'Get-MsixHeuristicFindings emits PluginDirectory findings' {
             # Issue #38: Get-MsixHeuristicFinding moved to MSIX.Scanners.ps1.
-            $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.Scanners.ps1')) -Raw
+            $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.Scanners.ps1')) -Raw
             $src | Should -Match "Category = 'PluginDirectory'"
             $src | Should -Match 'Get-MsixPluginExtensionPoint -PackagePath'
         }
         It 'Detection.ps1 declares the plugin directory-name list' {
-            $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.Detection.ps1')) -Raw
+            $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.Detection.ps1')) -Raw
             $src | Should -Match 'MsixPluginDirectoryNames'
             $src | Should -Match 'function Get-MsixPluginExtensionPoint'
         }

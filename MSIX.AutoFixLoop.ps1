@@ -221,13 +221,13 @@ function Invoke-MsixAutoFixLoop {
 
         # Persist report for post-mortem
         $report | ConvertTo-Json -Depth 10 -Compress |
-            Out-File (Join-Path $passDir 'report.json') -Encoding utf8
+            Out-File -FilePath (Join-Path $passDir 'report.json') -Encoding utf8
 
         # ── 2. Plan ──
         $plan = Invoke-MsixAutoFixFromAnalysis -Report $report @fixArgs -DryRun
 
         $plan | ConvertTo-Json -Depth 10 -Compress |
-            Out-File (Join-Path $passDir 'plan.json') -Encoding utf8
+            Out-File -FilePath (Join-Path $passDir 'plan.json') -Encoding utf8
 
         $passSummary = [pscustomobject]@{
             Pass          = $pass
@@ -277,7 +277,7 @@ function Invoke-MsixAutoFixLoop {
             if ($prevTracePath -and (Test-Path -LiteralPath $tracePath)) {
                 $delta = Compare-MsixTrace -Baseline $prevTracePath -Candidate $tracePath
                 $delta | ConvertTo-Json -Depth 10 -Compress |
-                    Out-File (Join-Path $passDir 'trace-delta.json') -Encoding utf8
+                    Out-File -FilePath (Join-Path $passDir 'trace-delta.json') -Encoding utf8
                 $passSummary.TraceDelta = $delta.Summary
 
                 if ('NoRegressions' -in $StopOn -and $delta.Summary.IntroducedCount -eq 0) {

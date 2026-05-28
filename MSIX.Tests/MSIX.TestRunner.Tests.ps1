@@ -1,5 +1,5 @@
 ﻿BeforeAll {
-    $script:WrapperPath = (Resolve-Path (Join-Path $PSScriptRoot 'Invoke-MsixTests.ps1')).Path
+    $script:WrapperPath = (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath 'Invoke-MsixTests.ps1')).Path
     $script:WrapperSrc  = Get-Content -LiteralPath $script:WrapperPath -Raw
 }
 
@@ -63,7 +63,7 @@ Describe 'Pester wrapper -DisableTestResult switch (issue #47)' -Tag 'TestRunner
     BeforeAll {
         # Resolve the wrapper as a real PowerShell command so we can
         # inspect its parameter metadata without invoking it.
-        $script:WrapperCmd = Get-Command -Name (Resolve-Path (Join-Path $PSScriptRoot 'Invoke-MsixTests.ps1')).Path
+        $script:WrapperCmd = Get-Command -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath 'Invoke-MsixTests.ps1')).Path
     }
 
     It 'Wrapper exposes -DisableTestResult (with -NoTestResult alias)' {

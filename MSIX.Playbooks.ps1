@@ -226,7 +226,7 @@ function Invoke-MsixPlaybook {
     foreach ($step in $Playbook.Steps) {
         $i++
         $cmdletName = [string]$step.Cmdlet
-        $cmd        = Get-Command $cmdletName -ErrorAction SilentlyContinue
+        $cmd        = Get-Command -Name $cmdletName -ErrorAction SilentlyContinue
         if (-not $cmd) { throw "Step $i references unknown cmdlet '$cmdletName'." }
         if ($cmd.Source -ne 'MSIX' -and $cmd.ModuleName -ne 'MSIX') {
             # Defence-in-depth — only run cmdlets owned by this module.

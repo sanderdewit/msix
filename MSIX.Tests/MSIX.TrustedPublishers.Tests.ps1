@@ -1,6 +1,6 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
-    $script:SignersJsonPath = (Resolve-Path (Join-Path $PSScriptRoot '..\signers.json')).Path
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
+    $script:SignersJsonPath = (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\signers.json')).Path
     $script:SignersDoc      = Get-Content -LiteralPath $script:SignersJsonPath -Raw | ConvertFrom-Json
 }
 

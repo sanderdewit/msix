@@ -1,5 +1,5 @@
-BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+﻿BeforeAll {
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 
     # Build a minimal .msix fixture so New-MsixRemediationPlan can fingerprint it.
     $script:FixtureDir = Join-Path $env:TEMP "msix-remedplan-test-$([guid]::NewGuid().ToString('N').Substring(0,8))"
@@ -21,7 +21,7 @@ BeforeAll {
   </Applications>
 </Package>
 '@
-    $manifestXml | Out-File (Join-Path $script:FixtureDir 'AppxManifest.xml') -Encoding utf8
+    $manifestXml | Out-File -FilePath (Join-Path $script:FixtureDir 'AppxManifest.xml') -Encoding utf8
 
     $script:PlanYamlPath = Join-Path $env:TEMP "msix-remedplan-test-$([guid]::NewGuid().ToString('N').Substring(0,8)).yaml"
 }
@@ -39,7 +39,7 @@ Describe 'Remediation plan round-trip' -Tag 'RemediationPlan' {
             foreach ($cmd in 'New-MsixRemediationPlan','Export-MsixRemediationPlan',
                              'Import-MsixRemediationPlan','Test-MsixRemediationPlan',
                              'Invoke-MsixRemediationPlan') {
-                Get-Command $cmd -Module MSIX | Should -Not -BeNullOrEmpty
+                Get-Command -Name $cmd -Module MSIX | Should -Not -BeNullOrEmpty
             }
         }
     }
@@ -128,11 +128,11 @@ Describe 'Remediation plan round-trip' -Tag 'RemediationPlan' {
     Context 'Import-MsixRemediationPlan validation' {
         It 'Throws when the file is missing the remediation: root key' {
             $bad = Join-Path $env:TEMP 'bad-plan.yaml'
-            'version: 1' | Out-File $bad -Encoding utf8
+            'version: 1' | Out-File -FilePath $bad -Encoding utf8
             try {
                 { Import-MsixRemediationPlan -Path $bad } | Should -Throw
             } finally {
-                Remove-Item $bad -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $bad -ErrorAction SilentlyContinue
             }
         }
 
@@ -154,11 +154,11 @@ remediation:
   approval:
     requiredBy: null
     notes: null
-"@ | Out-File $rogue -Encoding utf8
+"@ | Out-File -FilePath $rogue -Encoding utf8
             try {
                 { Import-MsixRemediationPlan -Path $rogue } | Should -Throw
             } finally {
-                Remove-Item $rogue -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $rogue -ErrorAction SilentlyContinue
             }
         }
     }

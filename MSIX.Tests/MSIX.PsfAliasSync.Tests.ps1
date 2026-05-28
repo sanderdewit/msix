@@ -1,5 +1,5 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
@@ -20,7 +20,7 @@ Describe 'Add-MsixPsfV2 alias-sync regression guard' -Tag 'PSF' {
     # per-app case Add-MsixAlias produces.
 
     It 'PSF.ps1 source does not contain the alias-sync SetAttribute call' {
-        $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.PSF.ps1')) -Raw
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.PSF.ps1')) -Raw
         # The smoking-gun expression that produced the schema violation.
         $src | Should -Not -Match '\$aliasExt\.SetAttribute\(\s*''Executable'''
     }
@@ -28,7 +28,7 @@ Describe 'Add-MsixPsfV2 alias-sync regression guard' -Tag 'PSF' {
     It 'PSF.ps1 does not set Executable on a windows.appExecutionAlias Extension element' {
         # Stronger structural check: search for any SetAttribute('Executable', ...)
         # call inside a block that filters Extensions by the appExecutionAlias category.
-        $src = Get-Content (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.PSF.ps1')) -Raw
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.PSF.ps1')) -Raw
         # If the source mentions 'windows.appExecutionAlias' AND a SetAttribute
         # on Executable in close proximity, fail — that pattern was the bug.
         $hasCategoryRef = $src -match "windows\.appExecutionAlias"

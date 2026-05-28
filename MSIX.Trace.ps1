@@ -273,7 +273,7 @@ function ConvertFrom-MsixTraceToFinding {
             }
             if (-not $category) { continue }
 
-            $leaf = Split-Path $f.Path -Leaf -ErrorAction SilentlyContinue
+            $leaf = Split-Path -Path $f.Path -Leaf -ErrorAction SilentlyContinue
             $key  = "$category|$leaf"
             if ($seen.ContainsKey($key)) { continue }
             $seen[$key] = $true

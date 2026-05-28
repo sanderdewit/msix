@@ -1,5 +1,5 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
@@ -61,7 +61,7 @@ Describe '-UnsignedOutputPath forwarded by every mutator' -Tag 'WhatIf' {
     foreach ($name in $mutators) {
         It "$name accepts -UnsignedOutputPath" -TestCases @(@{ Name = $name }) {
             param($Name)
-            $cmd = Get-Command $Name -Module MSIX -ErrorAction SilentlyContinue
+            $cmd = Get-Command -Name $Name -Module MSIX -ErrorAction SilentlyContinue
             $cmd | Should -Not -BeNullOrEmpty
             $cmd.Parameters.ContainsKey('UnsignedOutputPath') | Should -BeTrue
         }
@@ -139,7 +139,7 @@ Describe 'Inline atomic pack-sign-move in large bespoke mutators (issue #40)' -T
 
     It '<Fn> in <File> packs to scratch, signs scratch, Move-Item to target' -TestCases $cases {
         param($Fn, $File)
-        $src = Get-Content -LiteralPath (Resolve-Path (Join-Path $PSScriptRoot "..\$File")) -Raw
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath "..\$File")) -Raw
         $idx = $src.IndexOf("function $Fn ")
         $idx | Should -BeGreaterThan -1
         $window = $src.Substring($idx)

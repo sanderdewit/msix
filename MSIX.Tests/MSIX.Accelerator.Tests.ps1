@@ -1,5 +1,5 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
@@ -36,7 +36,7 @@ publisher: CN=Contoso
 
     It 'Does NOT attempt to load powershell-yaml at runtime' {
         # Grep the module source: ConvertFrom-Yaml should not appear.
-        $modulePath = Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.Accelerator.ps1')
+        $modulePath = Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.Accelerator.ps1')
         (Get-Content $modulePath -Raw) | Should -Not -Match 'ConvertFrom-Yaml'
         (Get-Content $modulePath -Raw) | Should -Not -Match 'powershell-yaml'
     }

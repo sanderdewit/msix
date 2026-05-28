@@ -1,5 +1,5 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
@@ -69,7 +69,7 @@ Describe 'Manifest-only fixer cmdlets are exported (v0.10)' -Tag 'Manifest' {
     }
     It 'Add-MsixStartupTask, Add-MsixProtocolHandler, Add-MsixFileTypeAssociation are exported' {
         foreach ($n in 'Add-MsixStartupTask','Add-MsixProtocolHandler','Add-MsixFileTypeAssociation') {
-            Get-Command $n -Module MSIX -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+            Get-Command -Name $n -Module MSIX -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }
     }
 }

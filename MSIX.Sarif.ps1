@@ -95,7 +95,7 @@ function ConvertTo-MsixSarif {
     .EXAMPLE
         Get-MsixStaticAnalysis -PackagePath app.msix -Sarif |
             ConvertTo-Json -Depth 100 |
-            Out-File app.sarif -Encoding utf8
+            Out-File -FilePath app.sarif -Encoding utf8
 
     .OUTPUTS
         [hashtable] SARIF 2.1.0 document. Pipe through ConvertTo-Json to

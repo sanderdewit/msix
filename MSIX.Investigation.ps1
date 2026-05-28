@@ -89,10 +89,10 @@ function Resolve-MsixProcMonPath {
     [CmdletBinding()]
     param()
 
-    if ($env:MSIX_PROCMON_PATH -and (Test-Path $env:MSIX_PROCMON_PATH)) {
-        return (Resolve-Path $env:MSIX_PROCMON_PATH).Path
+    if ($env:MSIX_PROCMON_PATH -and (Test-Path -LiteralPath $env:MSIX_PROCMON_PATH)) {
+        return (Resolve-Path -LiteralPath $env:MSIX_PROCMON_PATH).Path
     }
-    $cmd = Get-Command procmon.exe, procmon64.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    $cmd = Get-Command -Name procmon.exe, procmon64.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($cmd) { return $cmd.Source }
 
     foreach ($p in @(
@@ -261,15 +261,15 @@ function Get-MsixStaticAnalysis {
 
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace "$($fileinfo.BaseName)-static"
+    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-static"
     $findings  = @()
 
     try {
-        $r = Invoke-MsixProcess "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess $r 'MakeAppx unpack'
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
-        $null = Test-MsixManifest "$workspace\AppxManifest.xml"
-        [xml]$manifest = Get-MsixManifest "$workspace\AppxManifest.xml"
+        $null = Test-MsixManifest -Path "$workspace\AppxManifest.xml"
+        [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
         $apps = @($manifest.Package.Applications.Application)
 
         # Idempotency cross-check: if the manifest already declares the
@@ -316,9 +316,9 @@ function Get-MsixStaticAnalysis {
             # Working directory heuristic: exe lives in a subfolder
             if ($exe.Contains('\') -and -not $hasPsf) {
                 $relDir = $exe.Substring(0, $exe.LastIndexOf('\'))
-                $exeFs  = Join-Path $workspace $exe
+                $exeFs  = Join-Path -Path $workspace -ChildPath $exe
                 if (Test-Path -LiteralPath $exeFs) {
-                    $companions = Get-ChildItem (Split-Path $exeFs) -File -ErrorAction SilentlyContinue |
+                    $companions = Get-ChildItem -LiteralPath (Split-Path -Path $exeFs) -File -ErrorAction SilentlyContinue |
                                   Where-Object { $_.Extension -in '.ini', '.cfg', '.config', '.txt', '.dat', '.dll' }
                     if ($companions) {
                         $findings += [pscustomobject]@{
@@ -348,7 +348,7 @@ function Get-MsixStaticAnalysis {
                 # non-negative value" mid-investigation, killing the whole
                 # report.
                 $hasDir = $exe.Contains('\')
-                $appDir = if ($hasDir) { Join-Path $workspace ($exe.Substring(0, $exe.LastIndexOf('\'))) } else { $workspace }
+                $appDir = if ($hasDir) { Join-Path -Path $workspace -ChildPath ($exe.Substring(0, $exe.LastIndexOf('\'))) } else { $workspace }
                 if (Test-Path -LiteralPath $appDir) {
                     $writableHints = Get-ChildItem -LiteralPath $appDir -Recurse -File -ErrorAction SilentlyContinue |
                                      Where-Object { $_.Extension -in '.log', '.tmp', '.cache' -or

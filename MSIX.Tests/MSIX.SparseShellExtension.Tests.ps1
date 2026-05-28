@@ -1,6 +1,6 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
-    $script:SrcPath = (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.SparseShell.ps1')).Path
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
+    $script:SrcPath = (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.SparseShell.ps1')).Path
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 

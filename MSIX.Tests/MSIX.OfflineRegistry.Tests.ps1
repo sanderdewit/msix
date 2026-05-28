@@ -1,5 +1,5 @@
 ﻿BeforeAll {
-    Import-Module (Resolve-Path (Join-Path $PSScriptRoot '..\MSIX.psd1')) -Force
+    Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
 
     # Build a synthetic hive entirely via the OR* APIs — guarantees the on-disk
     # format is one OROpenHiveByHandle understands (reg.exe save produces a

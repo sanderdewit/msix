@@ -75,4 +75,49 @@ Describe 'Secret non-leakage' -Tag 'Security' {
         }
         ($warn -join ' ') | Should -Match 'command line'
     }
+
+    It 'AzureSignTool does not place the client secret on the command line (#53)' {
+        $secret = 'Kv-Secret-Should-Not-Leak-987'
+        $secure = ConvertTo-TestSecureString -Value $secret
+        $pkg    = Join-Path -Path $TestDrive -ChildPath 'pkg.msix'
+        Set-Content -LiteralPath $pkg -Value 'stub' -Encoding utf8
+
+        # Capture the args + the env-delivered secret without running AzureSignTool.
+        $script:capturedArgs   = $null
+        $script:capturedEnvSet = $null
+        Mock -ModuleName MSIX Get-MsixToolsRoot { 'C:\fake-tools' }
+        Mock -ModuleName MSIX Invoke-MsixProcess {
+            $script:capturedArgs   = $ArgumentList
+            $script:capturedEnvSet = [Environment]::GetEnvironmentVariable('AZURE_CLIENT_SECRET', 'Process')
+            [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+        }
+        # AzureSignTool.exe resolution: pretend it exists on PATH.
+        Mock -ModuleName MSIX Get-Command { [pscustomobject]@{ Source = 'C:\fake\AzureSignTool.exe' } } -ParameterFilter { $Name -eq 'AzureSignTool.exe' }
+
+        Invoke-MsixSigning -PackagePath $pkg -Signer AzureSignTool `
+            -KeyVaultUrl 'https://v.vault.azure.net' -KeyVaultCertificate 'c' `
+            -KeyVaultTenantId 't' -KeyVaultClientId 'ci' -KeyVaultClientSecret $secure
+
+        # The secret must NOT be anywhere in the command-line args ...
+        ($script:capturedArgs -join ' ') | Should -Not -Match ([regex]::Escape($secret))
+        ($script:capturedArgs -join ' ') | Should -Not -Match '--azure-key-vault-client-secret'
+        # ... but it MUST have been delivered via the environment.
+        $script:capturedEnvSet | Should -Be $secret
+        # And the env var must be cleaned up afterward.
+        [Environment]::GetEnvironmentVariable('AZURE_CLIENT_SECRET', 'Process') | Should -BeNullOrEmpty
+    }
+
+    It 'AzureSignTool client secret requires tenant + client id (#53)' {
+        $secure = ConvertTo-TestSecureString -Value 'x'
+        $pkg    = Join-Path -Path $TestDrive -ChildPath 'pkg2.msix'
+        Set-Content -LiteralPath $pkg -Value 'stub' -Encoding utf8
+        Mock -ModuleName MSIX Get-MsixToolsRoot { 'C:\fake-tools' }
+        Mock -ModuleName MSIX Invoke-MsixProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
+        Mock -ModuleName MSIX Get-Command { [pscustomobject]@{ Source = 'C:\fake\AzureSignTool.exe' } } -ParameterFilter { $Name -eq 'AzureSignTool.exe' }
+
+        { Invoke-MsixSigning -PackagePath $pkg -Signer AzureSignTool `
+            -KeyVaultUrl 'https://v.vault.azure.net' -KeyVaultCertificate 'c' `
+            -KeyVaultClientSecret $secure } |
+            Should -Throw -ExpectedMessage '*requires -KeyVaultTenantId and -KeyVaultClientId*'
+    }
 }

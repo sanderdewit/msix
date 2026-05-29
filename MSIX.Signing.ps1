@@ -72,8 +72,10 @@
 
     .PARAMETER KeyVaultClientSecret
         (AzureSignTool only, optional.) SecureString service-principal
-        secret. Decrypted via BSTR/ZeroFreeBSTR only at the signtool CLI
-        boundary.
+        secret. Delivered to AzureSignTool via the AZURE_CLIENT_SECRET
+        environment variable (decrypted from the SecureString only to set that
+        variable, then restored in a finally) so it never appears on the
+        process command line. Requires -KeyVaultTenantId and -KeyVaultClientId.
 
     .PARAMETER TimestampUrl
         RFC 3161 timestamp server URL. Defaults to DigiCert.
@@ -271,8 +273,9 @@
 
             Write-MsixLog -Level Info -Message "AzureSignTool vault=$KeyVaultUrl cert=$KeyVaultCertificate"
 
-            # Build base arguments — omit auth-mode args when not provided so
-            # AzureSignTool falls back to managed identity / interactive auth.
+            # Build base arguments. The service-principal SECRET is never put on
+            # the command line (other processes can read it via WMI); it is
+            # delivered through the environment instead — see below.
             $azArgsBase = @(
                 'sign',
                 '--timestamp-rfc3161',  $TimestampUrl,
@@ -281,20 +284,42 @@
                 '--azure-key-vault-url',         $KeyVaultUrl,
                 '--azure-key-vault-certificate', $KeyVaultCertificate
             )
-            if ($KeyVaultTenantId) {
-                $azArgsBase += @('--azure-key-vault-tenant-id', $KeyVaultTenantId)
-            }
-            if ($KeyVaultClientId) {
-                $azArgsBase += @('--azure-key-vault-client-id', $KeyVaultClientId)
-            }
 
             $bstr = [IntPtr]::Zero
+            # Remember prior values of any env vars we set so we can restore them.
+            $savedEnv = @{}
             try {
                 if ($KeyVaultClientSecret) {
-                    # Decrypt SecureString only here, append immediately.
+                    # SECURITY: deliver the SP credential via the environment
+                    # (Azure.Identity EnvironmentCredential, which AzureSignTool
+                    # uses, reads AZURE_TENANT_ID / AZURE_CLIENT_ID /
+                    # AZURE_CLIENT_SECRET) rather than --azure-key-vault-client-secret
+                    # on the command line. A client secret can only authenticate
+                    # as part of the full tenant+client+secret triple, so all
+                    # three are required and routed through the environment.
+                    if (-not $KeyVaultTenantId -or -not $KeyVaultClientId) {
+                        throw "-KeyVaultClientSecret requires -KeyVaultTenantId and -KeyVaultClientId (service-principal auth needs all three)."
+                    }
+                    Write-MsixLog -Level Info -Message 'AzureSignTool: delivering service-principal secret via AZURE_CLIENT_SECRET environment variable (kept off the command line).'
+
+                    foreach ($pair in @(
+                        @('AZURE_TENANT_ID', $KeyVaultTenantId),
+                        @('AZURE_CLIENT_ID', $KeyVaultClientId)
+                    )) {
+                        $savedEnv[$pair[0]] = [Environment]::GetEnvironmentVariable($pair[0], 'Process')
+                        [Environment]::SetEnvironmentVariable($pair[0], $pair[1], 'Process')
+                    }
+                    # Decrypt the SecureString only at the point of setting the env var.
                     $bstr  = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($KeyVaultClientSecret)
                     $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-                    $azArgsBase += @('--azure-key-vault-client-secret', $plain)
+                    $savedEnv['AZURE_CLIENT_SECRET'] = [Environment]::GetEnvironmentVariable('AZURE_CLIENT_SECRET', 'Process')
+                    [Environment]::SetEnvironmentVariable('AZURE_CLIENT_SECRET', $plain, 'Process')
+                    $plain = $null
+                } else {
+                    # No secret: pass the non-sensitive auth hints as args so
+                    # AzureSignTool can use managed identity / interactive auth.
+                    if ($KeyVaultTenantId) { $azArgsBase += @('--azure-key-vault-tenant-id', $KeyVaultTenantId) }
+                    if ($KeyVaultClientId) { $azArgsBase += @('--azure-key-vault-client-id', $KeyVaultClientId) }
                 }
                 $azArgsBase += $fileinfo.FullName
 
@@ -310,6 +335,11 @@
             } finally {
                 if ($bstr -ne [IntPtr]::Zero) {
                     [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+                }
+                # Restore the environment so the secret does not linger in the
+                # session and we don't clobber any pre-existing AZURE_* values.
+                foreach ($name in $savedEnv.Keys) {
+                    [Environment]::SetEnvironmentVariable($name, $savedEnv[$name], 'Process')
                 }
             }
         }

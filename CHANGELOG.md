@@ -5,9 +5,17 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
-## Unreleased - Security review fixes (#49, #50, #51, #52, #56)
+## Unreleased - Security review fixes (#49, #50, #51, #52, #53, #56)
 
 ### Security / robustness fixes (post-review)
+
+- **#53 — AzureSignTool client secret off the command line.** `Invoke-MsixSigning
+  -Signer AzureSignTool -KeyVaultClientSecret` previously passed the secret as
+  `--azure-key-vault-client-secret` on the process command line (WMI-readable).
+  It is now delivered via the `AZURE_CLIENT_SECRET` environment variable (with
+  `AZURE_TENANT_ID` / `AZURE_CLIENT_ID`), which AzureSignTool's
+  EnvironmentCredential reads, and the env vars are restored in a `finally`.
+  Supplying the secret now requires `-KeyVaultTenantId` and `-KeyVaultClientId`.
 
 - **#56 — Run-key scan hardening.** `Get-MsixRunKeyEntry` previously decoded the
   entire Registry.dat / User.dat as a UTF-16 string and ran an unbounded regex

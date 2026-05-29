@@ -83,3 +83,35 @@ jobs:
           } else {
             throw "No test directory found (expected MSIX.Tests/ or tests/)."
           }
+
+  integration:
+    name: Integration Tests (real MSIX)
+    runs-on: windows-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pester
+        shell: pwsh
+        run: Install-Module Pester -Force -SkipPublisherCheck -MinimumVersion 5.0
+
+      # Build the SDK toolchain (MakeAppx / signtool) via the module's own
+      # installer so the Integration-tagged tests can pack and sign real .msix
+      # fixtures instead of skipping. If acquisition fails (e.g. NuGet/PSGallery
+      # outage) the tests skip loudly rather than failing the build.
+      - name: Provision SDK toolchain
+        shell: pwsh
+        run: |
+          Import-Module ./MSIX.psd1 -Force
+          try { Install-MsixSdkTool | Out-Null }
+          catch { Write-Host "::warning::SDK toolchain provisioning failed: $($_.Exception.Message)" }
+
+      - name: Run integration tests
+        shell: pwsh
+        run: |
+          $cfg = New-PesterConfiguration
+          $cfg.Run.Path        = './MSIX.Tests'
+          $cfg.Run.Exit        = $true
+          $cfg.Filter.Tag      = 'Integration'
+          $cfg.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $cfg

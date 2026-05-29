@@ -362,6 +362,8 @@ function _MsixOfflineEnumValueNames {
     }
     return [string[]]$names.ToArray()
 }
+
+function _MsixOfflineGetValue {
     <#
     .SYNOPSIS
         Reads a named value from the given subkey (relative to the hive root or

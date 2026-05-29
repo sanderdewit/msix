@@ -353,10 +353,19 @@ function _MsixOfflineEnumValueNames {
         $cName  = [uint32]16383
         $type   = [uint32]0
         $cbData = [uint32]0
-        # Names only: pass $null data buffer; ERROR_MORE_DATA (234) is fine since
-        # we don't read the data here.
+        # Probe with a null data buffer to learn the data size. A value that has
+        # data returns ERROR_MORE_DATA (234) and does NOT reliably populate the
+        # name buffer in that case, so re-call with a real data buffer to read
+        # the name. Enumeration ends with ERROR_NO_MORE_ITEMS (259) -> break.
         $rc = [MsixOffReg]::OREnumValue($Key, $i, $sb, [ref]$cName, [ref]$type, $null, [ref]$cbData)
         if ($rc -ne 0 -and $rc -ne 234) { break }
+        if ($rc -eq 234) {
+            $sb      = [System.Text.StringBuilder]::new(16383)
+            $cName   = [uint32]16383
+            $dataBuf = [byte[]]::new([int]$cbData)
+            $rc = [MsixOffReg]::OREnumValue($Key, $i, $sb, [ref]$cName, [ref]$type, $dataBuf, [ref]$cbData)
+            if ($rc -ne 0) { break }
+        }
         $names.Add($sb.ToString())
         $i++
     }

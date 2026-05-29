@@ -22,6 +22,42 @@ function _MsixEscapeSingleQuote {
 }
 
 
+function _MsixResolveScanWorkspace {
+    <#
+    PERFORMANCE (#58): the read-only scanners used to each unpack the whole
+    package independently, so a single Get-MsixHeuristicFinding / static-analysis
+    run unpacked the package ~14 times. This helper lets a scanner accept a
+    pre-unpacked workspace from its caller and skip its own unpack.
+
+    Returns a descriptor:
+      @{ Path = <workspace dir>; Owned = $true|$false }
+    - When -WorkspacePath is supplied: returns it with Owned=$false (the caller
+      unpacked it and is responsible for cleanup).
+    - Otherwise: unpacks $PackagePath into a fresh workspace and returns it with
+      Owned=$true (the scanner must Remove-Item it in its finally).
+
+    The scanner pattern becomes:
+      $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'unin'
+      try { ... scan $ws.Path ... } finally { if ($ws.Owned) { Remove-Item ... } }
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [AllowNull()][AllowEmptyString()][string]$WorkspacePath,
+        [Parameter(Mandatory)][string]$Label
+    )
+    if ($WorkspacePath) {
+        return @{ Path = $WorkspacePath; Owned = $false }
+    }
+    $toolsRoot = Get-MsixToolsRoot
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
+    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-$Label"
+    $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+    Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
+    return @{ Path = $workspace; Owned = $true }
+}
+
+
 # ---------------------------------------------------------------------------
 # Uninstaller / updater / desktop-shortcut scanners
 # ---------------------------------------------------------------------------
@@ -54,7 +90,10 @@ function Get-MsixUninstallerCandidate {
         [pscustomobject] one per match: Name, Path (package-relative), SizeBytes.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$PackagePath)
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [string]$WorkspacePath
+    )
 
     $patterns = @(
         '^uninst.*\.exe$', '^unins.*\.exe$',
@@ -63,13 +102,9 @@ function Get-MsixUninstallerCandidate {
         '^Setup\.msi$', '^uninstall\.exe$',
         '^uninstaller.*\.exe$'
     )
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-unin"
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'unin'
+    $workspace = $ws.Path
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
-
         Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object {
                 $name = $_.Name
@@ -83,7 +118,7 @@ function Get-MsixUninstallerCandidate {
                 }
             }
     } finally {
-        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 
@@ -124,7 +159,10 @@ function Get-MsixUpdaterCandidate {
         ('Binary' or 'ScheduledTask'), Reason.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$PackagePath)
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [string]$WorkspacePath
+    )
 
     $patterns = @(
         '^.*updater?\.exe$',
@@ -140,13 +178,9 @@ function Get-MsixUpdaterCandidate {
     )
     $excludePatterns = @('^psf', '^msvc', '^vcruntime', '^api-ms-win-', '^msix')
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-upd"
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'upd'
+    $workspace = $ws.Path
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
-
         Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
             ForEach-Object {
                 $leaf = $_.Name
@@ -188,7 +222,7 @@ function Get-MsixUpdaterCandidate {
                 }
             }
     } finally {
-        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 
@@ -226,16 +260,14 @@ function Get-MsixUninstallRegistryEntry {
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
-    param([Parameter(Mandatory)][string]$PackagePath)
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [string]$WorkspacePath
+    )
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-uninreg"
-
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'uninreg'
+    $workspace = $ws.Path
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
-
         $datPath = Join-Path -Path $workspace -ChildPath 'Registry.dat'
         if (-not (Test-Path -LiteralPath $datPath)) {
             Write-MsixLog -Level Info -Message 'No Registry.dat in package.'
@@ -271,7 +303,7 @@ function Get-MsixUninstallRegistryEntry {
             _MsixCloseOfflineHive -Hive $hive
         }
     } finally {
-        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 
@@ -312,15 +344,14 @@ function Get-MsixRunKeyEntry {
         value name = autostart entry), and Command (the value data).
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$PackagePath)
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [string]$WorkspacePath
+    )
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-runkeys"
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'runkeys'
+    $workspace = $ws.Path
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
-
         # MSIX packages ship Registry.dat (HKLM) + User.dat (HKCU) for the
         # virtual hive. The branch prefix differs: Registry.dat carries the
         # REGISTRY\MACHINE root, User.dat is rooted at the user hive directly.
@@ -365,7 +396,7 @@ function Get-MsixRunKeyEntry {
         }
         return $hits.ToArray() | Sort-Object Hive,Match -Unique
     } finally {
-        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 #endregion
@@ -485,15 +516,14 @@ function Get-MsixShellContextMenuEntry {
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
-    param([Parameter(Mandatory)][string]$PackagePath)
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [string]$WorkspacePath
+    )
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-shellctx"
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'shellctx'
+    $workspace = $ws.Path
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
-
         $datPath = Join-Path -Path $workspace -ChildPath 'Registry.dat'
         if (-not (Test-Path -LiteralPath $datPath)) { return @() }
 
@@ -599,7 +629,7 @@ function Get-MsixShellContextMenuEntry {
             if (-not $seen[$key]) { $seen[$key] = $true; $true } else { $false }
         })
     } finally {
-        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 #endregion
@@ -642,15 +672,14 @@ function Get-MsixComServerEntry {
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
-    param([Parameter(Mandatory)][string]$PackagePath)
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [string]$WorkspacePath
+    )
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-comsrv"
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'comsrv'
+    $workspace = $ws.Path
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
-
         $datPath = Join-Path -Path $workspace -ChildPath 'Registry.dat'
         if (-not (Test-Path -LiteralPath $datPath)) { return @() }
 
@@ -711,7 +740,7 @@ function Get-MsixComServerEntry {
             if (-not $seen[$key]) { $seen[$key] = $true; $true } else { $false }
         })
     } finally {
-        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 #endregion
@@ -746,15 +775,14 @@ function Get-MsixAliasCandidate {
         AlreadyHasAlias.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$PackagePath)
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [string]$WorkspacePath
+    )
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-alias"
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'alias'
+    $workspace = $ws.Path
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
-
         [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
         $apps          = @($manifest.Package.Applications.Application)
 
@@ -782,7 +810,7 @@ function Get-MsixAliasCandidate {
             }
         }
     } finally {
-        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 #endregion
@@ -800,8 +828,18 @@ function Get-MsixHeuristicFinding {
 
     $out = [System.Collections.Generic.List[object]]::new()
 
+    # PERFORMANCE (#58): unpack the package ONCE here and hand the shared
+    # workspace to every read-only scanner via -WorkspacePath, instead of each
+    # scanner unpacking independently (~14 unpacks per analysis run before this).
+    $toolsRoot = Get-MsixToolsRoot
+    $fileinfo  = Get-Item -LiteralPath $PackagePath
+    $shared    = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-scan"
+    try {
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $shared, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
+
     # Uninstaller artefacts
-    foreach ($u in Get-MsixUninstallerCandidate -PackagePath $PackagePath) {
+    foreach ($u in Get-MsixUninstallerCandidate -PackagePath $PackagePath -WorkspacePath $shared) {
         $out.Add([pscustomobject]@{
             Severity = 'Warning'
             Category = 'UninstallerArtifact'
@@ -814,7 +852,7 @@ function Get-MsixHeuristicFinding {
 
     # Auto-updater artefacts (binaries + scheduled-task XMLs)
     try {
-        foreach ($u in Get-MsixUpdaterCandidate -PackagePath $PackagePath) {
+        foreach ($u in Get-MsixUpdaterCandidate -PackagePath $PackagePath -WorkspacePath $shared) {
             $out.Add([pscustomobject]@{
                 Severity = 'Info'
                 Category = 'UpdaterArtifact'
@@ -831,7 +869,7 @@ function Get-MsixHeuristicFinding {
     # older fleets can opt into PSF FileRedirection via -LegacyPluginFix on
     # Invoke-MsixAutoFixFromAnalysis.
     try {
-        foreach ($p in Get-MsixPluginExtensionPoint -PackagePath $PackagePath) {
+        foreach ($p in Get-MsixPluginExtensionPoint -PackagePath $PackagePath -WorkspacePath $shared) {
             $out.Add([pscustomobject]@{
                 Severity = 'Info'
                 Category = 'PluginDirectory'
@@ -844,7 +882,7 @@ function Get-MsixHeuristicFinding {
     } catch { Write-MsixLog -Level Debug -Message "Plugin extension-point heuristic skipped: $_" }
 
     # Run keys
-    foreach ($r in Get-MsixRunKeyEntry -PackagePath $PackagePath) {
+    foreach ($r in Get-MsixRunKeyEntry -PackagePath $PackagePath -WorkspacePath $shared) {
         $out.Add([pscustomobject]@{
             Severity = 'Info'
             Category = 'RunKey'
@@ -856,7 +894,7 @@ function Get-MsixHeuristicFinding {
     }
 
     # Alias suggestions
-    foreach ($a in Get-MsixAliasCandidate -PackagePath $PackagePath) {
+    foreach ($a in Get-MsixAliasCandidate -PackagePath $PackagePath -WorkspacePath $shared) {
         if ($a.AlreadyHasAlias) { continue }
         $out.Add([pscustomobject]@{
             Severity = 'Info'
@@ -870,7 +908,7 @@ function Get-MsixHeuristicFinding {
 
     # VC runtime missing
     try {
-        $vc = Get-MsixVcRuntimeReference -PackagePath $PackagePath
+        $vc = Get-MsixVcRuntimeReference -PackagePath $PackagePath -WorkspacePath $shared
         if ($vc.Missing) {
             $out.Add([pscustomobject]@{
                 Severity = 'Warning'
@@ -885,7 +923,7 @@ function Get-MsixHeuristicFinding {
 
     # ── Fonts inside the package (suggest uap4:SharedFonts) ────────────────
     try {
-        $fonts = Get-MsixFontCandidate -PackagePath $PackagePath
+        $fonts = Get-MsixFontCandidate -PackagePath $PackagePath -WorkspacePath $shared
         if ($fonts) {
             $out.Add([pscustomobject]@{
                 Severity = 'Info'
@@ -900,7 +938,7 @@ function Get-MsixHeuristicFinding {
 
     # ── Desktop shortcuts inside the package (suggest removal) ──────────────
     try {
-        $sc = Get-MsixDesktopShortcutCandidate -PackagePath $PackagePath
+        $sc = Get-MsixDesktopShortcutCandidate -PackagePath $PackagePath -WorkspacePath $shared
         if ($sc) {
             $out.Add([pscustomobject]@{
                 Severity = 'Warning'
@@ -915,7 +953,7 @@ function Get-MsixHeuristicFinding {
 
     # ── Capability hints from PE imports (suggest Add-MsixCapability) ───────
     try {
-        $caps = Get-MsixCapabilityHint -PackagePath $PackagePath
+        $caps = Get-MsixCapabilityHint -PackagePath $PackagePath -WorkspacePath $shared
         if ($caps) {
             $out.Add([pscustomobject]@{
                 Severity = 'Info'
@@ -930,7 +968,7 @@ function Get-MsixHeuristicFinding {
 
     # ── Uninstall registry leftovers ────────────────────────────────────────
     try {
-        $uninst = Get-MsixUninstallRegistryEntry -PackagePath $PackagePath
+        $uninst = Get-MsixUninstallRegistryEntry -PackagePath $PackagePath -WorkspacePath $shared
         if ($uninst) {
             $out.Add([pscustomobject]@{
                 Severity = 'Warning'
@@ -945,7 +983,7 @@ function Get-MsixHeuristicFinding {
 
     # ── Shell context-menu entries invisible outside the MSIX container ───────
     try {
-        $shellMenus    = Get-MsixShellContextMenuEntry -PackagePath $PackagePath
+        $shellMenus    = Get-MsixShellContextMenuEntry -PackagePath $PackagePath -WorkspacePath $shared
         $verbEntries   = @($shellMenus | Where-Object Type -eq 'ShellVerb')
         $shellextEntries = @($shellMenus | Where-Object Type -eq 'ShellExt')
 
@@ -986,7 +1024,7 @@ function Get-MsixHeuristicFinding {
 
     # ── COM server registrations in Registry.dat ──────────────────────────────
     try {
-        $comEntries = Get-MsixComServerEntry -PackagePath $PackagePath
+        $comEntries = Get-MsixComServerEntry -PackagePath $PackagePath -WorkspacePath $shared
         # Only surface InProc servers with a resolvable VFS DLL (package-bundled);
         # LocalServer and Unknown-type entries can't be auto-fixed and produce noise.
         $inprocPkg  = @($comEntries | Where-Object { $_.ServerType -eq 'InProc' -and $_.VfsDllPath })
@@ -1007,7 +1045,7 @@ function Get-MsixHeuristicFinding {
 
     # ── Nested installer packages inside the package ─────────────────────────
     try {
-        $nested = @(Get-MsixNestedPackageCandidate -PackagePath $PackagePath)
+        $nested = @(Get-MsixNestedPackageCandidate -PackagePath $PackagePath -WorkspacePath $shared)
         if ($nested) {
             $out.Add([pscustomobject]@{
                 Severity       = 'Warning'
@@ -1023,14 +1061,11 @@ function Get-MsixHeuristicFinding {
     }
 
     # ── Manifest-level findings (alternatives to PSF) ───────────────────────
+    # Reuses the shared workspace unpacked above (no separate unpack).
     try {
-        $toolsRoot = Get-MsixToolsRoot
-        $fileinfo  = Get-Item -LiteralPath $PackagePath
-        $tmp = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-mfheur"
-        try {
-            $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $tmp, '/o')
-            if ($r.ExitCode -eq 0) {
-                [xml]$mf = Get-MsixManifest -Path "$tmp\AppxManifest.xml"
+        $manifestFile = Join-Path -Path $shared -ChildPath 'AppxManifest.xml'
+        if (Test-Path -LiteralPath $manifestFile) {
+                [xml]$mf = Get-MsixManifest -Path $manifestFile
                 $exts    = @($mf.Package.Extensions.Extension)
                 $appExts = @($mf.Package.Applications.Application.Extensions.Extension)
 
@@ -1138,12 +1173,14 @@ function Get-MsixHeuristicFinding {
                         $comFinding[0].ComEntries = $stillMissing
                     }
                 }
-            }
-        } finally {
-            Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
     } catch {
         Write-MsixLog -Level Debug -Message "Manifest-fix heuristic failed: $_"
+    }
+
+    } finally {
+        # The single shared workspace is always cleaned up here.
+        Remove-Item -LiteralPath $shared -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     return $out

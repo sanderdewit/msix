@@ -5,7 +5,21 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
-## Unreleased - Security review fixes (#49, #50, #51, #52, #53, #54, #56) + integration tests (#61)
+## Unreleased - Security review fixes (#49, #50, #51, #52, #53, #54, #56) + integration tests (#61) + perf (#58)
+
+### Performance
+
+- **#58 — unpack the package once per analysis run.** Each read-only scanner
+  used to unpack the whole package independently, so a single
+  `Get-MsixHeuristicFinding` unpacked it ~14 times (and `Get-MsixStaticAnalysis`
+  ~15). All 14 scanners (`Get-Msix*Candidate` / `*Entry` / `*Hint` /
+  `Get-MsixVcRuntimeReference`) now accept an optional `-WorkspacePath`; when
+  supplied they reuse a pre-unpacked directory and skip their own unpack/cleanup
+  (direct callers are unaffected — they still unpack on demand). New
+  `_MsixResolveScanWorkspace` helper. `Get-MsixHeuristicFinding` unpacks once
+  and threads the shared workspace to every scanner, so a full sweep now unpacks
+  exactly once (a `Get-MsixStaticAnalysis` run drops from ~15 to 2). A mock-based
+  unit test asserts the single-unpack invariant.
 
 ### Testing
 

@@ -37,14 +37,14 @@ function Get-MsixFontCandidate {
         [pscustomobject] one per font: Name, Path (package-relative), SizeBytes
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$PackagePath)
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [string]$WorkspacePath
+    )
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-fonts"
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'fonts'
+    $workspace = $ws.Path
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Extension -in '.ttf','.otf','.ttc' } |
@@ -56,7 +56,7 @@ function Get-MsixFontCandidate {
                 }
             }
     } finally {
-        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 
@@ -90,14 +90,14 @@ function Get-MsixDesktopShortcutCandidate {
         [pscustomobject] one per shortcut: Name, Path (package-relative), SizeBytes
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$PackagePath)
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [string]$WorkspacePath
+    )
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-shortcuts"
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'shortcuts'
+    $workspace = $ws.Path
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         $patterns = @('VFS\\Common Desktop','VFS\\User Desktop','VFS\\Desktop')
         Get-ChildItem -LiteralPath $workspace -Recurse -File -Filter *.lnk -ErrorAction SilentlyContinue |
@@ -113,7 +113,7 @@ function Get-MsixDesktopShortcutCandidate {
                 }
             }
     } finally {
-        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 
@@ -247,14 +247,14 @@ function Get-MsixCapabilityHint {
         [string[]] capability names (sorted, unique).
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$PackagePath)
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [string]$WorkspacePath
+    )
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-caphints"
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'caphints'
+    $workspace = $ws.Path
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         $hits = [System.Collections.Generic.HashSet[string]]::new()
         $allDlls = $script:DllToCapability.Keys
@@ -275,7 +275,7 @@ function Get-MsixCapabilityHint {
             }
         return @($hits) | Sort-Object -Unique
     } finally {
-        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 #endregion
@@ -304,14 +304,14 @@ function Get-MsixNestedPackageCandidate {
         [pscustomobject] one per nested package: Name, Path (package-relative), SizeBytes
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$PackagePath)
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [string]$WorkspacePath
+    )
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-nested"
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'nested'
+    $workspace = $ws.Path
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Extension -in '.msix','.appx','.msixbundle','.appxbundle' } |
@@ -323,7 +323,7 @@ function Get-MsixNestedPackageCandidate {
                 }
             }
     } finally {
-        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 #endregion
@@ -405,15 +405,13 @@ function Get-MsixPluginExtensionPoint {
     [OutputType([object[]])]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
-        [int]$MinFiles = 1
+        [int]$MinFiles = 1,
+        [string]$WorkspacePath
     )
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-plugins"
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'plugins'
+    $workspace = $ws.Path
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         # Anchor the scan under the first Application's exe directory if we
         # can resolve it. Without that anchor we'd also flag e.g.
@@ -469,7 +467,7 @@ function Get-MsixPluginExtensionPoint {
                 }
         }
     } finally {
-        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 

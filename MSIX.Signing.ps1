@@ -26,8 +26,11 @@
                                        production.
 
           AzureSignTool            — AzureSignTool.exe targeting an Azure Key
-                                       Vault HSM. Service-principal credentials
-                                       are decrypted only at the CLI boundary.
+                                       Vault HSM. The module passes no credential
+                                       material; AzureSignTool authenticates via
+                                       its DefaultAzureCredential chain (managed
+                                       identity, az login, VS sign-in, or AZURE_*
+                                       env vars the consumer set).
 
         All backends timestamp with SHA-256.
 
@@ -64,16 +67,23 @@
         (AzureSignTool only.) Certificate name inside the Key Vault.
 
     .PARAMETER KeyVaultTenantId
-        (AzureSignTool only, optional.) Azure AD tenant id for SP auth. When
-        omitted, AzureSignTool falls back to managed identity / interactive.
+        (AzureSignTool only, optional.) Azure AD tenant id — a non-sensitive
+        scoping hint passed through to AzureSignTool.
 
     .PARAMETER KeyVaultClientId
-        (AzureSignTool only, optional.) Service-principal client id.
+        (AzureSignTool only, optional.) Client id — a non-sensitive scoping
+        hint passed through to AzureSignTool.
 
-    .PARAMETER KeyVaultClientSecret
-        (AzureSignTool only, optional.) SecureString service-principal
-        secret. Decrypted via BSTR/ZeroFreeBSTR only at the signtool CLI
-        boundary.
+        NOTE: this module never handles a raw client secret. AzureSignTool
+        authenticates via its DefaultAzureCredential chain — managed identity,
+        an existing `az login`, Visual Studio / VS Code sign-in, or AZURE_*
+        environment variables that YOU (the consumer) have already set. The
+        module deliberately does not put a secret on the command line, nor set
+        any AZURE_* environment variable, because it must not tamper with the
+        credential context of the session it runs in. For unattended /
+        service-principal signing, set AZURE_TENANT_ID / AZURE_CLIENT_ID /
+        AZURE_CLIENT_SECRET in your environment before calling, or use a
+        managed identity.
 
     .PARAMETER TimestampUrl
         RFC 3161 timestamp server URL. Defaults to DigiCert.
@@ -143,8 +153,6 @@
         [string]$KeyVaultTenantId,
         [Parameter(ParameterSetName = 'AzureSignTool')]
         [string]$KeyVaultClientId,
-        [Parameter(ParameterSetName = 'AzureSignTool')]
-        [SecureString]$KeyVaultClientSecret,
 
         [string]$TimestampUrl = 'http://timestamp.digicert.com'
     )
@@ -271,8 +279,19 @@
 
             Write-MsixLog -Level Info -Message "AzureSignTool vault=$KeyVaultUrl cert=$KeyVaultCertificate"
 
-            # Build base arguments — omit auth-mode args when not provided so
-            # AzureSignTool falls back to managed identity / interactive auth.
+            # SECURITY / library hygiene: this module runs in arbitrary consumer
+            # sessions whose Azure auth context we do not own. We therefore pass
+            # NO credential material — no secret on the command line (WMI-readable)
+            # and no AZURE_* environment variables (which would clobber the
+            # consumer's own credential context). AzureSignTool resolves auth via
+            # its DefaultAzureCredential chain: managed identity, an existing
+            # `az login`, Visual Studio / VS Code sign-in, or AZURE_* env vars the
+            # CONSUMER has already set. -KeyVaultTenantId / -KeyVaultClientId are
+            # non-sensitive scoping hints and are passed as args when supplied.
+            # We deliberately do NOT pass --azure-key-vault-managed-identity:
+            # that flag forces MI-only and would defeat the interactive / az-login
+            # paths. Passing no auth flag lets AzureSignTool use its full
+            # DefaultAzureCredential chain (MI, az login, VS sign-in, consumer env).
             $azArgsBase = @(
                 'sign',
                 '--timestamp-rfc3161',  $TimestampUrl,
@@ -281,35 +300,17 @@
                 '--azure-key-vault-url',         $KeyVaultUrl,
                 '--azure-key-vault-certificate', $KeyVaultCertificate
             )
-            if ($KeyVaultTenantId) {
-                $azArgsBase += @('--azure-key-vault-tenant-id', $KeyVaultTenantId)
-            }
-            if ($KeyVaultClientId) {
-                $azArgsBase += @('--azure-key-vault-client-id', $KeyVaultClientId)
-            }
+            if ($KeyVaultTenantId) { $azArgsBase += @('--azure-key-vault-tenant-id', $KeyVaultTenantId) }
+            if ($KeyVaultClientId) { $azArgsBase += @('--azure-key-vault-client-id', $KeyVaultClientId) }
+            $azArgsBase += $fileinfo.FullName
 
-            $bstr = [IntPtr]::Zero
-            try {
-                if ($KeyVaultClientSecret) {
-                    # Decrypt SecureString only here, append immediately.
-                    $bstr  = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($KeyVaultClientSecret)
-                    $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-                    $azArgsBase += @('--azure-key-vault-client-secret', $plain)
-                }
-                $azArgsBase += $fileinfo.FullName
-
-                if ($PSCmdlet.ShouldProcess($fileinfo.FullName, 'Sign with AzureSignTool (Key Vault)')) {
-                    $r = Invoke-MsixProcess -FilePath $azst -ArgumentList $azArgsBase
-                    if ($r.ExitCode -ne 0) {
-                        $detail = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
-                        throw "AzureSignTool failed (exit $($r.ExitCode)): $detail"
-                    } else {
-                        Write-MsixLog -Level Info -Message "Signed successfully via AzureSignTool: $($fileinfo.Name)"
-                    }
-                }
-            } finally {
-                if ($bstr -ne [IntPtr]::Zero) {
-                    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+            if ($PSCmdlet.ShouldProcess($fileinfo.FullName, 'Sign with AzureSignTool (Key Vault)')) {
+                $r = Invoke-MsixProcess -FilePath $azst -ArgumentList $azArgsBase
+                if ($r.ExitCode -ne 0) {
+                    $detail = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
+                    throw "AzureSignTool failed (exit $($r.ExitCode)): $detail"
+                } else {
+                    Write-MsixLog -Level Info -Message "Signed successfully via AzureSignTool: $($fileinfo.Name)"
                 }
             }
         }

@@ -143,6 +143,47 @@ public static class MsixOffReg {
 "@
 }
 
+function _MsixAssertValidHiveFile {
+    <#
+    .SYNOPSIS
+        Validates that a file is a plausible registry hive before it is handed
+        to native offreg.dll for parsing.
+
+    .DESCRIPTION
+        Registry.dat comes from inside an untrusted MSIX, and offreg.dll parses
+        the binary structure in native code. This is defence-in-depth: reject
+        anything that is not a registry hive (missing the 'regf' signature) or
+        that exceeds a sane size cap, with a clear error, rather than passing
+        arbitrary bytes to the native parser.
+
+    .PARAMETER Path
+        Absolute path to the candidate hive file.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    $fileInfo = Get-Item -LiteralPath $Path -ErrorAction Stop
+    $maxSize  = 512MB
+    if ($fileInfo.Length -gt $maxSize) {
+        throw "Offline hive '$Path' is too large to process safely ($([math]::Round($fileInfo.Length / 1MB, 1)) MB; limit $([int]($maxSize / 1MB)) MB)."
+    }
+    if ($fileInfo.Length -lt 4) {
+        throw "Offline hive '$Path' is too small to be a valid registry hive ($($fileInfo.Length) bytes)."
+    }
+
+    $magic  = [byte[]]::new(4)
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $null = $stream.Read($magic, 0, 4)
+    } finally {
+        $stream.Dispose()
+    }
+    # Registry hive files begin with the ASCII signature 'regf' (0x72 65 67 66).
+    if ($magic[0] -ne 0x72 -or $magic[1] -ne 0x65 -or $magic[2] -ne 0x67 -or $magic[3] -ne 0x66) {
+        throw "Offline hive '$Path' is not a valid registry hive (missing 'regf' signature)."
+    }
+}
+
 function _MsixOpenOfflineHive {
     <#
     .SYNOPSIS
@@ -171,6 +212,9 @@ function _MsixOpenOfflineHive {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Offline hive not found: $Path"
     }
+    # SECURITY: validate the file is a plausible 'regf' hive within a sane size
+    # cap before offreg.dll parses it (the file comes from an untrusted package).
+    _MsixAssertValidHiveFile -Path $Path
     $fh = [MsixOffReg]::CreateFileW(
         $Path,
         [MsixOffReg]::GENERIC_READ,
@@ -200,6 +244,42 @@ function _MsixCloseOfflineHive {
     param([IntPtr]$Hive)
     if ($Hive -ne [IntPtr]::Zero) {
         $null = [MsixOffReg]::ORCloseHive($Hive)
+    }
+}
+
+function _MsixWithOfflineHive {
+    <#
+    .SYNOPSIS
+        Opens an offline hive, runs a scriptblock with the root handle, and
+        guarantees the hive is unloaded in a finally.
+
+    .DESCRIPTION
+        The safe alternative to pairing _MsixOpenOfflineHive /
+        _MsixCloseOfflineHive by hand: the hive is always released even if the
+        scriptblock throws. The scriptblock receives the hive root handle
+        ([IntPtr]) as its only argument; its output is returned to the caller.
+
+    .PARAMETER Path
+        Absolute path to the hive file.
+
+    .PARAMETER ScriptBlock
+        Receives the hive root handle and returns whatever the caller needs.
+
+    .EXAMPLE
+        $names = _MsixWithOfflineHive -Path $datPath -ScriptBlock {
+            param($hive) _MsixOfflineEnumSubKeys -Key $hive
+        }
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][scriptblock]$ScriptBlock
+    )
+    $hive = _MsixOpenOfflineHive -Path $Path
+    try {
+        & $ScriptBlock $hive
+    } finally {
+        _MsixCloseOfflineHive -Hive $hive
     }
 }
 

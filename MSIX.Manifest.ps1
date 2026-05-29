@@ -637,12 +637,31 @@ function Set-MsixManifestMaxVersionTested {
         [int]$MinBuild = 19041
     )
 
-    $tdf = $Manifest.Package.Dependencies.TargetDeviceFamily
-    if (-not $tdf) { return }
+    $dep = $Manifest.Package.Dependencies
+    if (-not $dep) { return }
 
-    $parts = $tdf.MaxVersionTested -split '\.'
-    if ($parts.Count -ge 3 -and [int]$parts[2] -lt $MinBuild) {
-        $tdf.MaxVersionTested = "$($parts[0]).$($parts[1]).$MinBuild.0"
-        Write-MsixLog -Level Info -Message "MaxVersionTested updated to $($tdf.MaxVersionTested)"
+    # A manifest may declare more than one TargetDeviceFamily (e.g.
+    # Windows.Desktop + Windows.Universal). The XML adapter returns a single
+    # node or an array depending on count, so normalise with @() and bump every
+    # one whose build floor is below $MinBuild. Versions with fewer than three
+    # components (e.g. '10.0') are treated as build 0 and bumped, rather than
+    # silently skipped.
+    foreach ($t in @($dep.TargetDeviceFamily)) {
+        if (-not $t) { continue }
+        $current = $t.GetAttribute('MaxVersionTested')
+        $parts   = if ($current) { $current -split '\.' } else { @() }
+
+        $nums = @(0, 0, 0, 0)
+        for ($i = 0; $i -lt 4 -and $i -lt $parts.Count; $i++) {
+            $parsed = 0
+            if ([int]::TryParse($parts[$i], [ref]$parsed)) { $nums[$i] = $parsed }
+        }
+
+        if ($nums[2] -lt $MinBuild) {
+            $major = if ($nums[0] -gt 0) { $nums[0] } else { 10 }
+            $new   = "$major.$($nums[1]).$MinBuild.0"
+            $t.SetAttribute('MaxVersionTested', $new)
+            Write-MsixLog -Level Info -Message "MaxVersionTested updated to $new (was '$current') on TargetDeviceFamily '$($t.GetAttribute('Name'))'"
+        }
     }
 }

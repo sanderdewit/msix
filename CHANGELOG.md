@@ -5,7 +5,20 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
-## Unreleased - Security review fixes (#49, #50, #51, #52, #53, #54, #56)
+## Unreleased - Security review fixes (#49, #50, #51, #52, #53, #54, #56) + integration tests (#61)
+
+### Testing
+
+- **#61 — real-MSIX integration tests.** New `MSIX.Tests/Build-MsixTestFixture.ps1`
+  synthesizes a genuine `.msix` at test time (MakeAppx via `Get-MsixToolsRoot`)
+  from a declarative spec — multi-TDF manifests, extra VFS files, optional
+  self-sign — so integration tests exercise the real unpack/scan/repack paths
+  instead of mocks. `MSIX.Integration.Tests.ps1` (tag `Integration`) covers a
+  pack→read-manifest round-trip, the multi-TDF `MaxVersionTested` bump (#57) on
+  a real package, and a heuristic-scan smoke test (a guard point for the #58
+  unpack-once refactor). A dedicated CI `integration` job provisions the SDK
+  toolchain and runs the tag; tests skip loudly when the toolchain is absent
+  (e.g. non-Windows dev boxes) rather than giving false confidence.
 
 ### Security / robustness fixes (post-review)
 

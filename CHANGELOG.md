@@ -5,10 +5,21 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
-## Unreleased - Security review fixes (#49, #50, #51, #52, #53, #56)
+## Unreleased - Security review fixes (#49, #50, #51, #52, #53, #54, #56)
 
 ### Security / robustness fixes (post-review)
 
+- **#54 — Authenticode-verify resolved SDK tools (binary-planting).**
+  `Get-MsixToolsRoot` discovers `signtool.exe` / `MakeAppx.exe` by env override,
+  parent-walk, or Windows SDK glob and then executes them (signtool signs the
+  output package), but only the module's own downloader verified its binaries.
+  Every resolved tools root — however found, including an explicit
+  `MSIX_TOOLS_PATH` / `Set-MsixToolsRoot` — is now Authenticode-verified
+  fail-closed against the trusted-publisher allowlist before it is cached or
+  used. An `MSIX_SKIP_TOOL_VERIFICATION` env var bypasses the check (with a loud
+  warning) for offline / air-gapped agents where CRL/OCSP chain checks can't
+  complete. msixmgr is unaffected — it resolves via its own path and keeps its
+  documented unsigned/preview exception (microsoft/msix-packaging#710).
 - **#53 — AzureSignTool no longer handles a raw client secret.** `Invoke-MsixSigning
   -Signer AzureSignTool` previously accepted `-KeyVaultClientSecret` and passed
   it as `--azure-key-vault-client-secret` on the process command line

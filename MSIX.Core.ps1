@@ -1,6 +1,58 @@
 ﻿# Resolved once per module load; overridable via $env:MSIX_TOOLS_PATH
 $script:ToolsRoot = $null
 
+function _MsixSetVerifiedToolsRoot {
+    <#
+    .SYNOPSIS
+        Authenticode-verifies the SDK tools under a resolved root, then caches
+        and returns it.
+
+    .DESCRIPTION
+        SECURITY (#54): Get-MsixToolsRoot discovers signtool.exe / MakeAppx.exe
+        by env override, parent-walk, or SDK glob and the module then EXECUTES
+        them — signtool signs the output package, so a planted binary is a
+        high-value target. Every resolved root is therefore verified (fail-closed)
+        against the trusted-publisher allowlist before it is trusted, regardless
+        of how it was found.
+
+        Verification can be disabled by setting the MSIX_SKIP_TOOL_VERIFICATION
+        environment variable — intended ONLY for offline / air-gapped build
+        agents where CRL/OCSP chain checks cannot complete for a legitimately
+        Microsoft-signed binary. A loud warning is logged when it is bypassed.
+
+        Note: msixmgr is NOT resolved through this path (it lives under its own
+        folder via MSIX.AppAttach.ps1) and keeps its documented unsigned/preview
+        exception (microsoft/msix-packaging#710).
+
+    .PARAMETER Root
+        The candidate tools root. signtool.exe / MakeAppx.exe are looked for
+        both directly under it and under a Tools\ subfolder (the two layouts
+        Get-MsixToolsRoot produces).
+    #>
+    [OutputType([string])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
+    param([Parameter(Mandatory)][string]$Root)
+
+    if ($env:MSIX_SKIP_TOOL_VERIFICATION) {
+        Write-MsixLog -Level Warning -Message "Tool Authenticode verification BYPASSED (MSIX_SKIP_TOOL_VERIFICATION is set). SDK tools under '$Root' are trusted without a signature check. Unset this variable to restore fail-closed verification."
+    } elseif (Get-Command -Name _MsixVerifyAuthenticode -ErrorAction SilentlyContinue) {
+        foreach ($tool in @('signtool.exe', 'MakeAppx.exe')) {
+            $candidate = @(
+                (Join-Path -Path $Root -ChildPath "Tools\$tool"),
+                (Join-Path -Path $Root -ChildPath $tool)
+            ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+            if ($candidate) {
+                # Throws (fail-closed) if the binary is unsigned, untrusted, or
+                # its chain cannot be validated.
+                $null = _MsixVerifyAuthenticode -Path $candidate -ToolName $tool
+            }
+        }
+    }
+
+    $script:ToolsRoot = $Root
+    return $Root
+}
+
 function Get-MsixToolsRoot {
     <#
     .SYNOPSIS
@@ -50,14 +102,12 @@ function Get-MsixToolsRoot {
 
     # 1) Explicit env override
     if ($env:MSIX_TOOLS_PATH -and (Test-Path "$env:MSIX_TOOLS_PATH\Tools\MakeAppx.exe")) {
-        $script:ToolsRoot = $env:MSIX_TOOLS_PATH
-        return $script:ToolsRoot
+        return _MsixSetVerifiedToolsRoot -Root $env:MSIX_TOOLS_PATH
     }
 
     # 2) Tools folder next to this module file (Install-MsixSdkTool default)
     if (Test-Path "$PSScriptRoot\Tools\MakeAppx.exe") {
-        $script:ToolsRoot = $PSScriptRoot
-        return $script:ToolsRoot
+        return _MsixSetVerifiedToolsRoot -Root $PSScriptRoot
     }
 
     # 3) Walk up to four parent levels looking for any sibling that hosts
@@ -73,13 +123,11 @@ function Get-MsixToolsRoot {
                    Sort-Object Name -Descending |
                    Select-Object -First 1
         if ($sibling) {
-            $script:ToolsRoot = $sibling.FullName
-            return $script:ToolsRoot
+            return _MsixSetVerifiedToolsRoot -Root $sibling.FullName
         }
         # Or the ancestor itself
         if (Test-Path "$cursor\Tools\MakeAppx.exe") {
-            $script:ToolsRoot = $cursor
-            return $script:ToolsRoot
+            return _MsixSetVerifiedToolsRoot -Root $cursor
         }
     }
 
@@ -93,12 +141,10 @@ function Get-MsixToolsRoot {
                          Sort-Object Name -Descending |
                          Select-Object -First 1
             if ($candidate) {
-                $script:ToolsRoot = "$($candidate.FullName)\$arch"
-                return $script:ToolsRoot
+                return _MsixSetVerifiedToolsRoot -Root "$($candidate.FullName)\$arch"
             }
             if (Test-Path "$kitBin\$arch\makeappx.exe") {
-                $script:ToolsRoot = "$kitBin\$arch"
-                return $script:ToolsRoot
+                return _MsixSetVerifiedToolsRoot -Root "$kitBin\$arch"
             }
         }
     }
@@ -111,8 +157,7 @@ function Get-MsixToolsRoot {
         Write-MsixLog -Level Info -Message 'No SDK tools found; auto-installing via Install-MsixSdkTool.'
         Install-MsixSdkTool | Out-Null
         if (Test-Path "$PSScriptRoot\Tools\MakeAppx.exe") {
-            $script:ToolsRoot = $PSScriptRoot
-            return $script:ToolsRoot
+            return _MsixSetVerifiedToolsRoot -Root $PSScriptRoot
         }
     }
 
@@ -161,7 +206,9 @@ function Set-MsixToolsRoot {
     if (-not (Test-Path "$Path\Tools\MakeAppx.exe")) {
         throw "MakeAppx.exe not found under '$Path\Tools\'. Verify the path."
     }
-    $script:ToolsRoot = $Path
+    # Authenticode-verify (fail-closed) before pinning — same gate as the
+    # auto-discovery paths (#54).
+    $null = _MsixSetVerifiedToolsRoot -Root $Path
     Write-MsixLog -Level Info -Message "Tools root set to: $Path"
 }
 

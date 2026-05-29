@@ -12,7 +12,7 @@
 "@
     }
 
-    function script:Get-Builds {
+    function script:Get-Build {
         param([xml]$Manifest)
         @($Manifest.Package.Dependencies.TargetDeviceFamily) |
             ForEach-Object { ($_.GetAttribute('MaxVersionTested') -split '\.')[2] }
@@ -30,7 +30,7 @@ Describe 'Set-MsixManifestMaxVersionTested (#57)' -Tag 'Manifest' {
   </Dependencies>
 '@
         Set-MsixManifestMaxVersionTested -Manifest $m -MinBuild 22000
-        ((Get-Builds -Manifest $m) -join ',') | Should -Be '22000,22000'
+        ((Get-Build -Manifest $m) -join ',') | Should -Be '22000,22000'
     }
 
     It 'bumps a version with fewer than three components instead of silently skipping' {
@@ -73,7 +73,7 @@ Describe 'Set-MsixManifestMaxVersionTested (#57)' -Tag 'Manifest' {
   </Dependencies>
 '@
         { Set-MsixManifestMaxVersionTested -Manifest $m -MinBuild 22000 } | Should -Not -Throw
-        ((Get-Builds -Manifest $m) -join ',') | Should -Be '22000'
+        ((Get-Build -Manifest $m) -join ',') | Should -Be '22000'
     }
 
     It 'does not throw when the manifest has no Dependencies element' {

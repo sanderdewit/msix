@@ -335,7 +335,33 @@ function _MsixOfflineEnumSubKeys {
     return [string[]]$names.ToArray()
 }
 
-function _MsixOfflineGetValue {
+function _MsixOfflineEnumValueNames {
+    <#
+    .SYNOPSIS
+        Returns the names (string[]) of all values directly on the given key
+        handle. The default (unnamed) value comes back as an empty string.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param([Parameter(Mandatory)][IntPtr]$Key)
+
+    if ($Key -eq [IntPtr]::Zero) { return [string[]]@() }
+    $names = [System.Collections.Generic.List[string]]::new()
+    $i = [uint32]0
+    while ($true) {
+        $sb     = [System.Text.StringBuilder]::new(16383)   # max value-name length
+        $cName  = [uint32]16383
+        $type   = [uint32]0
+        $cbData = [uint32]0
+        # Names only: pass $null data buffer; ERROR_MORE_DATA (234) is fine since
+        # we don't read the data here.
+        $rc = [MsixOffReg]::OREnumValue($Key, $i, $sb, [ref]$cName, [ref]$type, $null, [ref]$cbData)
+        if ($rc -ne 0 -and $rc -ne 234) { break }
+        $names.Add($sb.ToString())
+        $i++
+    }
+    return [string[]]$names.ToArray()
+}
     <#
     .SYNOPSIS
         Reads a named value from the given subkey (relative to the hive root or

@@ -286,12 +286,18 @@ function Get-MsixRunKeyEntry {
         admins typically remove them or replace with a startScript.
 
     .DESCRIPTION
-        Inspects User.dat and Registry.dat hives shipped in VFS\… for
-        Software\Microsoft\Windows\CurrentVersion\Run\* values via a Unicode
-        string scan (best effort — works without elevation). Feeds the
-        `RunKey` finding in Get-MsixHeuristicFinding, which in turn drives the
-        `ManifestFix:StartupTask` recommendation when the package has no
-        windows.startupTask extension declared.
+        Inspects Registry.dat and User.dat hives shipped in the package by
+        parsing them with offreg.dll (no elevation, no live mount) and
+        enumerating the values under each hive's
+        Software\Microsoft\Windows\CurrentVersion\Run (and the WOW6432Node
+        variant) key. Feeds the `RunKey` finding in Get-MsixHeuristicFinding,
+        which in turn drives the `ManifestFix:StartupTask` recommendation when
+        the package has no windows.startupTask extension declared.
+
+        This replaces the previous raw-string Unicode scan of the whole hive,
+        which was vulnerable to ReDoS / memory blow-up on a hostile hive and
+        produced both false positives (matches in unrelated binary noise) and
+        false negatives (strings not 2-byte aligned).
 
     .PARAMETER PackagePath
         .msix to scan (read-only).
@@ -301,8 +307,9 @@ function Get-MsixRunKeyEntry {
         Get-MsixRunKeyEntry -PackagePath app.msix
 
     .OUTPUTS
-        [pscustomobject[]] each with Hive ('Registry.dat' or 'User.dat') and
-        Match (the matched Run-key path).
+        [pscustomobject[]] each with Hive ('Registry.dat' or 'User.dat'),
+        Match (the logical Run-key path including the value name), Name (the
+        value name = autostart entry), and Command (the value data).
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$PackagePath)
@@ -314,25 +321,49 @@ function Get-MsixRunKeyEntry {
         $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
-        # MSIX packages ship Registry.dat + User.dat for the virtual hive.
-        $hits = @()
+        # MSIX packages ship Registry.dat (HKLM) + User.dat (HKCU) for the
+        # virtual hive. The branch prefix differs: Registry.dat carries the
+        # REGISTRY\MACHINE root, User.dat is rooted at the user hive directly.
+        $hiveBranches = @{
+            'Registry.dat' = @(
+                'REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+                'REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run'
+            )
+            'User.dat' = @(
+                'Software\Microsoft\Windows\CurrentVersion\Run'
+                'Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run'
+            )
+        }
+
+        $hits = [System.Collections.Generic.List[object]]::new()
         foreach ($dat in @('Registry.dat','User.dat')) {
             $datPath = Join-Path -Path $workspace -ChildPath $dat
             if (-not (Test-Path -LiteralPath $datPath)) { continue }
-            # Best-effort string scan — full hive parsing requires reg.exe load.
             try {
-                $bytes = [IO.File]::ReadAllBytes($datPath)
-                $text  = [System.Text.Encoding]::Unicode.GetString($bytes)
-                $m = [regex]::Matches($text, 'Software\\Microsoft\\Windows\\CurrentVersion\\Run[\w\\]*', 'IgnoreCase')
-                foreach ($mm in $m) {
-                    $hits += [pscustomobject]@{
-                        Hive  = $dat
-                        Match = $mm.Value
+                _MsixWithOfflineHive -Path $datPath -ScriptBlock {
+                    param($hive)
+                    foreach ($branch in $hiveBranches[$dat]) {
+                        $runKey = _MsixOfflineOpenKey -Parent $hive -SubKey $branch
+                        if ($runKey -eq [IntPtr]::Zero) { continue }
+                        try {
+                            foreach ($name in (_MsixOfflineEnumValueNames -Key $runKey)) {
+                                if ([string]::IsNullOrEmpty($name)) { continue }  # skip default value
+                                $command = _MsixOfflineGetValue -Parent $hive -SubKey $branch -Name $name
+                                $hits.Add([pscustomobject]@{
+                                    Hive    = $dat
+                                    Match   = "$branch\$name"
+                                    Name    = $name
+                                    Command = $command
+                                })
+                            }
+                        } finally {
+                            _MsixOfflineCloseKey -Key $runKey
+                        }
                     }
                 }
             } catch { Write-MsixLog -Level Debug -Message "Run-key scan failed for $dat`: $_" }
         }
-        return $hits | Sort-Object Hive,Match -Unique
+        return $hits.ToArray() | Sort-Object Hive,Match -Unique
     } finally {
         Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }

@@ -5,7 +5,17 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
-## Unreleased - Security review fixes (#49, #50, #51, #52)
+## Unreleased - Security review fixes (#49, #50, #51, #52, #56)
+
+### Security / robustness fixes (post-review)
+
+- **#56 — Run-key scan hardening.** `Get-MsixRunKeyEntry` previously decoded the
+  entire Registry.dat / User.dat as a UTF-16 string and ran an unbounded regex
+  over it — vulnerable to ReDoS / memory blow-up on a hostile hive, with both
+  false positives (matches in binary noise) and false negatives (non-aligned
+  strings). It now parses the hives with offreg.dll and enumerates the values
+  under `…\CurrentVersion\Run`, returning `Name`/`Command` alongside the
+  existing `Hive`/`Match`. New `_MsixOfflineEnumValueNames` helper.
 
 ### Security fixes (release-blocking)
 

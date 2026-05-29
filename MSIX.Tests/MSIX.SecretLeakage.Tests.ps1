@@ -76,48 +76,49 @@ Describe 'Secret non-leakage' -Tag 'Security' {
         ($warn -join ' ') | Should -Match 'command line'
     }
 
-    It 'AzureSignTool does not place the client secret on the command line (#53)' {
-        $secret = 'Kv-Secret-Should-Not-Leak-987'
-        $secure = ConvertTo-TestSecureString -Value $secret
-        $pkg    = Join-Path -Path $TestDrive -ChildPath 'pkg.msix'
+    It 'Invoke-MsixSigning exposes no raw client-secret parameter for AzureSignTool (#53)' {
+        # The module must never handle a raw Key Vault secret — auth is delegated
+        # to AzureSignTool's DefaultAzureCredential chain.
+        $params = (Get-Command Invoke-MsixSigning).Parameters.Keys
+        $params | Should -Not -Contain 'KeyVaultClientSecret'
+    }
+
+    It 'AzureSignTool passes no credential material and sets no AZURE_* env var (#53)' {
+        $pkg = Join-Path -Path $TestDrive -ChildPath 'pkg.msix'
         Set-Content -LiteralPath $pkg -Value 'stub' -Encoding utf8
 
-        # Capture the args + the env-delivered secret without running AzureSignTool.
-        $script:capturedArgs   = $null
-        $script:capturedEnvSet = $null
+        # Snapshot AZURE_* env so we can prove the module doesn't touch it.
+        $before = @{}
+        foreach ($n in 'AZURE_TENANT_ID','AZURE_CLIENT_ID','AZURE_CLIENT_SECRET') {
+            $before[$n] = [Environment]::GetEnvironmentVariable($n, 'Process')
+        }
+
+        $script:capturedArgs    = $null
+        $script:capturedEnvMid  = $null
         Mock -ModuleName MSIX Get-MsixToolsRoot { 'C:\fake-tools' }
         Mock -ModuleName MSIX Invoke-MsixProcess {
             $script:capturedArgs   = $ArgumentList
-            $script:capturedEnvSet = [Environment]::GetEnvironmentVariable('AZURE_CLIENT_SECRET', 'Process')
+            $script:capturedEnvMid = [Environment]::GetEnvironmentVariable('AZURE_CLIENT_SECRET', 'Process')
             [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
         }
-        # AzureSignTool.exe resolution: pretend it exists on PATH.
         Mock -ModuleName MSIX Get-Command { [pscustomobject]@{ Source = 'C:\fake\AzureSignTool.exe' } } -ParameterFilter { $Name -eq 'AzureSignTool.exe' }
 
         Invoke-MsixSigning -PackagePath $pkg -Signer AzureSignTool `
             -KeyVaultUrl 'https://v.vault.azure.net' -KeyVaultCertificate 'c' `
-            -KeyVaultTenantId 't' -KeyVaultClientId 'ci' -KeyVaultClientSecret $secure
+            -KeyVaultTenantId 't' -KeyVaultClientId 'ci'
 
-        # The secret must NOT be anywhere in the command-line args ...
-        ($script:capturedArgs -join ' ') | Should -Not -Match ([regex]::Escape($secret))
-        ($script:capturedArgs -join ' ') | Should -Not -Match '--azure-key-vault-client-secret'
-        # ... but it MUST have been delivered via the environment.
-        $script:capturedEnvSet | Should -Be $secret
-        # And the env var must be cleaned up afterward.
-        [Environment]::GetEnvironmentVariable('AZURE_CLIENT_SECRET', 'Process') | Should -BeNullOrEmpty
-    }
-
-    It 'AzureSignTool client secret requires tenant + client id (#53)' {
-        $secure = ConvertTo-TestSecureString -Value 'x'
-        $pkg    = Join-Path -Path $TestDrive -ChildPath 'pkg2.msix'
-        Set-Content -LiteralPath $pkg -Value 'stub' -Encoding utf8
-        Mock -ModuleName MSIX Get-MsixToolsRoot { 'C:\fake-tools' }
-        Mock -ModuleName MSIX Invoke-MsixProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
-        Mock -ModuleName MSIX Get-Command { [pscustomobject]@{ Source = 'C:\fake\AzureSignTool.exe' } } -ParameterFilter { $Name -eq 'AzureSignTool.exe' }
-
-        { Invoke-MsixSigning -PackagePath $pkg -Signer AzureSignTool `
-            -KeyVaultUrl 'https://v.vault.azure.net' -KeyVaultCertificate 'c' `
-            -KeyVaultClientSecret $secure } |
-            Should -Throw -ExpectedMessage '*requires -KeyVaultTenantId and -KeyVaultClientId*'
+        $joined = $script:capturedArgs -join ' '
+        # Non-sensitive scoping hints are forwarded ...
+        $joined | Should -Match '--azure-key-vault-tenant-id'
+        $joined | Should -Match '--azure-key-vault-client-id'
+        # ... but no secret flag, and the module must not force MI-only.
+        $joined | Should -Not -Match '--azure-key-vault-client-secret'
+        $joined | Should -Not -Match '--azure-key-vault-managed-identity'
+        # The module must not have set AZURE_CLIENT_SECRET during the call ...
+        $script:capturedEnvMid | Should -Be $before['AZURE_CLIENT_SECRET']
+        # ... nor left any AZURE_* env var altered afterward.
+        foreach ($n in 'AZURE_TENANT_ID','AZURE_CLIENT_ID','AZURE_CLIENT_SECRET') {
+            [Environment]::GetEnvironmentVariable($n, 'Process') | Should -Be $before[$n]
+        }
     }
 }

@@ -214,7 +214,7 @@
                               'TrustedSigningAccount','TrustedSigningProfile',
                               'TrustedSigningEndpoint','TrustedSigningClientDll',
                               'KeyVaultUrl','KeyVaultCertificate','KeyVaultTenantId',
-                              'KeyVaultClientId','KeyVaultClientSecret') {
+                              'KeyVaultClientId') {
                     if ($Config.Signing.ContainsKey($k)) { $signArgs[$k] = $Config.Signing[$k] }
                 }
                 Invoke-MsixSigning @signArgs

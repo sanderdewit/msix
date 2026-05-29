@@ -335,6 +335,43 @@ function _MsixOfflineEnumSubKeys {
     return [string[]]$names.ToArray()
 }
 
+function _MsixOfflineEnumValueNames {
+    <#
+    .SYNOPSIS
+        Returns the names (string[]) of all values directly on the given key
+        handle. The default (unnamed) value comes back as an empty string.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param([Parameter(Mandatory)][IntPtr]$Key)
+
+    if ($Key -eq [IntPtr]::Zero) { return [string[]]@() }
+    $names = [System.Collections.Generic.List[string]]::new()
+    $i = [uint32]0
+    while ($true) {
+        $sb     = [System.Text.StringBuilder]::new(16383)   # max value-name length
+        $cName  = [uint32]16383
+        $type   = [uint32]0
+        $cbData = [uint32]0
+        # Probe with a null data buffer to learn the data size. A value that has
+        # data returns ERROR_MORE_DATA (234) and does NOT reliably populate the
+        # name buffer in that case, so re-call with a real data buffer to read
+        # the name. Enumeration ends with ERROR_NO_MORE_ITEMS (259) -> break.
+        $rc = [MsixOffReg]::OREnumValue($Key, $i, $sb, [ref]$cName, [ref]$type, $null, [ref]$cbData)
+        if ($rc -ne 0 -and $rc -ne 234) { break }
+        if ($rc -eq 234) {
+            $sb      = [System.Text.StringBuilder]::new(16383)
+            $cName   = [uint32]16383
+            $dataBuf = [byte[]]::new([int]$cbData)
+            $rc = [MsixOffReg]::OREnumValue($Key, $i, $sb, [ref]$cName, [ref]$type, $dataBuf, [ref]$cbData)
+            if ($rc -ne 0) { break }
+        }
+        $names.Add($sb.ToString())
+        $i++
+    }
+    return [string[]]$names.ToArray()
+}
+
 function _MsixOfflineGetValue {
     <#
     .SYNOPSIS

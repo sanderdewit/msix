@@ -118,6 +118,29 @@ Describe 'Offline registry (offreg.dll) helpers' -Tag 'OfflineRegistry' {
         $result | Should -Be 'nested'
     }
 
+    It 'Enumerates value names on a key (#56)' {
+        $result = & (Get-Module MSIX) {
+            param($p)
+            $h = _MsixOpenOfflineHive -Path $p
+            try { _MsixOfflineEnumValueNames -Key $h }
+            finally { _MsixCloseOfflineHive -Hive $h }
+        } $script:TestHive
+        $result | Should -Contain 'StringVal'
+        $result | Should -Contain 'DwordVal'
+        $result | Should -Contain 'ExpandVal'
+    }
+
+    It '_MsixWithOfflineHive runs the block and releases the hive (#59)' {
+        $result = & (Get-Module MSIX) {
+            param($p)
+            _MsixWithOfflineHive -Path $p -ScriptBlock {
+                param($hive)
+                _MsixOfflineGetValue -Parent $hive -SubKey '' -Name 'StringVal'
+            }
+        } $script:TestHive
+        $result | Should -Be 'hello world'
+    }
+
     It 'OROpenKey returns IntPtr::Zero for a non-existent subkey' {
         $result = & (Get-Module MSIX) {
             param($p)

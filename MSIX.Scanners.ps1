@@ -8,6 +8,20 @@
 # =============================================================================
 
 
+function _MsixEscapeSingleQuote {
+    <#
+    SECURITY: many findings embed package-derived values (handler names, DLL /
+    VFS paths, AppIds, ...) into single-quoted PowerShell command fragments that
+    an operator may copy-paste and run. A value containing a single quote would
+    otherwise close the literal and inject commands into the suggested line.
+    Doubling embedded single quotes keeps the value an inert literal. Returns a
+    string safe to place between single quotes.
+    #>
+    param([string]$Value)
+    return ([string]$Value).Replace("'", "''")
+}
+
+
 # ---------------------------------------------------------------------------
 # Uninstaller / updater / desktop-shortcut scanners
 # ---------------------------------------------------------------------------
@@ -346,6 +360,9 @@ function _MsixAbsoluteToVfsRelativeDirect {
         if ($AbsPath.StartsWith($m.Abs, [System.StringComparison]::OrdinalIgnoreCase)) {
             $rel    = $AbsPath.Substring($m.Abs.Length).TrimStart('\')
             $vfsRel = "$($m.Vfs)\$rel"
+            # SECURITY: reject path-traversal segments so a hostile Registry.dat
+            # cannot map to a file outside the package workspace.
+            if ($vfsRel -match '(^|[\\/])\.\.([\\/]|$)') { return $null }
             if (Test-Path -LiteralPath (Join-Path -Path $WorkspacePath -ChildPath $vfsRel)) { return $vfsRel }
         }
     }
@@ -380,6 +397,9 @@ function _MsixRegPathToVfsRelative {
         if ($RegPath -match ('^\[\{' + [regex]::Escape($m.Var) + '\}\](.*)$')) {
             $rel    = $Matches[1].TrimStart('\')
             $vfsRel = "$($m.Vfs)\$rel"
+            # SECURITY: reject path-traversal segments so a hostile Registry.dat
+            # cannot map to a file outside the package workspace.
+            if ($vfsRel -match '(^|[\\/])\.\.([\\/]|$)') { return $null }
             if (Test-Path -LiteralPath (Join-Path -Path $WorkspacePath -ChildPath $vfsRel)) { return $vfsRel }
             # Return the mapping even if the file isn't present — caller can use for manifest
             return $vfsRel
@@ -785,7 +805,7 @@ function Get-MsixHeuristicFinding {
                 Severity = 'Info'
                 Category = 'PluginDirectory'
                 Symptom  = "Likely runtime extension folder: $($p.Name) ($($p.FileCount) entries)"
-                Recommendation = "Set-MsixFileSystemWriteVirtualization -PackagePath '$PackagePath' -ExcludedDirectories @('$($p.RelativePath -replace '\\','/')')  (modern: desktop6+virtualization carve-out)  OR  Add-MsixPsfV2 -Fixups (New-MsixPsfFileRedirectionConfig -Base '$($p.RelativePath -replace '\\','/')' -Patterns '.*')  (legacy: PSF route)"
+                Recommendation = "Set-MsixFileSystemWriteVirtualization -PackagePath '$PackagePath' -ExcludedDirectories @('$(_MsixEscapeSingleQuote ($p.RelativePath -replace '\\','/'))')  (modern: desktop6+virtualization carve-out)  OR  Add-MsixPsfV2 -Fixups (New-MsixPsfFileRedirectionConfig -Base '$(_MsixEscapeSingleQuote ($p.RelativePath -replace '\\','/'))' -Patterns '.*')  (legacy: PSF route)"
                 Evidence = $p.RelativePath
                 AppId    = $null
             })
@@ -811,7 +831,7 @@ function Get-MsixHeuristicFinding {
             Severity = 'Info'
             Category = 'AppExecutionAlias'
             Symptom  = "$($a.AppId) has no AppExecutionAlias."
-            Recommendation = "Add-MsixAlias -PackagePath '$PackagePath' -AppIds '$($a.AppId)' (suggested alias: $($a.SuggestAlias))"
+            Recommendation = "Add-MsixAlias -PackagePath '$PackagePath' -AppIds '$(_MsixEscapeSingleQuote $a.AppId)' (suggested alias: $($a.SuggestAlias))"
             Evidence = $a.Executable
             AppId    = $a.AppId
         })
@@ -944,7 +964,7 @@ function Get-MsixHeuristicFinding {
                 Severity       = 'Info'
                 Category       = 'ComServer'
                 Symptom        = "Registry.dat registers $($inprocPkg.Count) in-process COM server(s) with DLLs inside the package. External COM clients cannot activate them without a com:Extension declaration in the manifest."
-                Recommendation = "Add-MsixComServerExtension -PackagePath '$PackagePath' -Servers @($($inprocPkg | ForEach-Object { "@{ Clsid='$($_.Clsid)'; VfsDllPath='$($_.VfsDllPath)'; ThreadingModel='$($_.ThreadingModel)' }" } | Select-Object -First 2 | Join-String -Separator ', '))"
+                Recommendation = "Add-MsixComServerExtension -PackagePath '$PackagePath' -Servers @($($inprocPkg | ForEach-Object { "@{ Clsid='$(_MsixEscapeSingleQuote $_.Clsid)'; VfsDllPath='$(_MsixEscapeSingleQuote $_.VfsDllPath)'; ThreadingModel='$(_MsixEscapeSingleQuote $_.ThreadingModel)' }" } | Select-Object -First 2 | Join-String -Separator ', '))"
                 Evidence       = ($inprocPkg | ForEach-Object { "$($_.Clsid) → $($_.VfsDllPath)" }) -join '; '
                 AppId          = $null
                 ComEntries     = $inprocPkg

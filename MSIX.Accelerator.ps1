@@ -61,53 +61,183 @@ function ConvertFrom-MsixYamlAccelerator {
 
     if (-not (Test-Path -LiteralPath $Path)) { throw "Accelerator not found: $Path" }
 
-    # SECURITY (H5): We deliberately do NOT invoke any external YAML
-    # deserialiser here, even if one is installed. Full YAML parsers honour
-    # YAML type tags such as !!python/object/apply or .NET type tags that
-    # can instantiate arbitrary objects during deserialisation -- a
-    # well-known code-execution vector when the YAML comes from an
-    # untrusted source. Accelerator files ARE untrusted (third-party
-    # authors publish them), so we parse with a tiny purpose-built scalar
-    # parser instead. Do not "improve" this by routing through a real YAML
-    # library.
-    $text   = Get-Content -LiteralPath $Path -Raw
-    $result = @{}
+    # Thin file wrapper over the string parser (ConvertFrom-MsixAcceleratorYaml),
+    # which now understands nested maps + block lists in addition to the original
+    # flat scalars / inline lists (issue #18). The same safe, value-only parsing
+    # guarantees apply: no type tags, anchors, or object instantiation.
+    $text = Get-Content -LiteralPath $Path -Raw
+    return ConvertFrom-MsixAcceleratorYaml -Yaml $text
+}
 
-    # Match: <indent><key>: <value>   (one line, no nested mappings).
-    # The key is restricted to a conservative identifier set so we never
-    # accidentally capture a tag like "!!python/object/apply:os.system".
-    foreach ($line in ($text -split "`r?`n")) {
-        if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_\-]*)\s*:\s*(.*)$') {
-            $key = $matches[1]
-            $val = $matches[2].Trim()
 
-            # Strip a trailing comment that is clearly outside a quoted string.
-            if ($val -notmatch '^["''].*["'']$' -and $val -match '^(.*?)\s+#') {
-                $val = $matches[1].Trim()
-            }
+function _MsixConvertAcceleratorScalar {
+    <#
+    Converts a single YAML scalar value (the right-hand side of "key: value", or
+    a "- item" list element) into a [string] or [string[]]. Inline lists
+    [a, b, c] become string arrays; quotes are stripped. NEVER resolves YAML
+    tags, anchors, or aliases — hostile constructs (e.g. "!!python/object/...")
+    are returned verbatim as inert strings. Value-only by design.
+    #>
+    param([string]$Value)
 
-            if ($val -match '^\[(.*)\]\s*$') {
-                # Inline list:  key: [a, b, c]
-                $items = @()
-                foreach ($item in ($matches[1] -split ',')) {
-                    $t = $item.Trim()
-                    if ($t -match '^"(.*)"$' -or $t -match "^'(.*)'$") { $t = $matches[1] }
-                    $items += $t
-                }
-                $result[$key] = $items
+    $v = $Value
+    # Strip a trailing comment that is clearly outside a quoted string.
+    if ($v -notmatch '^["''].*["'']$' -and $v -match '^(.*?)\s+#') {
+        $v = $matches[1]
+    }
+    $v = $v.Trim()
+
+    if ($v -match '^\[(.*)\]\s*$') {
+        # Inline list:  [a, b, c]
+        $items = [System.Collections.Generic.List[string]]::new()
+        foreach ($item in ($matches[1] -split ',')) {
+            $t = $item.Trim()
+            if ($t -match '^"(.*)"$' -or $t -match "^'(.*)'$") { $t = $matches[1] }
+            if ($t -ne '') { $items.Add($t) }
+        }
+        return [string[]]$items.ToArray()
+    }
+    if ($v -match '^"(.*)"$' -or $v -match "^'(.*)'$") {
+        return [string]$matches[1]
+    }
+    # Everything else — including hostile YAML tag syntax — is kept literal.
+    return [string]$v
+}
+
+function _MsixParseAcceleratorMap {
+    <#
+    Recursive-descent map parser. $Lines is an [object[]] of @($indent,$content)
+    tuples (blank/comment/doc-marker lines already stripped). $Cursor is a
+    @{ Index = <int> } hashtable threaded through the recursion (a plain int
+    would not mutate across calls, and [ref] double-wraps awkwardly in PS 5.1).
+    Consumes consecutive "key: value" lines at exactly $MapIndent and returns a
+    [hashtable]. A key with an empty value followed by deeper-indented lines
+    recurses into a nested map or block list.
+    #>
+    param(
+        [object[]]$Lines,
+        [hashtable]$Cursor,
+        [int]$MapIndent
+    )
+    $map = @{}
+    while ($Cursor.Index -lt $Lines.Count) {
+        $ln = $Lines[$Cursor.Index]
+        if ($ln[0] -ne $MapIndent) { break }
+        if ($ln[1].StartsWith('- ')) { break }
+        $m = [regex]::Match($ln[1], '^([A-Za-z0-9_\-]+):\s*(.*)$')
+        if (-not $m.Success) { break }
+        $key = $m.Groups[1].Value
+        $val = $m.Groups[2].Value
+        $Cursor.Index++
+        if ($val -ne '') {
+            $map[$key] = _MsixConvertAcceleratorScalar -Value $val
+        } elseif ($Cursor.Index -lt $Lines.Count -and $Lines[$Cursor.Index][0] -gt $MapIndent) {
+            $childIndent = $Lines[$Cursor.Index][0]
+            if ($Lines[$Cursor.Index][1].StartsWith('- ')) {
+                $map[$key] = _MsixParseAcceleratorList -Lines $Lines -Cursor $Cursor -ListIndent $childIndent
+            } else {
+                $map[$key] = _MsixParseAcceleratorMap -Lines $Lines -Cursor $Cursor -MapIndent $childIndent
             }
-            elseif ($val -match '^"(.*)"$' -or $val -match "^'(.*)'$") {
-                $result[$key] = $matches[1]
-            }
-            else {
-                # Everything else -- including hostile YAML tag syntax such as
-                # "!!python/object/apply:os.system [`"whoami`"]" -- is kept as a
-                # literal string. No tag resolution, no object instantiation.
-                $result[$key] = $val
-            }
+        } else {
+            $map[$key] = ''
         }
     }
-    return $result
+    return $map
+}
+
+function _MsixParseAcceleratorList {
+    <#
+    Recursive-descent block-list parser. Consumes consecutive "- ..." lines at
+    exactly $ListIndent and returns an [object[]]. A "- key: value" element
+    starts a nested map (the "- " is rewritten to spaces so the element's keys
+    align at ListIndent+2); a plain "- scalar" element becomes a scalar value.
+    #>
+    param(
+        [object[]]$Lines,
+        [hashtable]$Cursor,
+        [int]$ListIndent
+    )
+    $items = [System.Collections.Generic.List[object]]::new()
+    while ($Cursor.Index -lt $Lines.Count) {
+        $ln = $Lines[$Cursor.Index]
+        if ($ln[0] -ne $ListIndent) { break }
+        if (-not $ln[1].StartsWith('- ')) { break }
+        $after = $ln[1].Substring(2)
+        if ([regex]::IsMatch($after, '^([A-Za-z0-9_\-]+):\s*(.*)$')) {
+            # Map element: rewrite this line so its first key sits at ListIndent+2,
+            # then let the map parser consume it plus its indented continuation.
+            $itemIndent = $ListIndent + 2
+            $Lines[$Cursor.Index] = @($itemIndent, $after)
+            $items.Add((_MsixParseAcceleratorMap -Lines $Lines -Cursor $Cursor -MapIndent $itemIndent))
+        } else {
+            $Cursor.Index++
+            $items.Add((_MsixConvertAcceleratorScalar -Value $after))
+        }
+    }
+    return ,$items.ToArray()
+}
+
+function ConvertFrom-MsixAcceleratorYaml {
+    <#
+    .SYNOPSIS
+        Parses accelerator YAML text into nested hashtables / arrays using a
+        safe, value-only recursive-descent parser.
+
+    .DESCRIPTION
+        Supports the YAML subset accelerators actually use: scalars, inline
+        lists ([a, b, c]), indentation-based nested maps, and block lists
+        (including block-lists-of-maps for RemediationApproach trees).
+
+        SECURITY: this is NOT a general YAML parser and never will be. Every
+        leaf is a [string] or [string[]]; containers are [hashtable] /
+        [object[]]. It NEVER instantiates .NET/CLR types, so YAML type tags
+        (e.g. !!python/object/apply, !!net/object), anchors/aliases (&/*), and
+        multi-document/directive markers (---, ..., %) are treated as inert
+        literal text or skipped — closing the deserialisation code-execution
+        vector that full YAML libraries expose on untrusted accelerator files.
+        Tabs in indentation are rejected (YAML forbids them; mixing tabs/spaces
+        silently corrupts structure).
+
+    .PARAMETER Yaml
+        The accelerator YAML document as a string.
+
+    .OUTPUTS
+        [hashtable] for a mapping document, or [object[]] for a top-level list.
+
+    .EXAMPLE
+        ConvertFrom-MsixAcceleratorYaml -Yaml (Get-Content acc.yaml -Raw)
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string]$Yaml
+    )
+
+    # Tokenize: drop blank/comment/doc-marker lines, capture (indent, content).
+    $tokens = [System.Collections.Generic.List[object]]::new()
+    foreach ($raw in ($Yaml -split "`r?`n")) {
+        if ($raw -match '^[ ]*\t') {
+            throw "Accelerator YAML uses a tab character in indentation, which is not allowed. Use spaces only."
+        }
+        $trimmedEnd = $raw -replace '\s+$', ''
+        if ($trimmedEnd -eq '') { continue }
+        $content = $trimmedEnd.TrimStart(' ')
+        if ($content.StartsWith('#')) { continue }
+        # Multi-document / directive markers: single-document parser ignores them.
+        if ($content -eq '---' -or $content -eq '...' -or $content.StartsWith('%')) { continue }
+        $indent = $trimmedEnd.Length - $content.Length
+        $tokens.Add((,@($indent, $content)))
+    }
+
+    if ($tokens.Count -eq 0) { return @{} }
+
+    $lines  = [object[]]$tokens.ToArray()
+    $cursor = @{ Index = 0 }
+    if ($lines[0][1].StartsWith('- ')) {
+        return _MsixParseAcceleratorList -Lines $lines -Cursor $cursor -ListIndent $lines[0][0]
+    }
+    return _MsixParseAcceleratorMap -Lines $lines -Cursor $cursor -MapIndent $lines[0][0]
 }
 
 

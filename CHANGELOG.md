@@ -7,6 +7,20 @@ older lives here.
 
 ## Unreleased - Security review fixes (#49, #50, #51, #52, #53, #54, #56) + integration tests (#61) + perf (#58)
 
+### Features
+
+- **#18 — nested-tree accelerator YAML (safe parser).** New
+  `ConvertFrom-MsixAcceleratorYaml` parses accelerator YAML from a string with
+  support for indentation-based nested maps and block lists (so accelerators can
+  declare structured `RemediationApproach` trees), in addition to the original
+  top-level scalars and inline lists. `ConvertFrom-MsixYamlAccelerator -Path`
+  becomes a thin file wrapper over it. It remains a hand-rolled, value-only
+  recursive-descent parser: every leaf is a `[string]`/`[string[]]`, containers
+  are `[hashtable]`/`[object[]]`, and it never instantiates types — YAML type
+  tags (`!!...`), anchors/aliases (`&`/`*`), and multi-document markers are inert
+  text or ignored, so hostile accelerator files cannot execute code. Tabs in
+  indentation are rejected with a clear error.
+
 ### Performance
 
 - **#58 — unpack the package once per analysis run.** Each read-only scanner

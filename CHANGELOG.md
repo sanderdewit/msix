@@ -5,7 +5,23 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
-## Unreleased - Security review fixes (#49, #50, #51, #52, #53, #54, #56) + integration tests (#61) + perf (#58)
+## Unreleased - Security review fixes (#49, #50, #51, #52, #53, #54, #55, #56) + integration tests (#61) + perf (#58)
+
+### Security / robustness fixes (post-review)
+
+- **#55 — download integrity (opt-in, out-of-box safe).** Two configurable
+  integrity controls, both empty by default so the module works out of the box:
+  - `_MsixDownloadFile` gains an optional `-ExpectedSha256`; when supplied the
+    download is hashed and a mismatch throws (the partial file is deleted). It
+    is threaded through `_MsixInstallArchiveTool`, `Install-MsixMgr`, and
+    `Update-MsixMgr`. The observed SHA-256 is logged on every pinned download so
+    operators can capture a known-good value. A new `$script:MsixMgrKnownSha256`
+    constant (empty by default) lets you pin msixmgr — which is unsigned upstream
+    (microsoft/msix-packaging#710) — for every call in one place.
+  - `signers.json` entries may now carry an optional `thumbprint`; when present,
+    `_MsixVerifyAuthenticode` requires the signer's thumbprint to match exactly,
+    closing the CN-prefix-only gap (a hostile `CN=Microsoft Corporation, O=Evil`
+    cert). Prefix-only entries keep working unchanged.
 
 ### Performance
 

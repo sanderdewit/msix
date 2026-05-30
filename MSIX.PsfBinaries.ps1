@@ -40,6 +40,13 @@ function _MsixLoadTrustedPublishers {
         subjectPrefix matches the standard X.509 form (starts with 'CN=',
         ends with ','), returns the deduplicated prefix list as [string[]].
 
+        An entry MAY also carry an optional 'thumbprint' (SHA-1, the standard
+        certificate thumbprint format, hex, case/space-insensitive). When
+        present it is recorded in $script:MsixTrustedThumbprints and
+        _MsixVerifyAuthenticode requires the signer's thumbprint to match
+        exactly — a far stronger control than the CN-prefix match alone (which
+        a hostile cert can satisfy with 'CN=Microsoft Corporation, O=Evil').
+
         Throws on:
           - missing signers.json (loud failure; toolchain installs cannot
             verify downloads, so we refuse to run rather than silently
@@ -67,8 +74,9 @@ function _MsixLoadTrustedPublishers {
         throw "Trusted-publisher allowlist at '$Path' has no 'publishers' array."
     }
 
-    $rx       = [regex]'^CN=.+,$'
-    $prefixes = [System.Collections.Generic.List[string]]::new()
+    $rx          = [regex]'^CN=.+,$'
+    $prefixes    = [System.Collections.Generic.List[string]]::new()
+    $thumbprints = [System.Collections.Generic.List[string]]::new()
     foreach ($entry in $doc.publishers) {
         $p = [string]$entry.subjectPrefix
         if (-not $p) {
@@ -78,15 +86,28 @@ function _MsixLoadTrustedPublishers {
             throw "Trusted-publisher allowlist at '$Path' has an entry whose subjectPrefix does not match the X.509 form 'CN=...,': '$p'."
         }
         if (-not $prefixes.Contains($p)) { $prefixes.Add($p) }
+
+        # Optional thumbprint pin (normalised: strip spaces, upper-case hex).
+        $tp = [string]$entry.thumbprint
+        if ($tp) {
+            $tpNorm = ($tp -replace '\s', '').ToUpperInvariant()
+            if ($tpNorm -notmatch '^[0-9A-F]{40}$') {
+                throw "Trusted-publisher allowlist at '$Path' has an entry with an invalid 'thumbprint' (expected 40 hex chars, SHA-1): '$tp'."
+            }
+            if (-not $thumbprints.Contains($tpNorm)) { $thumbprints.Add($tpNorm) }
+        }
     }
 
     if ($prefixes.Count -eq 0) {
         throw "Trusted-publisher allowlist at '$Path' contains zero valid entries."
     }
 
+    # Side-channel the thumbprint set (the function's contract returns prefixes).
+    $script:MsixTrustedThumbprints = [string[]]$thumbprints
     return [string[]]$prefixes
 }
 
+$script:MsixTrustedThumbprints = @()
 $script:MsixTrustedPublishers = _MsixLoadTrustedPublishers
 $script:MsixTrustedPublishersPath = Join-Path -Path $PSScriptRoot -ChildPath 'signers.json'
 
@@ -132,6 +153,23 @@ Signer is NOT in the trusted-publisher allowlist:
   Thumbprint: $($sig.SignerCertificate.Thumbprint)
 If you trust this publisher, add the CN prefix to `$script:MsixTrustedPublishers in MSIX.PsfBinaries.ps1.
 "@
+    }
+    # When signers.json pins one or more thumbprints, require an exact match.
+    # This closes the CN-prefix-only gap (a hostile cert whose Subject merely
+    # starts with a trusted CN). Pinning is opt-in per entry, so when no
+    # thumbprints are configured the prefix match above stands alone.
+    if ($script:MsixTrustedThumbprints -and $script:MsixTrustedThumbprints.Count -gt 0) {
+        $actualTp = if ($sig.SignerCertificate) { ($sig.SignerCertificate.Thumbprint -replace '\s', '').ToUpperInvariant() } else { '' }
+        if ($actualTp -notin $script:MsixTrustedThumbprints) {
+            throw @"
+Authenticode verification FAILED for $ToolName at $Path.
+Signer cert passed the publisher-prefix check but its thumbprint is NOT in the
+pinned-thumbprint allowlist (signers.json):
+  Subject:    $subject
+  Thumbprint: $actualTp
+If you trust this certificate, add its thumbprint to the matching signers.json entry.
+"@
+        }
     }
     Write-MsixLog -Level Info -Message "Authenticode verified: $ToolName ($subject)"
     return $sig
@@ -190,7 +228,12 @@ function _MsixVerifyAuthenticodeMsixBundle {
 function _MsixDownloadFile {
     param(
         [string]$Url,
-        [string]$Destination
+        [string]$Destination,
+        # Optional SHA-256 (hex) the downloaded file must match. When supplied,
+        # the file is hashed after download and a mismatch throws (the partial
+        # download is removed). Use for integrity-pinning where Authenticode is
+        # unavailable (e.g. msixmgr) or to lock an immutable artifact.
+        [string]$ExpectedSha256
     )
     Write-MsixLog -Level Info -Message "Downloading $Url"
     $oldPref = $ProgressPreference
@@ -199,6 +242,14 @@ function _MsixDownloadFile {
         Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing -ErrorAction Stop
     } finally {
         $ProgressPreference = $oldPref
+    }
+    if ($ExpectedSha256) {
+        $actual = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash
+        if ($actual -ne $ExpectedSha256.Trim().ToUpperInvariant()) {
+            Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+            throw "SHA-256 mismatch for '$Url'.`n  expected: $($ExpectedSha256.Trim().ToUpperInvariant())`n  actual:   $actual`nThe download was rejected and deleted."
+        }
+        Write-MsixLog -Level Info -Message "SHA-256 verified: $actual"
     }
 }
 
@@ -345,7 +396,12 @@ function _MsixInstallArchiveTool {
         [string]$SkipVerificationWarning,
         [string]$IdempotencyLogMessage,
         [scriptblock]$PostInstall,
-        [switch]$Force
+        [switch]$Force,
+        # Optional SHA-256 of the downloaded archive. When supplied, the download
+        # is rejected unless it matches. Off by default so installs work
+        # out of the box; opt in for integrity-pinning (esp. tools whose upstream
+        # is unsigned, e.g. msixmgr).
+        [string]$ExpectedSha256
     )
 
     if (-not $IdempotencyLogMessage) {
@@ -371,7 +427,7 @@ function _MsixInstallArchiveTool {
 
     $destinationExisted = Test-Path -LiteralPath $Destination
     try {
-        _MsixDownloadFile -Url $Url -Destination $archive
+        _MsixDownloadFile -Url $Url -Destination $archive -ExpectedSha256 $ExpectedSha256
         Expand-Archive -LiteralPath $archive -DestinationPath $stage -Force
 
         if ($VerifyAuthenticode) {

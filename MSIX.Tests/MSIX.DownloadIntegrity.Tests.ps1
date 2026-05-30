@@ -86,19 +86,24 @@ Describe 'Trusted-publisher thumbprint pinning (#55)' -Tag 'Security', 'PsfBinar
         $json = '{ "publishers": [ { "subjectPrefix": "CN=Contoso,", "thumbprint": "not-a-thumbprint" } ] }'
         $p = Join-Path $TestDrive 'signers-bad.json'
         Set-Content -LiteralPath $p -Value $json -Encoding utf8
-        InModuleScope MSIX -Parameters @{ P = $p } {
+        # Reference $P at the top level of the block (not only inside a nested
+        # { } scriptblock) so PSScriptAnalyzer's PSReviewUnusedParameter sees it.
+        $err = InModuleScope MSIX -Parameters @{ P = $p } {
             param($P)
-            { _MsixLoadTrustedPublishers -Path $P } | Should -Throw -ExpectedMessage '*thumbprint*'
+            try { $null = _MsixLoadTrustedPublishers -Path $P; $null } catch { $_ }
         }
+        $err | Should -Not -BeNullOrEmpty
+        $err.Exception.Message | Should -BeLike '*thumbprint*'
     }
 
     It 'loader still works with no thumbprint (opt-in; prefix-only entry)' {
         $json = '{ "publishers": [ { "subjectPrefix": "CN=Contoso," } ] }'
         $p = Join-Path $TestDrive 'signers-noprefix.json'
         Set-Content -LiteralPath $p -Value $json -Encoding utf8
-        InModuleScope MSIX -Parameters @{ P = $p } {
+        $prefixes = InModuleScope MSIX -Parameters @{ P = $p } {
             param($P)
-            { _MsixLoadTrustedPublishers -Path $P } | Should -Not -Throw
+            _MsixLoadTrustedPublishers -Path $P
         }
+        $prefixes | Should -Contain 'CN=Contoso,'
     }
 }

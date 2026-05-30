@@ -7,6 +7,17 @@ older lives here.
 
 ## Unreleased - Security review fixes (#49, #50, #51, #52, #53, #54, #56) + integration tests (#61) + perf (#58)
 
+### Features
+
+- **#17 — `SignerSignEx` backend reserved (API only).** `Invoke-MsixSigning
+  -Signer` now accepts `SignerSignEx`, intended for a future
+  `mssign32!SignerSignEx2` P/Invoke backend that keeps the PFX password off the
+  command line. The implementation is deliberately NOT shipped yet — it is
+  security-critical Win32 interop that must be validated on Windows against a
+  real code-signing certificate first — so the value currently throws a clear
+  "not yet implemented" error rather than risk producing improperly-signed
+  packages. Existing backends are unchanged.
+
 ### Performance
 
 - **#58 — unpack the package once per analysis run.** Each read-only scanner

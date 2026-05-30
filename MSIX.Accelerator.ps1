@@ -227,7 +227,11 @@ function ConvertFrom-MsixAcceleratorYaml {
         # Multi-document / directive markers: single-document parser ignores them.
         if ($content -eq '---' -or $content -eq '...' -or $content.StartsWith('%')) { continue }
         $indent = $trimmedEnd.Length - $content.Length
-        $tokens.Add((,@($indent, $content)))
+        # Store the [indent, content] pair as one element. List[object].Add does
+        # not enumerate its argument, so add the 2-element array directly — a
+        # leading unary comma would double-wrap it (@(@(indent,content))) and
+        # make $ln[0] an array instead of the indent int.
+        $tokens.Add([object[]]@($indent, $content))
     }
 
     if ($tokens.Count -eq 0) { return @{} }

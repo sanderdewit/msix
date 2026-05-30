@@ -125,7 +125,7 @@
         [Parameter(ParameterSetName = 'SignToolPfx')]
         [Parameter(ParameterSetName = 'TrustedSigning')]
         [Parameter(ParameterSetName = 'AzureSignTool')]
-        [ValidateSet('SignTool','TrustedSigning','AzureSignTool')]
+        [ValidateSet('SignTool','TrustedSigning','AzureSignTool','SignerSignEx')]
         [string]$Signer = 'SignTool',
 
         # --- PFX (SignTool with PFX) ---

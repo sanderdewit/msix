@@ -89,7 +89,10 @@
         RFC 3161 timestamp server URL. Defaults to DigiCert.
 
     .PARAMETER Signer
-        Which backend to use. See top-level description.
+        Which backend to use: SignTool (default), TrustedSigning, or
+        AzureSignTool. See top-level description. 'SignerSignEx' is RESERVED
+        for a future mssign32!SignerSignEx2 P/Invoke backend (issue #17); it is
+        accepted but currently throws a clear "not yet implemented" error.
 
     .EXAMPLE
         # Local PFX (dev / self-signed)
@@ -125,7 +128,7 @@
         [Parameter(ParameterSetName = 'SignToolPfx')]
         [Parameter(ParameterSetName = 'TrustedSigning')]
         [Parameter(ParameterSetName = 'AzureSignTool')]
-        [ValidateSet('SignTool','TrustedSigning','AzureSignTool')]
+        [ValidateSet('SignTool','TrustedSigning','AzureSignTool','SignerSignEx')]
         [string]$Signer = 'SignTool',
 
         # --- PFX (SignTool with PFX) ---
@@ -313,6 +316,18 @@
                     Write-MsixLog -Level Info -Message "Signed successfully via AzureSignTool: $($fileinfo.Name)"
                 }
             }
+        }
+
+        # =====================================================================
+        # SignerSignEx — RESERVED (issue #17). A future mssign32!SignerSignEx2
+        # P/Invoke backend that keeps the PFX password in process memory instead
+        # of on the command line. Not implemented yet: it is security-critical
+        # Win32 interop that must be validated on Windows against a real
+        # code-signing certificate before it can be trusted to produce correct
+        # Authenticode signatures. Throw clearly rather than silently no-op.
+        # =====================================================================
+        'SignerSignEx' {
+            throw "The SignerSignEx backend is not yet implemented (reserved; see issue #17). Use -Signer SignTool (PFX), TrustedSigning, or AzureSignTool."
         }
     }
 }

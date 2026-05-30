@@ -73,16 +73,13 @@ function Get-MsixVcRuntimeReference {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [string]$PackagePath
+        [string]$PackagePath,
+        [string]$WorkspacePath
     )
 
-    $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item -LiteralPath $PackagePath
-    $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-vcrt"
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'vcrt'
+    $workspace = $ws.Path
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
-
         $allFiles = Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue
         $bundled  = $allFiles | Where-Object { $script:KnownVcRuntimeDlls -contains $_.Name.ToLower() } |
                      ForEach-Object {
@@ -119,7 +116,7 @@ function Get-MsixVcRuntimeReference {
             Missing     = $missing
         }
     } finally {
-        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 

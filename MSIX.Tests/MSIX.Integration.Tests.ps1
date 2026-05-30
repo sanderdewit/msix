@@ -55,10 +55,10 @@ Describe 'MSIX integration (real packages via MakeAppx)' -Tag 'Integration' {
         $pkg = Join-Path -Path $script:FixtureDir -ChildPath 'scan.msix'
         $fx  = New-MsixTestFixture -OutputPath $pkg
 
-        # This test is a placeholder guard for the unpack-once refactor (#58):
-        # today it simply asserts the scanners run end-to-end on a real package
-        # without error. Once #58 lands, the unpack-count assertion can be
-        # tightened here against a counting mock of Invoke-MsixProcess.
+        # End-to-end smoke test on a real package. The exact unpack-once count
+        # assertion for #58 lives in MSIX.Heuristics.Tests.ps1 (mock-based, runs
+        # without the SDK); here we confirm the shared-workspace sweep runs
+        # cleanly against a genuinely-packed .msix.
         { Get-MsixHeuristicFinding -PackagePath $fx.PackagePath } | Should -Not -Throw
 
         Remove-Item -LiteralPath $fx.StagingFolder -Recurse -Force -ErrorAction SilentlyContinue

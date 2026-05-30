@@ -14,6 +14,19 @@
 # Drop a marker file alongside the binary so Update-MsixMgr can age it out.
 $script:MsixMgrZipUrl = 'https://aka.ms/msixmgr'
 
+# Optional known-good SHA-256 of the msixmgrSetup.zip served by aka.ms/msixmgr.
+# msixmgr's upstream is unsigned (microsoft/msix-packaging#710), so Authenticode
+# verification is off by default; a hash is the only integrity control available.
+#
+# Left EMPTY intentionally so the module works out of the box (a wrong/guessed
+# hash would reject the legitimate download). To turn on integrity pinning by
+# default for every Install-MsixMgr call, paste the SHA-256 of a trusted copy
+# here — capture it from the "SHA-256 verified/observed" log line emitted on a
+# normal download, or run:
+#   (Get-FileHash .\msixmgrSetup.zip -Algorithm SHA256).Hash
+# Callers can always override per-call with -ExpectedSha256 regardless of this.
+$script:MsixMgrKnownSha256 = ''
+
 function Install-MsixMgr {
     <#
     .SYNOPSIS
@@ -77,7 +90,12 @@ function Install-MsixMgr {
     param(
         [string]$Destination,
         [switch]$Force,
-        [switch]$VerifyAuthenticode
+        [switch]$VerifyAuthenticode,
+        # Optional SHA-256 of msixmgrSetup.zip. Defaults to the module's
+        # known-good constant ($script:MsixMgrKnownSha256), which ships empty so
+        # the install works out of the box. Supply this (or populate the
+        # constant) to integrity-pin the download since msixmgr is unsigned.
+        [string]$ExpectedSha256 = $script:MsixMgrKnownSha256
     )
     if (-not $Destination) { $Destination = Join-Path -Path (Get-MsixToolsRoot) 'msixmgr' }
 
@@ -88,6 +106,7 @@ function Install-MsixMgr {
         -Url $script:MsixMgrZipUrl `
         -ArchiveFileName 'msixmgrSetup.zip' `
         -VerifyAuthenticode ([bool]$VerifyAuthenticode) `
+        -ExpectedSha256 $ExpectedSha256 `
         -SkipVerificationWarning 'Skipping Authenticode verification for msixmgr (upstream signing is broken: microsoft/msix-packaging#710). Pass -VerifyAuthenticode to re-enable. This skip applies ONLY to msixmgr — every other downloaded toolchain binary is still verified.' `
         -Force:$Force `
         -PostInstall {

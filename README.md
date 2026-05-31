@@ -447,12 +447,12 @@ CI runs PSScriptAnalyzer (Error + Warning) and Pester on every push / PR via
 
 | Area | Change |
 |---|---|
-| **Authenticode verification** | All toolchain downloads verified against `$script:MsixTrustedPublishers` allowlist before use. Failed verification throws and rolls back the install. |
+| **Authenticode verification** | All toolchain downloads verified against the `signers.json` trusted-publisher allowlist before use. Failed verification throws and rolls back the install. |
 | **SecureString throughout** | `PfxPassword` is `[SecureString]` on every function that accepts it. `ConvertTo-SecureString -AsPlainText -Force` is banned (see CONTRIBUTING.md). |
 | **Secret non-leakage** | `Get-MsixDebugRecommendation` emits a `Read-Host -AsSecureString` placeholder — the actual `SecureString` value is never interpolated into output or written to disk. |
 | **SignTool warning** | `Invoke-MsixSigning -Signer SignTool -Pfx` emits `Write-Warning` about cmdline exposure before any I/O — capturable via `-WarningVariable` in CI. |
 | **XML hardening** | All manifest loading uses `_MsixLoadXmlSecure` (`DtdProcessing=Prohibit`, `XmlResolver=$null`, `MaxCharactersFromEntities=1MB`). XXE and billion-laughs payloads are rejected. |
-| **YAML safety** | `powershell-yaml` dependency removed entirely. A restricted scalar parser handles `key: value` and `key: [a, b]` only — no type tags, no .NET object instantiation. |
+| **YAML safety** | `powershell-yaml` dependency removed entirely. A restricted value-only parser handles scalars, inline lists, nested maps, and block lists without type tags or .NET object instantiation. |
 
 ### Reliability & architecture (PRs #15 / #16)
 

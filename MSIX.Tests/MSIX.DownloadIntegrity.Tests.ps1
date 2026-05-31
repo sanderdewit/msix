@@ -56,15 +56,22 @@ Describe 'Download hash pinning (#55)' -Tag 'Security', 'PsfBinaries' {
 Describe 'Trusted-publisher thumbprint pinning (#55)' -Tag 'Security', 'PsfBinaries' {
 
     BeforeAll {
-        # _MsixLoadTrustedPublishers mutates module-level $script:MsixTrustedThumbprints
-        # as a side effect; snapshot it so these tests don't leave a test thumbprint
-        # pinned (which would break real Authenticode checks later in the session).
+        # _MsixLoadTrustedPublishers mutates module-level signer state as a side
+        # effect; snapshot it so these tests don't leave test pins behind.
         $script:savedThumbprints = InModuleScope MSIX { $script:MsixTrustedThumbprints }
+        $script:savedEntries     = InModuleScope MSIX { $script:MsixTrustedPublisherEntries }
+        $script:savedPublishers  = InModuleScope MSIX { $script:MsixTrustedPublishers }
     }
     AfterAll {
-        InModuleScope MSIX -Parameters @{ Saved = $script:savedThumbprints } {
-            param($Saved)
-            $script:MsixTrustedThumbprints = $Saved
+        InModuleScope MSIX -Parameters @{
+            SavedThumbprints = $script:savedThumbprints
+            SavedEntries     = $script:savedEntries
+            SavedPublishers  = $script:savedPublishers
+        } {
+            param($SavedThumbprints, $SavedEntries, $SavedPublishers)
+            $script:MsixTrustedThumbprints = $SavedThumbprints
+            $script:MsixTrustedPublisherEntries = $SavedEntries
+            $script:MsixTrustedPublishers = $SavedPublishers
         }
     }
 
@@ -79,6 +86,8 @@ Describe 'Trusted-publisher thumbprint pinning (#55)' -Tag 'Security', 'PsfBinar
             $prefixes = _MsixLoadTrustedPublishers -Path $P
             $prefixes | Should -Contain 'CN=Contoso,'
             $script:MsixTrustedThumbprints | Should -Contain 'AABBCCDDEEFF00112233445566778899AABBCCDD'
+            $entry = @($script:MsixTrustedPublisherEntries | Where-Object SubjectPrefix -eq 'CN=Contoso,')[0]
+            $entry.Thumbprints | Should -Contain 'AABBCCDDEEFF00112233445566778899AABBCCDD'
         }
     }
 
@@ -105,5 +114,72 @@ Describe 'Trusted-publisher thumbprint pinning (#55)' -Tag 'Security', 'PsfBinar
             _MsixLoadTrustedPublishers -Path $P
         }
         $prefixes | Should -Contain 'CN=Contoso,'
+    }
+
+    It 'does not apply one publisher thumbprint pin to another prefix-only publisher' {
+        InModuleScope MSIX -Parameters @{ Dir = $TestDrive } {
+            param($Dir)
+            $file = Join-Path -Path $Dir -ChildPath 'tool.exe'
+            Set-Content -LiteralPath $file -Value 'stub' -Encoding ascii
+
+            $script:MsixTrustedPublishers = @('CN=Contoso,', 'CN=Fabrikam,')
+            $script:MsixTrustedThumbprints = @('AABBCCDDEEFF00112233445566778899AABBCCDD')
+            $script:MsixTrustedPublisherEntries = @(
+                [pscustomobject]@{
+                    SubjectPrefix = 'CN=Contoso,'
+                    Thumbprints   = @('AABBCCDDEEFF00112233445566778899AABBCCDD')
+                },
+                [pscustomobject]@{
+                    SubjectPrefix = 'CN=Fabrikam,'
+                    Thumbprints   = @()
+                }
+            )
+            Mock Get-AuthenticodeSignature {
+                [pscustomobject]@{
+                    Status = 'Valid'
+                    StatusMessage = ''
+                    SignerCertificate = [pscustomobject]@{
+                        Subject = 'CN=Fabrikam, O=Fabrikam Ltd'
+                        Thumbprint = '11223344556677889900AABBCCDDEEFF11223344'
+                    }
+                }
+            }
+
+            { _MsixVerifyAuthenticode -Path $file -ToolName 'test-tool' } | Should -Not -Throw
+        }
+    }
+
+    It 'rejects a pinned publisher when the matching entry thumbprint differs' {
+        InModuleScope MSIX -Parameters @{ Dir = $TestDrive } {
+            param($Dir)
+            $file = Join-Path -Path $Dir -ChildPath 'tool.exe'
+            Set-Content -LiteralPath $file -Value 'stub' -Encoding ascii
+
+            $script:MsixTrustedPublishers = @('CN=Contoso,', 'CN=Fabrikam,')
+            $script:MsixTrustedThumbprints = @('AABBCCDDEEFF00112233445566778899AABBCCDD')
+            $script:MsixTrustedPublisherEntries = @(
+                [pscustomobject]@{
+                    SubjectPrefix = 'CN=Contoso,'
+                    Thumbprints   = @('AABBCCDDEEFF00112233445566778899AABBCCDD')
+                },
+                [pscustomobject]@{
+                    SubjectPrefix = 'CN=Fabrikam,'
+                    Thumbprints   = @()
+                }
+            )
+            Mock Get-AuthenticodeSignature {
+                [pscustomobject]@{
+                    Status = 'Valid'
+                    StatusMessage = ''
+                    SignerCertificate = [pscustomobject]@{
+                        Subject = 'CN=Contoso, O=Contoso Ltd'
+                        Thumbprint = '11223344556677889900AABBCCDDEEFF11223344'
+                    }
+                }
+            }
+
+            { _MsixVerifyAuthenticode -Path $file -ToolName 'test-tool' } |
+                Should -Throw -ExpectedMessage '*matching signers.json entry*'
+        }
     }
 }

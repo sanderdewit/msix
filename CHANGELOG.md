@@ -19,9 +19,10 @@ older lives here.
     constant (empty by default) lets you pin msixmgr — which is unsigned upstream
     (microsoft/msix-packaging#710) — for every call in one place.
   - `signers.json` entries may now carry an optional `thumbprint`; when present,
-    `_MsixVerifyAuthenticode` requires the signer's thumbprint to match exactly,
-    closing the CN-prefix-only gap (a hostile `CN=Microsoft Corporation, O=Evil`
-    cert). Prefix-only entries keep working unchanged.
+    `_MsixVerifyAuthenticode` requires the signer's thumbprint to match exactly
+    for that matching publisher entry, closing the CN-prefix-only gap (a hostile
+    `CN=Microsoft Corporation, O=Evil` cert). Prefix-only entries keep working
+    unchanged even when another publisher is pinned.
 
 ### Features
 

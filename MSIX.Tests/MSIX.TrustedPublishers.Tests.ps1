@@ -1,6 +1,7 @@
 ﻿BeforeAll {
     Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
     $script:SignersJsonPath = (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\signers.json')).Path
+    $script:SignersSchemaPath = Join-Path -Path $PSScriptRoot -ChildPath '..\signers.schema.json'
     $script:SignersDoc      = Get-Content -LiteralPath $script:SignersJsonPath -Raw | ConvertFrom-Json
 }
 
@@ -12,6 +13,13 @@ Describe 'Trusted-publisher allowlist (issue #19)' -Tag 'TrustedPublishers' {
 
         It 'signers.json ships at the module root' {
             Test-Path -LiteralPath $script:SignersJsonPath | Should -BeTrue
+        }
+
+        It 'declares a local schema that ships with the module' {
+            $script:SignersDoc.'$schema' | Should -Be './signers.schema.json'
+            Test-Path -LiteralPath $script:SignersSchemaPath | Should -BeTrue
+            { Get-Content -LiteralPath $script:SignersSchemaPath -Raw | ConvertFrom-Json } |
+                Should -Not -Throw
         }
 
         It 'declares a numeric version' {

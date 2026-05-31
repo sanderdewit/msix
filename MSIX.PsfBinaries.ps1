@@ -38,14 +38,16 @@ function _MsixLoadTrustedPublishers {
     .DESCRIPTION
         Reads $PSScriptRoot\signers.json, validates each entry's
         subjectPrefix matches the standard X.509 form (starts with 'CN=',
-        ends with ','), returns the deduplicated prefix list as [string[]].
+        ends with ','), returns the deduplicated prefix list as [string[]]
+        for the existing module contract, and records structured entries in
+        $script:MsixTrustedPublisherEntries for verification.
 
         An entry MAY also carry an optional 'thumbprint' (SHA-1, the standard
         certificate thumbprint format, hex, case/space-insensitive). When
-        present it is recorded in $script:MsixTrustedThumbprints and
-        _MsixVerifyAuthenticode requires the signer's thumbprint to match
-        exactly — a far stronger control than the CN-prefix match alone (which
-        a hostile cert can satisfy with 'CN=Microsoft Corporation, O=Evil').
+        present it is scoped to that allowlist entry: only files whose signer
+        Subject matches the entry's subjectPrefix must match that entry's pin.
+        Prefix-only entries keep their existing behaviour even when another
+        publisher entry is pinned.
 
         Throws on:
           - missing signers.json (loud failure; toolchain installs cannot
@@ -76,7 +78,8 @@ function _MsixLoadTrustedPublishers {
 
     $rx          = [regex]'^CN=.+,$'
     $prefixes    = [System.Collections.Generic.List[string]]::new()
-    $thumbprints = [System.Collections.Generic.List[string]]::new()
+    $thumbprints       = [System.Collections.Generic.List[string]]::new()
+    $publisherEntries  = [System.Collections.Generic.List[object]]::new()
     foreach ($entry in $doc.publishers) {
         $p = [string]$entry.subjectPrefix
         if (-not $p) {
@@ -88,6 +91,7 @@ function _MsixLoadTrustedPublishers {
         if (-not $prefixes.Contains($p)) { $prefixes.Add($p) }
 
         # Optional thumbprint pin (normalised: strip spaces, upper-case hex).
+        $entryThumbprints = [System.Collections.Generic.List[string]]::new()
         $tp = [string]$entry.thumbprint
         if ($tp) {
             $tpNorm = ($tp -replace '\s', '').ToUpperInvariant()
@@ -95,19 +99,27 @@ function _MsixLoadTrustedPublishers {
                 throw "Trusted-publisher allowlist at '$Path' has an entry with an invalid 'thumbprint' (expected 40 hex chars, SHA-1): '$tp'."
             }
             if (-not $thumbprints.Contains($tpNorm)) { $thumbprints.Add($tpNorm) }
+            if (-not $entryThumbprints.Contains($tpNorm)) { $entryThumbprints.Add($tpNorm) }
         }
+        $publisherEntries.Add([pscustomobject]@{
+            SubjectPrefix = $p
+            Thumbprints   = [string[]]$entryThumbprints
+        })
     }
 
     if ($prefixes.Count -eq 0) {
         throw "Trusted-publisher allowlist at '$Path' contains zero valid entries."
     }
 
-    # Side-channel the thumbprint set (the function's contract returns prefixes).
+    # Side-channel structured entries for verification while preserving the
+    # original string[] prefix contract expected by existing tests/callers.
+    $script:MsixTrustedPublisherEntries = [object[]]$publisherEntries
     $script:MsixTrustedThumbprints = [string[]]$thumbprints
     return [string[]]$prefixes
 }
 
 $script:MsixTrustedThumbprints = @()
+$script:MsixTrustedPublisherEntries = @()
 $script:MsixTrustedPublishers = _MsixLoadTrustedPublishers
 $script:MsixTrustedPublishersPath = Join-Path -Path $PSScriptRoot -ChildPath 'signers.json'
 
@@ -118,7 +130,9 @@ function _MsixVerifyAuthenticode {
     .DESCRIPTION
         Reject the file unless:
           - signature Status is 'Valid'
-          - signer cert is in $script:MsixTrustedPublishers
+          - signer cert is in signers.json's trusted-publisher allowlist
+          - when the matching entry has a thumbprint pin, the signer cert
+            thumbprint matches that entry's pin
         Throws on rejection; returns the signature object on success.
     .PARAMETER Path
         File to verify.
@@ -141,30 +155,42 @@ function _MsixVerifyAuthenticode {
     if (-not $subject) {
         throw "Authenticode verification FAILED for $ToolName at $Path`: no signer cert."
     }
-    $isTrusted = $false
-    foreach ($prefix in $script:MsixTrustedPublishers) {
-        if ($subject -like "$prefix*") { $isTrusted = $true; break }
+    $matchedEntries = @()
+    if ($script:MsixTrustedPublisherEntries -and $script:MsixTrustedPublisherEntries.Count -gt 0) {
+        foreach ($entry in $script:MsixTrustedPublisherEntries) {
+            if ($subject -like "$($entry.SubjectPrefix)*") { $matchedEntries += $entry }
+        }
+    } else {
+        foreach ($prefix in $script:MsixTrustedPublishers) {
+            if ($subject -like "$prefix*") {
+                $matchedEntries += [pscustomobject]@{
+                    SubjectPrefix = $prefix
+                    Thumbprints   = @()
+                }
+            }
+        }
     }
-    if (-not $isTrusted) {
+    if (-not $matchedEntries) {
         throw @"
 Authenticode verification FAILED for $ToolName at $Path.
 Signer is NOT in the trusted-publisher allowlist:
   Subject:    $subject
   Thumbprint: $($sig.SignerCertificate.Thumbprint)
-If you trust this publisher, add the CN prefix to `$script:MsixTrustedPublishers in MSIX.PsfBinaries.ps1.
+If you trust this publisher, add its CN prefix to signers.json and follow the trusted-publisher governance notes in CONTRIBUTING.md.
 "@
     }
-    # When signers.json pins one or more thumbprints, require an exact match.
-    # This closes the CN-prefix-only gap (a hostile cert whose Subject merely
-    # starts with a trusted CN). Pinning is opt-in per entry, so when no
-    # thumbprints are configured the prefix match above stands alone.
-    if ($script:MsixTrustedThumbprints -and $script:MsixTrustedThumbprints.Count -gt 0) {
+    # When the matching signers.json entry pins one or more thumbprints,
+    # require an exact match. Pinning is opt-in per entry: unrelated prefix-only
+    # entries keep their existing behaviour even if another publisher is pinned.
+    $pinnedEntries = @($matchedEntries | Where-Object { $_.Thumbprints -and @($_.Thumbprints).Count -gt 0 })
+    if ($pinnedEntries) {
         $actualTp = if ($sig.SignerCertificate) { ($sig.SignerCertificate.Thumbprint -replace '\s', '').ToUpperInvariant() } else { '' }
-        if ($actualTp -notin $script:MsixTrustedThumbprints) {
+        $allowedThumbprints = @($pinnedEntries | ForEach-Object { $_.Thumbprints })
+        if ($actualTp -notin $allowedThumbprints) {
             throw @"
 Authenticode verification FAILED for $ToolName at $Path.
-Signer cert passed the publisher-prefix check but its thumbprint is NOT in the
-pinned-thumbprint allowlist (signers.json):
+Signer cert passed the publisher-prefix check but its thumbprint is NOT pinned
+on the matching signers.json entry:
   Subject:    $subject
   Thumbprint: $actualTp
 If you trust this certificate, add its thumbprint to the matching signers.json entry.
@@ -546,8 +572,7 @@ function Install-MsixPsfBinary {
         have a valid Authenticode signature from a trusted publisher BEFORE
         anything is copied into the toolchain folder. A failed verification
         rolls back the install (the destination folder is removed if this
-        cmdlet created it). See $script:MsixTrustedPublishers for the
-        allowlist.
+        cmdlet created it). See signers.json for the allowlist.
 
         Related: Update-MsixPsfBinary (re-installs only when GitHub publishes a
         newer tag), Get-MsixPsfBinariesVersion (queries what's currently

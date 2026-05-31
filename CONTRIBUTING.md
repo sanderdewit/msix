@@ -104,9 +104,9 @@ Test files may use PS7-only syntax because Pester runs them under
 
 - All `Install-Msix*` functions must call `_MsixVerifyAuthenticode` on the
   downloaded binaries before installing them into the toolchain.
-- Trusted publishers are listed in `$script:MsixTrustedPublishers` in
-  `MSIX.PsfBinaries.ps1`. Adding a new publisher requires PR review and a link
-  to the publisher's official cert thumbprint (see issue #19 for governance).
+- Trusted publishers are listed in `signers.json` at the module root. Adding a
+  new publisher requires PR review and a link to the publisher's official cert
+  thumbprint (see the governance section below).
 
 ## Signing
 
@@ -225,6 +225,10 @@ Open a PR that adds one object to the `publishers` array in
   trail.
 - **`addedAt`** *(strongly recommended)*: ISO-8601 date the entry was
   added.
+- **`thumbprint`** *(optional)*: a SHA-1 leaf-certificate thumbprint for this
+  exact publisher entry. When present, only signatures whose Subject matches
+  this entry's `subjectPrefix` must match this pin; unrelated prefix-only
+  entries keep their normal prefix check.
 
 ### Evidence required for review
 

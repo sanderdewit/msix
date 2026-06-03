@@ -50,7 +50,10 @@ Describe 'Plugin / extension-point detection + autofix' -Tag 'Plugins' {
             $r = Invoke-MsixAutoFixFromAnalysis -Report $report -DryRun
             $stage = @($r.Plan | Where-Object Stage -eq 'PluginDirectory') | Select-Object -First 1
             $stage | Should -Not -BeNullOrEmpty
-            $stage.Reason | Should -Match 'Selective virtualization'
+            # Issue #81: the modern path now disables write-virtualization AND
+            # redirects install-dir folders via PSF (ExcludedDirectory cannot
+            # express install-relative paths).
+            $stage.Reason | Should -Match 'PSF FileRedirection'
             $stage.Reason | Should -Match 'plugins'
             $stage.Reason | Should -Match 'themes'
         }
@@ -83,7 +86,7 @@ Describe 'Plugin / extension-point detection + autofix' -Tag 'Plugins' {
             $r = Invoke-MsixAutoFixFromAnalysis -Report $report -DryRun
             $stage = @($r.Plan | Where-Object Stage -eq 'PluginDirectory') | Select-Object -First 1
             $stage | Should -Not -BeNullOrEmpty
-            $stage.Reason | Should -Match '2 extension folder\(s\)'
+            $stage.Reason | Should -Match '2 .*extension folder\(s\)'
         }
     }
 

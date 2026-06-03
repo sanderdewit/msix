@@ -132,8 +132,8 @@
         [string]$DisplayName,
         [ValidateScript({
             foreach ($t in $_) {
-                if ($t -notmatch '^(\*|\.[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}|Directory|Drive)$') {
-                    throw "Invalid file type: '$t'. Allowed: '*', '.ext' (alphanumeric/underscore/dot/hyphen, max 32 chars after dot), 'Directory', 'Drive'."
+                if ($t -notmatch '^(\*|\.[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}|Directory|Directory\\Background|Folder|Drive|DesktopBackground|AllFilesystemObjects)$') {
+                    throw "Invalid file type: '$t'. Allowed: '*', '.ext' (alphanumeric/underscore/dot/hyphen, max 32 chars after dot), 'Directory', 'Directory\Background', 'Folder', 'Drive', 'DesktopBackground', 'AllFilesystemObjects'."
                 }
             }
             $true
@@ -393,8 +393,8 @@ function Add-MsixFileExplorerContextMenu {
         [Parameter(Mandatory)]
         [ValidateScript({
             foreach ($t in $_) {
-                if ($t -notmatch '^(\*|\.[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}|Directory|Drive)$') {
-                    throw "Invalid file type: '$t'. Allowed: '*', '.ext' (alphanumeric/underscore/dot/hyphen, max 32 chars after dot), 'Directory', 'Drive'."
+                if ($t -notmatch '^(\*|\.[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}|Directory|Directory\\Background|Folder|Drive|DesktopBackground|AllFilesystemObjects)$') {
+                    throw "Invalid file type: '$t'. Allowed: '*', '.ext' (alphanumeric/underscore/dot/hyphen, max 32 chars after dot), 'Directory', 'Directory\Background', 'Folder', 'Drive', 'DesktopBackground', 'AllFilesystemObjects'."
                 }
             }
             $true

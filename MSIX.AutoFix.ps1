@@ -465,20 +465,35 @@ function Invoke-MsixAutoFixFromAnalysis {
                     }
                 })
             } else {
-                # Modern path (Win10 19041+): selective virtualization carve-out.
-                # Set-MsixFileSystemWriteVirtualization defaults excluded dirs to
-                # LocalAppData + RoamingAppData; extend that list with the plugin
-                # folders so the explicit declaration is single-call.
+                # Modern path (Win10 19041+): disable write-virtualization so
+                # writes reach the real filesystem.
+                #
+                # IMPORTANT (issue #81): plugin folders detected here live UNDER
+                # the install location (VFS\ProgramFilesX64\App\...). The
+                # virtualization:ExcludedDirectory element CANNOT express an
+                # install-relative path — its schema only accepts
+                # $(KnownFolder:Name)[\subpath] tokens — so passing these paths
+                # made MakeAppx fail schema validation. Install-directory
+                # passthrough is what PSF FileRedirectionFixup is for, so route
+                # the plugin folders through PSF here too; the
+                # Set-MsixFileSystemWriteVirtualization call only carries the
+                # valid KnownFolder defaults.
                 $plan.Add([pscustomobject]@{
                     Stage  = 'PluginDirectory'
-                    Reason = "Selective virtualization passthrough for $($capturedPluginDirs.Count) extension folder(s): $($capturedPluginDirs -join ', ')"
+                    Reason = "Disable write-virtualization + PSF FileRedirection passthrough for $($capturedPluginDirs.Count) install-dir extension folder(s): $($capturedPluginDirs -join ', ')"
                     Action = {
-                        $excluded = @('$(KnownFolder:LocalAppData)','$(KnownFolder:RoamingAppData)') + @($capturedPluginDirs | ForEach-Object { $_ -replace '\\','/' })
-                        # We DISABLE legacy virtualization and exclude these
-                        # specific directories from the virtualization layer
-                        # so writes inside them land on the real filesystem.
+                        # 1) Disable virtualization with only valid KnownFolder
+                        #    exclusions (LocalAppData + RoamingAppData defaults).
                         Set-MsixFileSystemWriteVirtualization -PackagePath $current `
-                            -ExcludedDirectories $excluded -SkipSigning
+                            -ExcludedDirectories @('$(KnownFolder:LocalAppData)', '$(KnownFolder:RoamingAppData)') `
+                            -SkipSigning
+                        # 2) Redirect the install-dir plugin folders via PSF so
+                        #    their writes survive (ExcludedDirectory can't target
+                        #    install-relative paths).
+                        $fixups = @(foreach ($d in $capturedPluginDirs) {
+                            New-MsixPsfFileRedirectionConfig -Base ($d -replace '\\','/') -Patterns '.*'
+                        })
+                        Add-MsixPsfV2 -PackagePath $current -Fixups $fixups -SkipSigning
                     }
                 })
             }

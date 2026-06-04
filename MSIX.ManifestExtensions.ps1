@@ -303,18 +303,41 @@ function Set-MsixFileSystemWriteVirtualization {
             'namespace-uri()="' + $virtUri + '"]')
         if ($virtNode) { $null = $props.RemoveChild($virtNode) }
 
-        if ($ExcludedDirectories.Count -gt 0) {
+        # SECURITY/CORRECTNESS (issue #81): virtualization:ExcludedDirectory only
+        # accepts a KnownFolder token of the form $(KnownFolder:Name) optionally
+        # followed by \subpath — it is the MSIX schema's documented pattern
+        #   \$\([kK][nN][oO][wW][nN][fF][oO][lL][dD][eE][rR]:[A-Za-z0-9]{1,32}\)(\\.+)?
+        # An install-relative / VFS path such as 'VFS/ProgramFilesX64/App/Lang'
+        # CANNOT be expressed here and makes MakeAppx fail schema validation.
+        # Normalise separators, drop invalid entries with a clear warning, and
+        # only emit the element when at least one valid token remains — so this
+        # function can never produce a manifest MakeAppx rejects.
+        $knownFolderRx = [regex]'^\$\(KnownFolder:[A-Za-z0-9]{1,32}\)(\\.+)?$'
+        $validDirs = [System.Collections.Generic.List[string]]::new()
+        foreach ($dir in $ExcludedDirectories) {
+            # ExcludedDirectory uses backslash separators inside the subpath.
+            $norm = ([string]$dir).Replace('/', '\')
+            if ($knownFolderRx.IsMatch($norm)) {
+                if (-not $validDirs.Contains($norm)) { $validDirs.Add($norm) }
+            } else {
+                Write-MsixLog -Level Warning -Message "Skipping ExcludedDirectory '$dir': virtualization:ExcludedDirectory only accepts a `$(KnownFolder:Name)[\subpath] token, not an install-relative/VFS path. Use the PSF FileRedirection route (Add-MsixPsfV2 / -LegacyPluginFix) for install-directory passthrough."
+            }
+        }
+
+        if ($validDirs.Count -gt 0) {
             Add-MsixManifestNamespace -Manifest $M -Prefix 'virtualization'
             $virtNode = $M.CreateElement('virtualization:FileSystemWriteVirtualization', $virtUri)
             $dirs     = $M.CreateElement('virtualization:ExcludedDirectories', $virtUri)
-            foreach ($dir in $ExcludedDirectories) {
+            foreach ($dir in $validDirs) {
                 $entry = $M.CreateElement('virtualization:ExcludedDirectory', $virtUri)
                 $entry.InnerText = $dir
                 $null = $dirs.AppendChild($entry)
             }
             $null = $virtNode.AppendChild($dirs)
             $null = $props.AppendChild($virtNode)
-            Write-MsixLog -Level Info -Message "virtualization:FileSystemWriteVirtualization: $($ExcludedDirectories.Count) excluded dir(s)."
+            Write-MsixLog -Level Info -Message "virtualization:FileSystemWriteVirtualization: $($validDirs.Count) excluded dir(s)."
+        } elseif ($ExcludedDirectories.Count -gt 0) {
+            Write-MsixLog -Level Warning -Message 'No valid KnownFolder ExcludedDirectory tokens remained; emitting the disabled flag only (no virtualization:ExcludedDirectories element).'
         }
 
         # ── unvirtualizedResources capability (required by the schema) ─────

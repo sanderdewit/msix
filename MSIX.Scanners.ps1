@@ -545,7 +545,10 @@ function Get-MsixShellContextMenuEntry {
                 return $null
             }
 
-            foreach ($target in @('*', 'Directory', 'Directory\Background', 'AllFilesystemObjects')) {
+            # Targets the shell uses for context-menu handlers. 'Folder' (issue
+            # #80) covers folders incl. 7-Zip's handler; 'Directory' is
+            # filesystem dirs; 'Drive' covers drive roots.
+            foreach ($target in @('*', 'Directory', 'Directory\Background', 'Folder', 'Drive', 'AllFilesystemObjects')) {
                 $tgtClean = $target
 
                 # ── Shell verbs: Classes\<target>\shell\<verb>

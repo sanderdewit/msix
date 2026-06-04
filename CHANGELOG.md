@@ -7,6 +7,28 @@ older lives here.
 
 ## Unreleased - Security review fixes (#49, #50, #51, #52, #53, #54, #55, #56) + integration tests (#61) + perf (#58)
 
+### Bug fixes
+
+- **#80 — folder context menus (e.g. 7-Zip) were missing.** The shell
+  context-menu scanner only walked the `*`, `Directory`, `Directory\Background`
+  and `AllFilesystemObjects` shell classes, so handlers registered under the
+  `Folder` class (which 7-Zip uses) were never detected. Added `Folder` and
+  `Drive` to the scanned targets, and widened the `-FileTypes` validation on
+  `Add-MsixLegacyContextMenu` / `Add-MsixFileExplorerContextMenu` to accept the
+  container item-types the shell uses (`Folder`, `Directory\Background`,
+  `DesktopBackground`, `AllFilesystemObjects`, `Drive`).
+- **#81 — MakeAppx schema failure on install-dir plugin folders.**
+  `Invoke-MsixAutoFixFromAnalysis` passed install-relative VFS paths (e.g.
+  `VFS\ProgramFilesX64\7-Zip\Lang`) to `virtualization:ExcludedDirectory`, but
+  that element's schema only accepts `$(KnownFolder:Name)[\subpath]` tokens, so
+  MakeAppx aborted with `error C00CE169 … violates pattern constraint`. The
+  PluginDirectory autofix now redirects install-dir folders via PSF
+  FileRedirection (the mechanism that can express them) and only feeds valid
+  KnownFolder tokens to `-ExcludedDirectories`. As defence-in-depth,
+  `Set-MsixFileSystemWriteVirtualization` now validates each excluded directory
+  against the KnownFolder pattern and skips (with a warning) any that can't be
+  expressed, so it can never again emit a manifest MakeAppx rejects.
+
 ### Security / robustness fixes (post-review)
 
 - **#55 — download integrity (opt-in, out-of-box safe).** Two configurable

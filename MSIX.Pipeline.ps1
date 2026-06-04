@@ -369,7 +369,16 @@ function _MsixMutatePackage {
         $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
-        $summary = & $Mutator $workspace
+        # Invoke the mutator bound to THIS module's session state so module-
+        # private helpers (e.g. _MsixOpenOfflineHive) always resolve, even if the
+        # scriptblock was created in — or dispatched through — a different scope.
+        # NewBoundScriptBlock throws if the block is already bound to a *different*
+        # module; in that (unexpected) case fall back to the block as-is.
+        $boundMutator = $Mutator
+        if ($ExecutionContext.SessionState.Module) {
+            try { $boundMutator = $ExecutionContext.SessionState.Module.NewBoundScriptBlock($Mutator) } catch { $boundMutator = $Mutator }
+        }
+        $summary = & $boundMutator $workspace
 
         # No-change contract: $null / $false / empty collection -> bail.
         $hasChanges = $false

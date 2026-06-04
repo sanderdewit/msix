@@ -173,7 +173,14 @@ function Invoke-MsixManifestTransform {
         # manifest text through the hardened loader instead.
         _MsixLoadXmlSecure -XmlText ([string]$Manifest)
     }
-    & $Transform $xml
+    # Bind the transform to this module's session state so module-private
+    # helpers it calls always resolve regardless of where the block was created.
+    # Falls back to the block as-is if it is already bound to a different module.
+    $boundTransform = $Transform
+    if ($ExecutionContext.SessionState.Module) {
+        try { $boundTransform = $ExecutionContext.SessionState.Module.NewBoundScriptBlock($Transform) } catch { $boundTransform = $Transform }
+    }
+    & $boundTransform $xml
     return $xml
 }
 

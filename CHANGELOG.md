@@ -9,6 +9,18 @@ older lives here.
 
 ### Bug fixes
 
+- **Mutator scriptblocks could not resolve module-private functions.**
+  `Remove-MsixShellRegistryArtifact` (and the `StripLegacyShellRegistry`
+  auto-fix stage that calls it) threw `_MsixOpenOfflineHive is not recognized`
+  at runtime: the `-Mutator` scriptblock is defined in one module file but
+  invoked from `_MsixMutatePackage` in another, and under some module-load
+  conditions the block lost its module session affinity so module-private
+  offreg helpers were unresolvable. `_MsixMutatePackage` and
+  `Invoke-MsixManifestTransform` now rebind the scriptblock to the module
+  session state (`NewBoundScriptBlock`) before invoking it, so private helpers
+  always resolve. The shell-registry mutator path was previously only covered
+  by export/`-WhatIf` tests (which skip the mutator body); an end-to-end
+  regression test now runs it against a real packed `Registry.dat`.
 - **#80 — folder context menus (e.g. 7-Zip) were missing.** The shell
   context-menu scanner only walked the `*`, `Directory`, `Directory\Background`
   and `AllFilesystemObjects` shell classes, so handlers registered under the

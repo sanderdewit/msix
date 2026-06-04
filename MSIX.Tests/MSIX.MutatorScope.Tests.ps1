@@ -69,8 +69,14 @@ Describe 'Remove-MsixShellRegistryArtifact end-to-end (real package + hive)' -Ta
             param($DatPath, $Clsid)
             $h = _MsixCreateOfflineHive
             try {
-                $classes = _MsixOfflineCreateKey -Parent $h -SubKey 'REGISTRY\MACHINE\SOFTWARE\Classes\Folder\shellex\ContextMenuHandlers\7-Zip'
-                _MsixOfflineSetValueString -Key $classes -Name '' -Value $Clsid
+                # offreg's ORCreateKey does not create intermediate keys, so
+                # build the path one segment at a time (same pattern as the
+                # offreg/Issue28 tests).
+                $cur = $h
+                foreach ($seg in @('REGISTRY','MACHINE','SOFTWARE','Classes','Folder','shellex','ContextMenuHandlers','7-Zip')) {
+                    $cur = _MsixOfflineCreateKey -Parent $cur -SubKey $seg
+                }
+                _MsixOfflineSetValueString -Key $cur -Name '' -Value $Clsid
                 if (Test-Path -LiteralPath $DatPath) { Remove-Item -LiteralPath $DatPath -Force }
                 if (-not (_MsixOfflineSaveHive -Hive $h -Path $DatPath)) { throw 'ORSaveHive failed.' }
             } finally { _MsixCloseOfflineHive -Hive $h }

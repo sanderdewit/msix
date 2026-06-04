@@ -609,7 +609,7 @@ function Remove-MsixShellRegistryArtifact {
             }
 
             # Targets to walk under Classes — the same set Get-MsixShellContextMenuEntry uses.
-            $targets = @('*', 'Directory', 'Directory\Background', 'AllFilesystemObjects')
+            $targets = @('*', 'Directory', 'Directory\Background', 'Folder', 'Drive', 'AllFilesystemObjects')
 
             # Build a CLSID set for fast membership testing (lower-cased, both bare
             # and braced forms accepted in inputs).
@@ -648,6 +648,34 @@ function Remove-MsixShellRegistryArtifact {
                             }
                             foreach ($handler in $handlers) {
                                 $logical = "$shexBase\$handler"
+                                $value   = _MsixOfflineGetValue -Parent $hive -SubKey $logical -Name ''
+                                if (-not $value) { continue }
+                                $bare = $value.ToString().Trim().Trim('{', '}').ToLowerInvariant()
+                                if ($clsidSet.Contains($bare)) {
+                                    if (_MsixOfflineDeleteKeyRecursive -Parent $hive -SubKey $logical) {
+                                        $removedKeys += $logical
+                                        $modified = $true
+                                    } else {
+                                        Write-MsixLog -Level Warning -Message "Recursive ORDeleteKey failed for '$logical' — discarding partial changes."
+                                        $modified = $false
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                        if ($modified -eq $false -and $removedKeys.Count -gt 0) { break }
+
+                        # ── shellex\DragDropHandlers\<name> — delete iff (default) value matches our CLSID
+                        $dragBase = "$prefix\$target\shellex\DragDropHandlers"
+                        $dragKey  = _MsixOfflineOpenKey -Parent $hive -SubKey $dragBase
+                        if ($dragKey -ne [IntPtr]::Zero) {
+                            try {
+                                $handlers = _MsixOfflineEnumSubKeys -Key $dragKey
+                            } finally {
+                                _MsixOfflineCloseKey -Key $dragKey
+                            }
+                            foreach ($handler in $handlers) {
+                                $logical = "$dragBase\$handler"
                                 $value   = _MsixOfflineGetValue -Parent $hive -SubKey $logical -Name ''
                                 if (-not $value) { continue }
                                 $bare = $value.ToString().Trim().Trim('{', '}').ToLowerInvariant()

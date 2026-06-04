@@ -620,6 +620,34 @@ function Get-MsixShellContextMenuEntry {
                         _MsixOfflineCloseKey -Key $shexKey
                     }
                 }
+
+                # ── shellex COM handlers: Classes\<target>\shellex\DragDropHandlers\<name>
+                $ddPath = "REGISTRY\MACHINE\SOFTWARE\Classes\$target\shellex\DragDropHandlers"
+                $ddKey  = _MsixOfflineOpenKey -Parent $hive -SubKey $ddPath
+                if ($ddKey -ne [IntPtr]::Zero) {
+                    try {
+                        foreach ($handlerName in (_MsixOfflineEnumSubKeys -Key $ddKey)) {
+                            $clsid = _MsixOfflineGetValue -Parent $hive -SubKey "$ddPath\$handlerName" -Name ''
+                            if ($clsid -and $clsid -notmatch '^\{') { $clsid = "{$clsid}" }
+                            $dll = $null; $vfsDll = $null
+                            if ($clsid -and $clsid -match $clsidGuidRegex) {
+                                $dll = _resolveClsidDll $hive $clsid
+                                if ($dll) { $vfsDll = _MsixRegPathToVfsRelative -RegPath $dll -WorkspacePath $workspace }
+                            }
+                            $results.Add([pscustomobject]@{
+                                Type        = 'DragDrop'
+                                Target      = $tgtClean
+                                HandlerName = $handlerName
+                                Command     = $null
+                                Clsid       = $clsid
+                                DllPath     = $dll
+                                VfsDllPath  = $vfsDll
+                            })
+                        }
+                    } finally {
+                        _MsixOfflineCloseKey -Key $ddKey
+                    }
+                }
             }
         } finally {
             _MsixCloseOfflineHive -Hive $hive

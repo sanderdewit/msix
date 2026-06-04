@@ -179,6 +179,27 @@
         }
     }
 
+    # Map registry class names to valid desktop5:ItemType/@Type values.
+    # 'Folder' is the shell class for folder objects (filesystem dirs + virtual
+    # folders); 'Directory' is the correct desktop5 counterpart for filesystem
+    # items and is what File Explorer checks for MSIX context menus. 'Drive',
+    # 'AllFilesystemObjects', and 'DesktopBackground' have no desktop5 schema
+    # equivalent and are dropped — strip them from Registry.dat instead.
+    $FileTypes = @(foreach ($t in $FileTypes) {
+        switch ($t) {
+            'Folder'               { 'Directory' }
+            'Drive'                { }
+            'AllFilesystemObjects' { }
+            'DesktopBackground'    { }
+            default                { $t }
+        }
+    })
+    $FileTypes = @($FileTypes | Select-Object -Unique)
+    if ($FileTypes.Count -eq 0) {
+        Write-MsixLog -Level Info -Message 'No desktop5-compatible FileTypes after mapping — skipping Add-MsixLegacyContextMenu.'
+        return
+    }
+
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
         -UnsignedOutputPath $UnsignedOutputPath `
@@ -224,10 +245,28 @@
         }
         if (-not $app) { throw "Application '$AppId' not found in the manifest." }
 
-        # ── Idempotency: skip if this CLSID is already declared ──────────
-        $existingClass = $manifest.SelectSingleNode("//*[local-name()='Class' and @Id='$ClsidBare']")
-        if ($existingClass) {
-            Write-MsixLog -Level Info -Message "COM class $ClsidBare already declared in manifest — skipping Add-MsixLegacyContextMenu."
+        # ── Idempotency ────────────────────────────────────────────────────
+        # COM and FileType checks are independent: a repeat call for the same
+        # CLSID but a different FileType (e.g. Directory after * was already
+        # added) must still append the missing ItemType. We skip the COM
+        # server block if the class is already declared, but always check
+        # whether each requested FileType still needs a Verb entry.
+        $verbId = switch ($MenuType) {
+            'ContextMenu' { 'ContextMenuHandlers' }
+            'DragDrop'    { 'DragDropHandlers'    }
+        }
+
+        $comDeclared   = $null -ne $manifest.SelectSingleNode("//*[local-name()='Class' and @Id='$ClsidBare']")
+        $existingMenus = $manifest.SelectSingleNode("//*[local-name()='FileExplorerContextMenus']")
+
+        $missingTypes = @(foreach ($type in $FileTypes) {
+            if (-not $existingMenus) { $type; continue }
+            $q = "*[local-name()='ItemType' and @Type='$type']/*[local-name()='Verb' and @Id='$verbId' and @Clsid='$ClsidBare']"
+            if (-not ($existingMenus.SelectSingleNode($q))) { $type }
+        })
+
+        if ($comDeclared -and $missingTypes.Count -eq 0) {
+            Write-MsixLog -Level Info -Message "COM class $ClsidBare and all FileTypes ($($FileTypes -join ', ')) already declared — skipping."
             return
         }
 
@@ -242,23 +281,25 @@
         }
 
         # ── COM SurrogateServer (bare 'com' namespace, Application level) ──
-        $comUri    = Get-MsixManifestNamespaceUri -Prefix 'com'
-        $comExt    = $manifest.CreateElement('com:Extension',       $comUri)
-        $comExt.SetAttribute('Category', 'windows.comServer')
+        if (-not $comDeclared) {
+            $comUri    = Get-MsixManifestNamespaceUri -Prefix 'com'
+            $comExt    = $manifest.CreateElement('com:Extension',       $comUri)
+            $comExt.SetAttribute('Category', 'windows.comServer')
 
-        $comServer = $manifest.CreateElement('com:ComServer',       $comUri)
-        $surrogate = $manifest.CreateElement('com:SurrogateServer', $comUri)
-        $surrogate.SetAttribute('DisplayName', $DisplayName)
+            $comServer = $manifest.CreateElement('com:ComServer',       $comUri)
+            $surrogate = $manifest.CreateElement('com:SurrogateServer', $comUri)
+            $surrogate.SetAttribute('DisplayName', $DisplayName)
 
-        $class = $manifest.CreateElement('com:Class', $comUri)
-        $class.SetAttribute('Id',             $ClsidBare)   # ST_GUID — no braces
-        $class.SetAttribute('Path',           $ShellExtDll)
-        $class.SetAttribute('ThreadingModel', 'STA')
+            $class = $manifest.CreateElement('com:Class', $comUri)
+            $class.SetAttribute('Id',             $ClsidBare)   # ST_GUID — no braces
+            $class.SetAttribute('Path',           $ShellExtDll)
+            $class.SetAttribute('ThreadingModel', 'STA')
 
-        $null = $surrogate.AppendChild($class)
-        $null = $comServer.AppendChild($surrogate)
-        $null = $comExt.AppendChild($comServer)
-        $null = $appExt.AppendChild($comExt)
+            $null = $surrogate.AppendChild($class)
+            $null = $comServer.AppendChild($surrogate)
+            $null = $comExt.AppendChild($comServer)
+            $null = $appExt.AppendChild($comExt)
+        }
 
         # ── desktop4 + desktop5 verb declaration ─────────────────────────
         # desktop4:Extension wraps desktop4:FileExplorerContextMenus, which
@@ -269,20 +310,20 @@
         $d4Uri = Get-MsixManifestNamespaceUri -Prefix 'desktop4'
         $d5Uri = Get-MsixManifestNamespaceUri -Prefix 'desktop5'
 
-        $d4Ext = $manifest.CreateElement('desktop4:Extension', $d4Uri)
-        $d4Ext.SetAttribute('Category', 'windows.fileExplorerContextMenus')
-
-        $menus = $manifest.CreateElement('desktop4:FileExplorerContextMenus', $d4Uri)
-
-        # The Verb Id is the registry key name historically used for shellex
-        # COM handlers. We default to 'ContextMenuHandlers' (matching TMEditX)
-        # for ContextMenu, and 'DragDropHandlers' for DragDrop.
-        $verbId = switch ($MenuType) {
-            'ContextMenu' { 'ContextMenuHandlers' }
-            'DragDrop'    { 'DragDropHandlers'    }
+        # Re-use an existing FileExplorerContextMenus block when present so
+        # repeated calls for the same CLSID (different FileTypes) all land in
+        # one <desktop4:FileExplorerContextMenus> element.
+        if ($existingMenus) {
+            $menus = $existingMenus
+        } else {
+            $d4Ext = $manifest.CreateElement('desktop4:Extension', $d4Uri)
+            $d4Ext.SetAttribute('Category', 'windows.fileExplorerContextMenus')
+            $menus = $manifest.CreateElement('desktop4:FileExplorerContextMenus', $d4Uri)
+            $null  = $d4Ext.AppendChild($menus)
+            $null  = $appExt.AppendChild($d4Ext)
         }
 
-        foreach ($type in $FileTypes) {
+        foreach ($type in $missingTypes) {
             $itemType = $manifest.CreateElement('desktop5:ItemType', $d5Uri)
             $itemType.SetAttribute('Type', $type)
 
@@ -293,8 +334,6 @@
             $null = $itemType.AppendChild($verbNode)
             $null = $menus.AppendChild($itemType)
         }
-        $null = $d4Ext.AppendChild($menus)
-        $null = $appExt.AppendChild($d4Ext)
     }
 }
 

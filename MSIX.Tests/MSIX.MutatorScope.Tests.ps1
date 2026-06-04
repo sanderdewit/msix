@@ -49,7 +49,7 @@ Describe 'Remove-MsixShellRegistryArtifact end-to-end (real package + hive)' -Ta
     }
     AfterAll {
         if ($script:WorkDir -and (Test-Path -LiteralPath $script:WorkDir)) {
-            Remove-Item -LiteralPath $script:WorkDir -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $script:WorkDir -Recurse -Force
         }
     }
 
@@ -94,6 +94,8 @@ Describe 'Remove-MsixShellRegistryArtifact end-to-end (real package + hive)' -Ta
         { Remove-MsixShellRegistryArtifact -PackagePath $fx.PackagePath -Entries $entries -OutputPath $out -SkipSigning } |
             Should -Not -Throw
 
-        Remove-Item -LiteralPath $fx.StagingFolder -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $fx.StagingFolder) {
+            Remove-Item -LiteralPath $fx.StagingFolder -Recurse -Force
+        }
     }
 }

@@ -16,32 +16,76 @@
 # Minimum runtime: Windows 11 24H2 (build 26100) or later.
 # =============================================================================
 
-# Documented isolated-app capabilities. Add more as Microsoft publishes them.
-$script:KnownIsolationCapabilities = @(
-    'isolatedWin32-promptForAccess',
-    'isolatedWin32-accessFromLowIntegrityLevel',
-    'isolatedWin32-userProfileMinimal',
-    'isolatedWin32-userProfile',
-    'isolatedWin32-printDocumentsFolder',
-    'isolatedWin32-printDocumentsContents',
-    'isolatedWin32-fullFileSystemAccess',
-    'isolatedWin32-allowElevation',
-    'isolatedWin32-attachToHostInterop',
-    'isolatedWin32-internetClient',
-    'isolatedWin32-internetClientServer',
-    'isolatedWin32-privateNetworkClientServer',
-    'isolatedWin32-bluetooth',
-    'isolatedWin32-networking',
-    'isolatedWin32-removableStorage'
-)
+# Documented isolated-app capabilities.
+# Source: https://learn.microsoft.com/windows/win32/secauthz/app-isolation-supported-capabilities
+# Key = capability name; Value = short description for Get-MsixIsolationCapability output.
+$script:KnownIsolationCapabilities = [ordered]@{
+    # ── On the MS Learn page (documented and validated) ───────────────────
+    'isolatedWin32-print'                      = 'Print via the Win32 printing infrastructure'
+    'isolatedWin32-sysTrayIcon'                = 'Display notifications from the system tray'
+    'isolatedWin32-shellExtensionContextMenu'  = 'Display COM-based context menu entries'
+    'isolatedWin32-promptForAccess'            = 'Prompt users for file access at runtime'
+    'isolatedWin32-accessToPublisherDirectory' = 'Access directories ending with the publisher ID'
+    # Minimal-access group (for apps that cannot use prompting):
+    'isolatedWin32-dotNetBreadcrumbStore'      = 'Minimal access to the .NET breadcrumb store'
+    'isolatedWin32-profilesRootMinimal'        = 'Minimal access to the profiles root'
+    'isolatedWin32-userProfileMinimal'         = 'Minimal access to the user profile'
+    'isolatedWin32-volumeRootMinimal'          = 'Minimal access to the volume root'
+    # ── Extended capabilities used in practice (pre-dating the MS Learn page) ─
+    'isolatedWin32-accessFromLowIntegrityLevel' = 'Allow access from low-integrity-level processes'
+    'isolatedWin32-userProfile'                = 'Full user profile access'
+    'isolatedWin32-printDocumentsFolder'       = 'Access to the print documents folder'
+    'isolatedWin32-printDocumentsContents'     = 'Access to print document contents'
+    'isolatedWin32-fullFileSystemAccess'       = 'Full file system access'
+    'isolatedWin32-allowElevation'             = 'Allow elevation'
+    'isolatedWin32-attachToHostInterop'        = 'Attach to the host process for interop'
+    'isolatedWin32-internetClient'             = 'Outbound internet access'
+    'isolatedWin32-internetClientServer'       = 'Inbound and outbound internet access'
+    'isolatedWin32-privateNetworkClientServer' = 'Home/work network access'
+    'isolatedWin32-bluetooth'                  = 'Bluetooth access'
+    'isolatedWin32-networking'                 = 'General networking access'
+    'isolatedWin32-removableStorage'           = 'Removable storage access'
+}
+
+# Device capabilities supported under Win32 app isolation.
+# These use <DeviceCapability Name="…"/> in the default namespace — NOT rescap:Capability.
+# Source: UWP capabilities section of the MS Learn page above.
+$script:KnownIsolationDeviceCapabilities = [ordered]@{
+    'microphone' = 'Access to the microphone audio feed'
+    'webcam'     = 'Access to built-in camera or external webcam video feed'
+}
 
 function Get-MsixIsolationCapability {
     <#
     .SYNOPSIS
         Returns the set of well-known Win32-app-isolation capabilities the module
         is aware of. Use this list to decide what to pass into Add-MsixAppIsolation.
+
+    .DESCRIPTION
+        Returns one object per capability with the following properties:
+          Name        — the string to pass to Add-MsixAppIsolation -Capabilities.
+          ElementType — 'rescap:Capability' (isolatedWin32-*) or 'DeviceCapability'
+                        (microphone, webcam). Add-MsixAppIsolation picks the correct
+                        XML element automatically.
+          Description — short human-readable summary from the MS Learn page.
+
+    .OUTPUTS
+        [pscustomobject] with Name, ElementType, Description.
     #>
-    return $script:KnownIsolationCapabilities
+    foreach ($entry in $script:KnownIsolationCapabilities.GetEnumerator()) {
+        [pscustomobject]@{
+            Name        = $entry.Key
+            ElementType = 'rescap:Capability'
+            Description = $entry.Value
+        }
+    }
+    foreach ($entry in $script:KnownIsolationDeviceCapabilities.GetEnumerator()) {
+        [pscustomobject]@{
+            Name        = $entry.Key
+            ElementType = 'DeviceCapability'
+            Description = $entry.Value
+        }
+    }
 }
 
 
@@ -102,10 +146,9 @@ function Add-MsixAppIsolation {
     )
 
     foreach ($c in $Capabilities) {
-        if ($c -notmatch '^isolatedWin32-') {
-            Write-MsixLog -Level Warning -Message "'$c' doesn't look like a Win32 isolation capability (expected 'isolatedWin32-*'). Adding anyway."
-        }
-        if ($script:KnownIsolationCapabilities -notcontains $c) {
+        $knownIsolated = $script:KnownIsolationCapabilities.ContainsKey($c)
+        $knownDevice   = $script:KnownIsolationDeviceCapabilities.ContainsKey($c)
+        if (-not $knownIsolated -and -not $knownDevice) {
             Write-MsixLog -Level Warning -Message "'$c' is not in the documented capability set. Verify against MS Learn before publishing."
         }
     }
@@ -130,15 +173,29 @@ function Add-MsixAppIsolation {
         }
 
         foreach ($cap in $Capabilities) {
-            # Idempotent: skip if already present
-            $existing = $capsNode.ChildNodes | Where-Object {
-                $_.LocalName -eq 'Capability' -and $_.Name -eq $cap
+            # Device capabilities use <DeviceCapability> (default namespace);
+            # isolatedWin32-* capabilities use <rescap:Capability>.
+            $isDeviceCap   = $script:KnownIsolationDeviceCapabilities.ContainsKey($cap)
+            $targetLocal   = if ($isDeviceCap) { 'DeviceCapability' } else { 'Capability' }
+
+            # Idempotent: skip if the element with this Name attribute already exists.
+            $alreadyThere = $false
+            foreach ($child in $capsNode.ChildNodes) {
+                if ($child.LocalName -eq $targetLocal -and $child.GetAttribute('Name') -eq $cap) {
+                    $alreadyThere = $true
+                    break
+                }
             }
-            if ($existing) {
+            if ($alreadyThere) {
                 Write-MsixLog -Level Info -Message "Capability already present: $cap"
                 continue
             }
-            $node = $manifest.CreateElement('rescap:Capability', $rescapUri)
+
+            if ($isDeviceCap) {
+                $node = $manifest.CreateElement('DeviceCapability', $manifest.Package.NamespaceURI)
+            } else {
+                $node = $manifest.CreateElement('rescap:Capability', $rescapUri)
+            }
             $node.SetAttribute('Name', $cap)
             $null = $capsNode.AppendChild($node)
             Write-MsixLog -Level Info -Message "Capability added: $cap"

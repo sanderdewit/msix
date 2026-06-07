@@ -63,6 +63,129 @@ The module targets Windows PowerShell 5.1. Do not introduce:
 Test files may use PS7-only syntax because Pester runs them under
 `pwsh`, but module code that ships to PSGallery must not.
 
+## Function structure and naming
+
+### Approved verbs only (`Get-Verb`)
+
+Every exported function MUST be named `Verb-MsixNoun`, where **`Verb` is
+one of PowerShell's approved verbs** — the list returned by `Get-Verb`.
+
+```powershell
+# See the full approved list (and the group each verb belongs to):
+Get-Verb | Sort-Object Verb | Format-Table Verb, Group
+
+# Check a single candidate before you commit to a name:
+'Get'    -in (Get-Verb).Verb   # True  — approved
+'Strip'  -in (Get-Verb).Verb   # False — unapproved, do NOT use
+```
+
+Rules:
+
+- **Verb** comes from `Get-Verb`. Common correct choices in this module:
+  `Get` (read), `Set` (configure existing), `New` (create), `Add` /
+  `Remove` (element membership), `Update` (refresh to newer state),
+  `Invoke` (run an action/pipeline), `Test` (boolean check),
+  `Import` / `Export`, `Convert` / `ConvertTo` / `ConvertFrom`,
+  `Compare`, `Merge`, `Mount` / `Dismount`, `Install` / `Update`.
+- **Noun** is singular, PascalCase, and prefixed `Msix`
+  (`Add-MsixCapability`, not `Add-MsixCapabilities` and not
+  `Add-Capability`). Plural back-compat names exist only as **aliases**
+  in `AliasesToExport`, never as the function name.
+- Pick the verb by intent, not by habit. Stripping artefacts from a
+  package is `Remove-` (not `Strip-`); refreshing a pinned tool is
+  `Update-` (not `Refresh-`).
+
+#### Why
+
+- An unapproved verb makes `Import-Module` emit a noisy
+  *"unapproved verb"* warning and signals to every PowerShell user that
+  the command does something non-standard. It also breaks discoverability
+  (`Get-Command -Verb Get` won't find a `Fetch-*`).
+- The `MSIX.ModuleContract.Tests.ps1` guard already pins
+  `FunctionsToExport`; the approved-verb check belongs in the same
+  contract family so a bad name fails CI, not code review.
+
+### Comment-based help + skeleton (required for every function)
+
+Every function gets a complete comment-based help block and a
+`[CmdletBinding()]`. Use this skeleton:
+
+```powershell
+function Verb-MsixNoun {
+    <#
+    .SYNOPSIS
+        One sentence: what the function does.
+
+    .DESCRIPTION
+        Fuller explanation — what it reads or mutates, what it returns,
+        and any side effects (auto-injected capabilities, MaxVersionTested
+        bumps, files written).
+
+    .PARAMETER PackagePath
+        Describe every parameter. One .PARAMETER entry per param.
+
+    .EXAMPLE
+        Verb-MsixNoun -PackagePath app.msix -SkipSigning
+
+        Explain what the example does and what comes back.
+
+    .OUTPUTS
+        [pscustomobject] with <fields> — or the literal word 'None.'
+        for functions that don't emit to the pipeline.
+
+    .NOTES
+        Name:        Verb-MsixNoun
+        Author:      <name or GitHub handle>
+        Version:     1.0
+        DateCreated: 2026-Jun-07
+
+    .LINK
+        https://github.com/sanderdewit/msix
+    #>
+    [CmdletBinding(SupportsShouldProcess)]   # SupportsShouldProcess for MUTATORS only
+    [OutputType([pscustomobject])]           # declare the real return type
+    param(
+        [Parameter(
+            Mandatory                       = $true,
+            ValueFromPipeline               = $true,
+            ValueFromPipelineByPropertyName = $true,
+            Position                        = 0
+        )]
+        [string[]] $PackagePath
+    )
+
+    BEGIN {}
+    PROCESS {}
+    END {}
+}
+```
+
+#### Convention
+
+- **Help block is mandatory.** `.SYNOPSIS`, `.DESCRIPTION`,
+  one `.PARAMETER` per parameter, at least one `.EXAMPLE`, `.OUTPUTS`,
+  `.NOTES`, and `.LINK`. PSScriptAnalyzer and reviewers both rely on it,
+  and `Get-Help Verb-MsixNoun -Full` must render usefully.
+- **`[CmdletBinding()]` is mandatory.** Add `SupportsShouldProcess` for
+  any function that changes state (every `Add-`/`Remove-`/`Set-`/
+  `Update-`/`Invoke-` mutator) so `-WhatIf` / `-Confirm` work — this is
+  already enforced by `MSIX.WhatIf.Tests.ps1`.
+- **`[OutputType()]`** must reflect what the function actually returns, so
+  PSScriptAnalyzer's type inference and downstream `|` pipelines stay
+  honest.
+- **`BEGIN` / `PROCESS` / `END` are required when the function accepts
+  pipeline input** (`ValueFromPipeline*`). Per-item work goes in
+  `PROCESS`, never in `BEGIN` or `END`. Functions that take no pipeline
+  input may use a flat body instead of the three blocks — don't add empty
+  blocks for their own sake.
+- **Parameter attributes are explicit.** Spell out `Mandatory`,
+  `ValueFromPipeline`, `ValueFromPipelineByPropertyName`, and `Position`
+  rather than relying on defaults, and validate inputs (`[ValidateSet]`,
+  `[ValidatePattern]`, `[ValidateScript]`) at the param block — see the
+  **Filesystem paths** and **Cmdlet calls** sections for the path rules.
+- **PFX passwords are `[SecureString]`**, never `[string]` — see
+  **Signing**.
+
 ## Error handling
 
 - **Use `throw` to terminate.** Never `Write-Error` without `-ErrorAction Stop` —
@@ -271,10 +394,38 @@ accepts the file. That work is tracked in #19's follow-ups.
 
 ## Tests
 
+### Every new function ships with a test
+
+A PR that adds an exported function MUST add Pester coverage for it in the
+same PR. "A good test" means:
+
+- **A behavioural `Describe` named for the cmdlet.** One
+  `Describe '<Verb-MsixNoun>'` block per function, so coverage is locatable
+  by `grep "Describe 'Verb-MsixNoun'"`. See issue
+  [#88](https://github.com/sanderdewit/msix/issues/88) for the suite's
+  organizing model (behavioural tests grouped by cmdlet family; cross-
+  cutting guarantees stay as `-ForEach` contract sweeps — do **not** split
+  those per-cmdlet).
+- **It exercises the real code path, not just its existence.** A test that
+  only checks `Get-Command X | Should -Not -BeNullOrEmpty` is not coverage.
+  Call the function and assert on its output / the manifest / the hive. The
+  `Add-MsixAppIsolation` `.ContainsKey()` bug shipped because the only tests
+  called `Get-MsixIsolationCapability`, never the mutator itself.
+- **At least one happy-path assertion and one edge/guard assertion**
+  (invalid input throws, missing target handled, etc.).
+- **Mutators need an idempotency test** (run twice, assert no duplicate
+  elements added) and a real-package **`Integration`-tagged** test where
+  feasible (build a fixture via `New-MsixTestFixture` — see
+  `MSIX.MutatorIntegration.Tests.ps1`).
+
+### Conventions
+
 - Import the module via `MSIX.psd1` (not `MSIX.psm1`) so manifest export
   filtering is exercised.
 - Save test files with UTF-8 BOM — see the **File encoding** section at
   the top of this doc.
 - Tag tests appropriately: `Manifest`, `Security`, `Integration`, etc.
-- Mutators must have at least one idempotency test (run twice, assert no
-  duplicate elements added).
+- Don't name test files after issue or version numbers
+  (`MSIX.Issue28`, `MSIX.v0_11`). Name them for the **feature area** they
+  cover; capture regression intent with an inline comment or a
+  `-Tag 'RegressionNN'`, not the filename (issue #88).

@@ -1,0 +1,7 @@
+# Pester / test-run artifacts (generated on every run — never commit)
+TestResults.xml
+testResults.xml
+
+# Code-coverage output
+coverage.xml
+*.coverage

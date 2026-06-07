@@ -9,7 +9,7 @@ jobs:
     name: Publish module
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Stage publish folder (only the files that belong on PSGallery)
         shell: pwsh

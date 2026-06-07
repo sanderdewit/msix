@@ -133,3 +133,42 @@ Describe 'Shell-extension context menu placement (TMEditX-verified pattern)' -Ta
         $body | Should -Not -Match 'SurrogateServer'
     }
 }
+
+
+# Regression coverage for #80 — folder context menus (e.g. 7-Zip) were missing:
+# the scanner did not walk the 'Folder' shell class, and the context-menu
+# cmdlets rejected folder/container -FileTypes targets.
+
+Describe 'Folder context-menu support (Add-MsixLegacyContextMenu -FileTypes)' -Tag 'ContextMenu' {
+
+    # -FileTypes is validated at parameter-binding time (before any MakeAppx
+    # work). A valid value passes binding and the body then fails on the bogus
+    # package path; an invalid value fails binding with the "Invalid file type"
+    # ValidateScript message. We therefore assert only on that message.
+    function script:Invoke-FileTypeBinding {
+        param([string]$Type)
+        try {
+            Add-MsixLegacyContextMenu -PackagePath 'C:\nope.msix' `
+                -Clsid '12345678-1234-1234-1234-1234567890ab' -DisplayName 'X' `
+                -ShellExtDll 'x.dll' -FileTypes $Type -SkipSigning -WhatIf -ErrorAction Stop
+            return $null
+        } catch { return $_.Exception.Message }
+    }
+
+    It 'accepts folder/container targets (Folder, Directory\Background, Drive, ...)' {
+        foreach ($t in 'Folder', 'Directory', 'Directory\Background', 'Drive', 'DesktopBackground', 'AllFilesystemObjects', '*', '.txt') {
+            (Invoke-FileTypeBinding -Type $t) | Should -Not -Match 'Invalid file type' -Because "'$t' should be accepted"
+        }
+    }
+
+    It 'still rejects a clearly bogus target' {
+        (Invoke-FileTypeBinding -Type 'not a target!!') | Should -Match 'Invalid file type'
+    }
+
+    It 'the shell context-menu scanner walks the Folder class target' {
+        # 'Folder' must be in the scanner's target list or folder handlers
+        # (7-Zip) are never detected.
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.Scanners.ps1')) -Raw
+        $src | Should -Match "\`$target in @\([^)]*'Folder'"
+    }
+}

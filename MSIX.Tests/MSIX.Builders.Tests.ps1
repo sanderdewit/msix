@@ -88,3 +88,45 @@ Describe 'PSF builders' -Tag 'Builders' {
         }
     }
 }
+
+
+Describe 'PSF builders: New-MsixPsfDynamicLibraryConfig / New-MsixPsfWaitForDebuggerConfig' -Tag 'Builders' {
+
+    Context 'New-MsixPsfDynamicLibraryConfig' {
+        It 'Returns DynamicLibraryFixup.dll' {
+            $r = New-MsixPsfDynamicLibraryConfig -Mappings @(
+                @{ name='liba.dll'; filepath='VFS/ProgramFilesX64/App/lib/liba.dll' }
+            )
+            $r.dll | Should -Be 'DynamicLibraryFixup.dll'
+        }
+        It 'Throws on missing fields' {
+            { New-MsixPsfDynamicLibraryConfig -Mappings @(@{ name='liba.dll' }) } |
+                Should -Throw '*filepath*'
+            { New-MsixPsfDynamicLibraryConfig -Mappings @(@{ filepath='x' }) } |
+                Should -Throw '*name*'
+        }
+        It 'Preserves order in relativePaths' {
+            $r = New-MsixPsfDynamicLibraryConfig -Mappings @(
+                @{ name='a.dll'; filepath='lib/a.dll' }
+                @{ name='b.dll'; filepath='lib/b.dll' }
+            )
+            $r.config.relativePaths.Count | Should -Be 2
+            $r.config.relativePaths[0].name | Should -Be 'a.dll'
+        }
+    }
+
+    Context 'New-MsixPsfWaitForDebuggerConfig' {
+        It 'Returns WaitForDebuggerFixup.dll' {
+            (New-MsixPsfWaitForDebuggerConfig).dll | Should -Be 'WaitForDebuggerFixup.dll'
+        }
+        It 'Includes processes when given' {
+            $r = New-MsixPsfWaitForDebuggerConfig -Processes 'app','launcher'
+            $r.config.processes.Count | Should -Be 2
+            $r.config.processes[0].executable | Should -Be 'app'
+        }
+        It 'Empty config when no processes' {
+            $r = New-MsixPsfWaitForDebuggerConfig
+            $r.config.Keys | Should -Not -Contain 'processes'
+        }
+    }
+}

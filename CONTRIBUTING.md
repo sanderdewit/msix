@@ -410,7 +410,11 @@ same PR. "A good test" means:
   only checks `Get-Command X | Should -Not -BeNullOrEmpty` is not coverage.
   Call the function and assert on its output / the manifest / the hive. The
   `Add-MsixAppIsolation` `.ContainsKey()` bug shipped because the only tests
-  called `Get-MsixIsolationCapability`, never the mutator itself.
+  called `Get-MsixIsolationCapability`, never the mutator itself. The
+  `MSIX.Contract.CoverageMap.Tests.ps1` guardrail enforces this for every
+  `Add`/`Remove`/`Set`/`Update` mutator — a new one with no invocation in a
+  test fails the build. (A baseline `$KnownUncovered` allowlist carries the
+  pre-existing debt; it may only shrink.)
 - **At least one happy-path assertion and one edge/guard assertion**
   (invalid input throws, missing target handled, etc.).
 - **Mutators need an idempotency test** (run twice, assert no duplicate

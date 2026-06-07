@@ -146,3 +146,35 @@ Describe 'Manifest helpers' -Tag 'Manifest' {
         }
     }
 }
+
+
+Describe 'Get-MsixManifest is polymorphic (file / folder / missing)' -Tag 'Manifest' {
+    BeforeAll {
+        $script:Tmp = Join-Path -Path $env:TEMP -ChildPath "msix-mf-poly-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item $script:Tmp -ItemType Directory -Force | Out-Null
+    }
+    AfterAll { Remove-Item -LiteralPath $script:Tmp -Recurse -Force -ErrorAction SilentlyContinue }
+
+    It 'Reads an XML file directly' {
+        $xmlPath = Join-Path -Path $script:Tmp -ChildPath 'AppxManifest.xml'
+        @'
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
+  <Identity Name="A" Publisher="CN=X" Version="1.0.0.0" />
+  <Applications><Application Id="A" Executable="x.exe" /></Applications>
+</Package>
+'@ | Set-Content -LiteralPath $xmlPath
+        $m = Get-MsixManifest -Path $xmlPath
+        $m.Package.Identity.Name | Should -Be 'A'
+    }
+
+    It 'Reads a folder containing AppxManifest.xml' {
+        $m = Get-MsixManifest -Path $script:Tmp
+        $m.Package.Identity.Name | Should -Be 'A'
+    }
+
+    It 'Throws cleanly on a non-existent path' {
+        { Get-MsixManifest -Path (Join-Path -Path $script:Tmp -ChildPath 'no-such-thing.xml') } |
+            Should -Throw '*Path not found*'
+    }
+}

@@ -158,3 +158,87 @@ Describe 'Offline registry (offreg.dll) helpers' -Tag 'OfflineRegistry' {
         }
     }
 }
+
+
+Describe 'Recursive offline-hive deletion (_MsixOfflineDeleteKeyRecursive)' -Tag 'OfflineRegistry' {
+
+    It '_MsixOfflineDeleteKeyRecursive is defined inside the module' {
+        # The helper is module-internal so Get-Command -Module won't surface
+        # it from the outside; invoke via the module's session state.
+        & (Get-Module MSIX) {
+            Get-Command -Name '_MsixOfflineDeleteKeyRecursive' -ErrorAction SilentlyContinue
+        } | Should -Not -BeNullOrEmpty
+    }
+
+    It 'Deletes a subtree with children — the case where bare ORDeleteKey fails' {
+        $hivePath = Join-Path -Path $env:TEMP -ChildPath "msix-recdel-$([guid]::NewGuid().ToString('N').Substring(0,8)).dat"
+        try {
+            & (Get-Module MSIX) {
+                # ($hivePath isn't needed inside — the test asserts in-memory
+                # state via _MsixOfflineOpenKey rather than persisting & re-loading.)
+                $h = _MsixCreateOfflineHive
+                try {
+                    # Build Uninstall\App\Components\Foo and ...\Bar.
+                    $a = _MsixOfflineCreateKey -Parent $h -SubKey 'Uninstall'
+                    try {
+                        $b = _MsixOfflineCreateKey -Parent $a -SubKey 'App'
+                        try {
+                            _MsixOfflineSetValueString -Key $b -Name 'DisplayName' -Value 'TheApp'
+                            $c = _MsixOfflineCreateKey -Parent $b -SubKey 'Components'
+                            try {
+                                $d = _MsixOfflineCreateKey -Parent $c -SubKey 'Foo'
+                                _MsixOfflineCloseKey -Key $d
+                                $e = _MsixOfflineCreateKey -Parent $c -SubKey 'Bar'
+                                _MsixOfflineCloseKey -Key $e
+                            } finally { _MsixOfflineCloseKey -Key $c }
+                        } finally { _MsixOfflineCloseKey -Key $b }
+                    } finally { _MsixOfflineCloseKey -Key $a }
+
+                    # Non-recursive should FAIL (key has children).
+                    $bareOk = _MsixOfflineDeleteKey -Parent $h -SubKey 'Uninstall\App'
+                    if ($bareOk) { throw "Setup invalid: bare ORDeleteKey unexpectedly succeeded on a key with children." }
+
+                    # Recursive should SUCCEED and the key should be gone.
+                    $recOk = _MsixOfflineDeleteKeyRecursive -Parent $h -SubKey 'Uninstall\App'
+                    if (-not $recOk) { throw "_MsixOfflineDeleteKeyRecursive returned false." }
+                    $stillThere = _MsixOfflineOpenKey -Parent $h -SubKey 'Uninstall\App'
+                    if ($stillThere -ne [IntPtr]::Zero) {
+                        _MsixOfflineCloseKey -Key $stillThere
+                        throw 'Uninstall\App still exists after recursive delete.'
+                    }
+                } finally {
+                    _MsixCloseOfflineHive -Hive $h
+                }
+            }
+        } finally {
+            if (Test-Path -LiteralPath $hivePath) { Remove-Item -LiteralPath $hivePath -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    It 'Returns $true (no-op) when deleting a subkey that does not exist' {
+        $hivePath = Join-Path -Path $env:TEMP -ChildPath "msix-noexist-$([guid]::NewGuid().ToString('N').Substring(0,8)).dat"
+        try {
+            $result = & (Get-Module MSIX) {
+                $h = _MsixCreateOfflineHive
+                try {
+                    return (_MsixOfflineDeleteKeyRecursive -Parent $h -SubKey 'Does\Not\Exist')
+                } finally {
+                    _MsixCloseOfflineHive -Hive $h
+                }
+            }
+            $result | Should -BeTrue
+        } finally {
+            if (Test-Path -LiteralPath $hivePath) { Remove-Item -LiteralPath $hivePath -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    It 'Remove-MsixUninstallerArtifact source calls the recursive helper' {
+        # Issue #38: function moved from MSIX.Heuristics.ps1 to MSIX.PackageMutators.ps1.
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.PackageMutators.ps1')) -Raw
+        $idx = $src.IndexOf('function Remove-MsixUninstallerArtifact')
+        $nextIdx = $src.IndexOf("`nfunction ", $idx + 1)
+        if ($nextIdx -lt 0) { $nextIdx = $src.Length }
+        $body = $src.Substring($idx, $nextIdx - $idx)
+        $body | Should -Match '_MsixOfflineDeleteKeyRecursive'
+    }
+}

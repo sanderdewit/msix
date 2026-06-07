@@ -40,3 +40,24 @@ Describe 'Get-MsixStaticAnalysis robustness vs Application Executable shapes' -T
         $src | Should -Match "Apply FileRedirectionFixup -Patterns"
     }
 }
+
+
+Describe 'Get-MsixStaticAnalysis idempotent ManifestFix detection' -Tag 'Static' {
+
+    It 'Source guards the FileSystemWriteVirtualization finding with -not $hasFsVirt' {
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.Investigation.ps1')) -Raw
+        # The writable-file emission must be wrapped in an if (-not $hasFsVirt) block
+        # so packages that already declare the desktop6 element don't get the noise.
+        $src | Should -Match 'if \(-not \$hasFsVirt\)'
+        $src | Should -Match "local-name\(\)='FileSystemWriteVirtualization'"
+    }
+
+    It 'Source guards the manifest-alternative entries the same way' {
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.Investigation.ps1')) -Raw
+        # Both alternatives must be suppressed when the corresponding fix
+        # is already in <Properties>. Single-quoted regex so PowerShell
+        # doesn't expand the literal $hasFsVirt / $hasRegVirt tokens.
+        ($src -match '(?s)if \(-not \$hasFsVirt\).*?Set-MsixFileSystemWriteVirtualization') | Should -BeTrue
+        ($src -match '(?s)if \(-not \$hasRegVirt\).*?Set-MsixRegistryWriteVirtualization') | Should -BeTrue
+    }
+}

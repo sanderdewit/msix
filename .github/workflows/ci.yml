@@ -11,7 +11,7 @@ jobs:
     name: PSScriptAnalyzer
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Parse every PowerShell source file first. PSScriptAnalyzer is run at
       # Error,Warning severity below, but parse errors surface as ParseError
@@ -63,7 +63,7 @@ jobs:
     runs-on: windows-latest
     needs: lint
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Pester
         shell: pwsh
@@ -89,7 +89,7 @@ jobs:
     runs-on: windows-latest
     needs: lint
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Pester
         shell: pwsh

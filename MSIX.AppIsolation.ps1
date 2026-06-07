@@ -146,8 +146,8 @@ function Add-MsixAppIsolation {
     )
 
     foreach ($c in $Capabilities) {
-        $knownIsolated = $script:KnownIsolationCapabilities.ContainsKey($c)
-        $knownDevice   = $script:KnownIsolationDeviceCapabilities.ContainsKey($c)
+        $knownIsolated = $script:KnownIsolationCapabilities.Contains($c)
+        $knownDevice   = $script:KnownIsolationDeviceCapabilities.Contains($c)
         if (-not $knownIsolated -and -not $knownDevice) {
             Write-MsixLog -Level Warning -Message "'$c' is not in the documented capability set. Verify against MS Learn before publishing."
         }
@@ -175,7 +175,7 @@ function Add-MsixAppIsolation {
         foreach ($cap in $Capabilities) {
             # Device capabilities use <DeviceCapability> (default namespace);
             # isolatedWin32-* capabilities use <rescap:Capability>.
-            $isDeviceCap   = $script:KnownIsolationDeviceCapabilities.ContainsKey($cap)
+            $isDeviceCap   = $script:KnownIsolationDeviceCapabilities.Contains($cap)
             $targetLocal   = if ($isDeviceCap) { 'DeviceCapability' } else { 'Capability' }
 
             # Idempotent: skip if the element with this Name attribute already exists.

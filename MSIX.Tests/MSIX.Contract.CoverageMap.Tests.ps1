@@ -35,7 +35,6 @@ Describe 'Coverage map: every mutator is exercised by a test' -Tag 'Meta' {
             'Add-MsixStandardScript'
             'Add-MsixStartMenuFolder'
             'Add-MsixVcRuntimeBundle'
-            'Remove-MsixAppIsolation'
             'Remove-MsixDesktopShortcut'
             'Remove-MsixStartMenuEntry'
             'Set-MsixBrandMetadata'

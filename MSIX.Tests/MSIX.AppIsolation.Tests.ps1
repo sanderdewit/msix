@@ -224,6 +224,27 @@ Describe 'Win32 App Isolation: uap18 attributes + runFullTrust reconciliation (r
             Should -Throw '*mutually exclusive*'
     }
 
+    It 'warns that a PSF-launched package cannot be isolated' {
+        # PSF (PsfLauncher entry point) is incompatible with isolation: it injects
+        # fixup DLLs into the target process, which AppContainer blocks. The cmdlet
+        # must warn rather than silently produce a non-isolating "isolated" package.
+        $pkg = Join-Path -Path $script:IsoDir -ChildPath 'psf-base.msix'
+        $out = Join-Path -Path $script:IsoDir -ChildPath 'psf-iso.msix'
+        $fx  = New-MsixTestFixture -OutputPath $pkg -Executable 'VFS\ProgramFilesX64\App\PsfLauncher64.exe'
+
+        # Write-MsixLog routes through Write-Information (stream 6); capture it.
+        $info = Add-MsixAppIsolation -PackagePath $fx.PackagePath `
+                    -Capabilities 'isolatedWin32-promptForAccess' `
+                    -OutputPath $out -SkipSigning 6>&1 | Out-String
+        $info | Should -Match 'Package Support Framework'
+        $info | Should -Match 'will NOT run isolated'
+
+        # It warns, it does not throw — the package is still produced.
+        Test-Path -LiteralPath $out | Should -BeTrue
+
+        if (Test-Path -LiteralPath $fx.StagingFolder) { Remove-Item -LiteralPath $fx.StagingFolder -Recurse -Force }
+    }
+
     It 'isolation and runFullTrust cannot be separated: -RemoveRunFullTrust yields a package MakeAppx rejects' {
         # The isolated app keeps EntryPoint="Windows.FullTrustApplication", and the
         # AppxManifest schema requires runFullTrust for that entry point. Forcing

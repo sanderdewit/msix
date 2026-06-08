@@ -77,6 +77,7 @@ function New-MsixTestFixture {
         [string]$Version   = '1.0.0.0',
         [hashtable[]]$TargetDeviceFamilies,
         [hashtable[]]$Files,
+        [string]$Executable = 'VFS\ProgramFilesX64\App\app.exe',
         [switch]$Sign
     )
 
@@ -109,7 +110,7 @@ $tdfXml
   </Dependencies>
   <Resources><Resource Language="en-us" /></Resources>
   <Applications>
-    <Application Id="App" Executable="VFS\ProgramFilesX64\App\app.exe" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="App" Executable="$Executable" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements DisplayName="$Name" Description="Integration test package"
         BackgroundColor="transparent" Square150x150Logo="Assets\logo.png" Square44x44Logo="Assets\logo.png" />
     </Application>
@@ -128,9 +129,12 @@ $tdfXml
     New-Item -ItemType Directory -Path $assets -Force | Out-Null
     [IO.File]::WriteAllBytes((Join-Path -Path $assets -ChildPath 'logo.png'), $script:MsixFixturePngBytes)
 
-    $appDir = Join-Path -Path $stage -ChildPath 'VFS\ProgramFilesX64\App'
-    New-Item -ItemType Directory -Path $appDir -Force | Out-Null
-    [IO.File]::WriteAllBytes((Join-Path -Path $appDir -ChildPath 'app.exe'), [byte[]]@(0x4D,0x5A))  # 'MZ' stub
+    # Stub executable at the manifest's Executable path so the package reference
+    # resolves (MakeAppx rejects a manifest that points at a missing payload).
+    $exeStage = Join-Path -Path $stage -ChildPath $Executable
+    $exeDir   = Split-Path -Path $exeStage -Parent
+    New-Item -ItemType Directory -Path $exeDir -Force | Out-Null
+    [IO.File]::WriteAllBytes($exeStage, [byte[]]@(0x4D,0x5A))  # 'MZ' stub
 
     # --- Caller-specified extra files ----------------------------------------
     foreach ($f in $Files) {

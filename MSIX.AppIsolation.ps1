@@ -139,6 +139,13 @@ function Add-MsixAppIsolation {
         Validate with the Application Capability Profiler (ACP) first:
         https://github.com/microsoft/win32-app-isolation/releases
 
+        NOTE: Packages built with the Package Support Framework (PSF) — i.e. whose
+        Application Executable is PsfLauncher*.exe — CANNOT be isolated. PSF
+        injects fixup DLLs into the target process, which AppContainer blocks, and
+        PSF/isolation have opposite goals. This cmdlet warns when it detects a PSF
+        launcher; the produced package will not actually run isolated. Re-package
+        without PSF first.
+
     .PARAMETER PackagePath
         .msix file to modify.
 
@@ -256,6 +263,17 @@ function Add-MsixAppIsolation {
         if (-not $apps) { throw 'No <Application> element found in the manifest.' }
 
         foreach ($app in $apps) {
+            # Package Support Framework is fundamentally incompatible with Win32
+            # App Isolation. PSF's launcher injects fixup DLLs into the target
+            # process (cross-process injection), which AppContainer/appSilo
+            # blocks — and the two have opposite goals (PSF widens access for
+            # compat; isolation restricts it). A PSF package will NOT isolate:
+            # Windows runs it as a normal full-trust Win32 app. Warn loudly.
+            $exe = $app.GetAttribute('Executable')
+            if ($exe -match 'PsfLauncher\d*\.exe$') {
+                Write-MsixLog -Level Warning -Message "Application '$($app.GetAttribute('Id'))' launches via the Package Support Framework (Executable '$exe'). PSF and Win32 App Isolation are mutually exclusive: PSF injects fixup DLLs into the target process, which AppContainer/appSilo blocks — this package will NOT run isolated (Windows runs it as a normal full-trust Win32 app). Re-package without PSF (point Executable at the real .exe and drop the fixups: PsfLauncher*/PsfRuntime*/FileRedirectionFixup*/config.json) before isolating."
+            }
+
             # Base entry point stays Windows.FullTrustApplication (down-level OS
             # ignores the uap18 attrs and runs the app as a normal Win32 app).
             $app.SetAttribute('EntryPoint', 'Windows.FullTrustApplication')

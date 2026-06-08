@@ -209,6 +209,27 @@ Describe 'Win32 App Isolation: uap18 attributes + runFullTrust reconciliation (r
         { Add-MsixAppIsolation -PackagePath $out -RemoveRunFullTrust -KeepRunFullTrust -SkipSigning } |
             Should -Throw '*mutually exclusive*'
     }
+
+    It 'isolation and runFullTrust cannot be separated: -RemoveRunFullTrust yields a package MakeAppx rejects' {
+        # The isolated app keeps EntryPoint="Windows.FullTrustApplication", and the
+        # AppxManifest schema requires runFullTrust for that entry point. Forcing
+        # runFullTrust off therefore produces an invalid package: MakeAppx fails
+        # the repack with error 80080204 ("... requires runFullTrust capability").
+        # This is the authoritative proof that the two are required *together*,
+        # not mutually exclusive.
+        $pkg = Join-Path -Path $script:IsoDir -ChildPath 'sep-base.msix'
+        $out = Join-Path -Path $script:IsoDir -ChildPath 'sep-iso.msix'
+        $fx  = New-MsixTestFixture -OutputPath $pkg
+
+        { Add-MsixAppIsolation -PackagePath $fx.PackagePath `
+                -Capabilities 'isolatedWin32-promptForAccess' `
+                -RemoveRunFullTrust -OutputPath $out -SkipSigning -ErrorAction Stop } |
+            Should -Throw -ExpectedMessage '*runFullTrust*'
+
+        Test-Path -LiteralPath $out | Should -BeFalse -Because 'the rejected package must not be produced (atomic pack-sign-move)'
+
+        if (Test-Path -LiteralPath $fx.StagingFolder) { Remove-Item -LiteralPath $fx.StagingFolder -Recurse -Force }
+    }
 }
 
 Describe 'Remove-MsixAppIsolation reverses isolation (real package)' -Tag 'Integration' {

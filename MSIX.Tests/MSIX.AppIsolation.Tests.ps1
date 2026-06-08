@@ -151,6 +151,20 @@ Describe 'Win32 App Isolation: uap18 attributes + runFullTrust reconciliation (r
         $m.Package.IgnorableNamespaces         | Should -Match '\buap18\b'
     }
 
+    It 'raises the Windows.Desktop TargetDeviceFamily MinVersion to 10.0.26100.0' {
+        # Isolation only engages when the package TARGETS 24H2; a down-level
+        # MinVersion makes Windows ignore the uap18 attributes. The fixture ships
+        # MinVersion 10.0.17763.0 and must be raised.
+        $out = Join-Path -Path $script:IsoDir -ChildPath 'iso.msix'
+        Test-Path -LiteralPath $out | Should -BeTrue -Because 'earlier test must have produced the output package'
+
+        [xml]$m = Get-MsixManifest -Path $out
+        $tdf = @($m.Package.Dependencies.TargetDeviceFamily) |
+            Where-Object { $_.GetAttribute('Name') -eq 'Windows.Desktop' }
+        $tdf | Should -Not -BeNullOrEmpty
+        $tdf.GetAttribute('MinVersion') | Should -Be '10.0.26100.0' -Because 'Win32 App Isolation requires the package to target 24H2'
+    }
+
     It 'retains runFullTrust (required by the Windows.FullTrustApplication entry point)' {
         # An isolated app keeps EntryPoint="Windows.FullTrustApplication", which the
         # AppxManifest schema requires runFullTrust for (MakeAppx error 80080204

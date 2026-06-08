@@ -53,6 +53,7 @@ $script:KnownNamespaces = [ordered]@{
     uap5     = 'http://schemas.microsoft.com/appx/manifest/uap/windows10/5'   # windows.startupTask
     uap6     = 'http://schemas.microsoft.com/appx/manifest/uap/windows10/6'   # LoaderSearchPathOverride
     uap10    = 'http://schemas.microsoft.com/appx/manifest/uap/windows10/10'  # InstalledLocationVirtualization
+    uap18    = 'http://schemas.microsoft.com/appx/manifest/uap/windows10/18'  # Win32 App Isolation (TrustLevel/RuntimeBehavior)
     desktop  = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10'
     desktop2 = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/2' # FirewallRules
     desktop4 = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/4'

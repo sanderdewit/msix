@@ -109,7 +109,23 @@ function Import-MsixSparseShellExtension {
 
         $innerPkg = Join-Path -Path $workspace -ChildPath $NestedPackagePath
         if (-not (Test-Path -LiteralPath $innerPkg)) {
-            throw "Nested package not found inside outer workspace: $NestedPackagePath"
+            # The caller may have passed only the leaf name (some NestedPackage
+            # findings carry just 'NppShell.msix', not the package-relative path).
+            # Resolve it by searching the unpacked outer package for the file.
+            $leaf  = Split-Path -Path $NestedPackagePath -Leaf
+            $match = Get-ChildItem -LiteralPath $workspace -Recurse -File -Filter $leaf -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            if ($match) {
+                $innerPkg          = $match.FullName
+                $NestedPackagePath = $match.FullName.Substring($workspace.Length + 1)
+                Write-MsixLog -Level Info -Message "Resolved nested package '$leaf' to '$NestedPackagePath'."
+            } else {
+                # Not present (e.g. an external/sparse reference, or already
+                # stripped). Nothing to merge — skip gracefully rather than
+                # aborting the whole auto-fix run.
+                Write-MsixLog -Level Warning -Message "Nested package '$NestedPackagePath' is referenced but not present inside the package; skipping the sparse-shell merge."
+                return
+            }
         }
 
         # ── Compute base path (the directory the inner package sat in) ──

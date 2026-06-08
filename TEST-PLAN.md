@@ -238,11 +238,42 @@ Add-MsixAppIsolation `
 
 ### Expected
 
-- `xmlns:rescap` added.
-- `MaxVersionTested` ≥ 10.0.26100.0.
-- One `<rescap:Capability>` per requested capability.
+- `xmlns:uap18` and `xmlns:rescap` added (both in `IgnorableNamespaces`).
+- **The `<Application>` carries the attributes that actually enable isolation**
+  (the capability alone does nothing):
+  - `EntryPoint="Windows.FullTrustApplication"`
+  - `uap18:EntryPoint="Isolated.App"`
+  - `uap18:TrustLevel="appContainer"`
+  - `uap18:RuntimeBehavior="appSilo"`
+- The `Windows.Desktop` `TargetDeviceFamily` `MinVersion` is raised to
+  **`10.0.26100.0`**, and `MaxVersionTested` ≥ 10.0.26100.0. The MinVersion bump
+  is **mandatory** — isolation only engages when the package *targets* 24H2;
+  with a lower MinVersion, Windows treats the package as legacy full-trust and
+  ignores the `uap18` attributes (because `uap18` is in `IgnorableNamespaces`).
+  Consequence: the isolated package will **no longer install on Windows older
+  than 24H2**.
+- One `<rescap:Capability>` per requested capability, plus
+  `isolatedWin32-shellExtensionContextMenu` auto-added if the package has a COM
+  context menu (`com:Extension windows.comServer` / `FileExplorerContextMenus`).
+- **`runFullTrust` REMAINS** in `<Capabilities>`. It is *not* incompatible with
+  isolation — it is required *together* with it: the isolated app keeps
+  `EntryPoint="Windows.FullTrustApplication"`, and the AppxManifest schema
+  requires `runFullTrust` for that entry point (MakeAppx rejects the package
+  without it, error `0x80080204`). Isolation is enforced by the `uap18`
+  appContainer/appSilo attributes, not by removing `runFullTrust`. Use
+  `-RemoveRunFullTrust` only on a toolchain/runtime that accepts the isolated
+  entry point without it.
 - The package installs and runs with isolation active. Verify access prompts
-  fire as expected.
+  fire as expected, and confirm the process runs in an AppContainer (e.g.
+  Process Explorer → the process shows an AppContainer SID / low integrity).
+
+### Common failure mode — "isolation doesn't do anything"
+
+If the app still runs with full file-system/registry access after installing on
+24H2, check the manifest's `TargetDeviceFamily MinVersion`. If it is below
+`10.0.26100.0` the OS ignores the `uap18` attributes and runs the app as a
+normal full-trust Win32 app. `Add-MsixAppIsolation` raises it automatically;
+a package hand-edited or re-packed by another tool may have reset it.
 
 ---
 

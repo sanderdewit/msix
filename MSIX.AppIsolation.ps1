@@ -114,7 +114,10 @@ function Add-MsixAppIsolation {
             `isolatedWin32-shellExtensionContextMenu` so the menu runs under
             isolation.
           - Ensures runFullTrust (see below).
-          - Bumps MaxVersionTested to 10.0.26100.0 (the documented minimum).
+          - Bumps MaxVersionTested to 10.0.26100.0, and RAISES the Windows.Desktop
+            TargetDeviceFamily MinVersion to 10.0.26100.0. The MinVersion bump is
+            mandatory: isolation only engages when the package targets 24H2, so
+            this also means the package will no longer install on older Windows.
 
         runFullTrust: an isolated app keeps EntryPoint="Windows.FullTrustApplication"
         (the down-level entry point), and the AppxManifest schema REQUIRES the
@@ -218,6 +221,27 @@ function Add-MsixAppIsolation {
         Add-MsixManifestNamespace -Manifest $manifest -Prefix 'rescap'
         # Win32 App Isolation requires Win11 24H2 (build 26100)
         Set-MsixManifestMaxVersionTested -Manifest $manifest -MinBuild 26100
+
+        # The Windows.Desktop TargetDeviceFamily MinVersion MUST be raised to
+        # 10.0.26100.0. Isolation only engages when the package *targets* 24H2:
+        # uap18 lives in IgnorableNamespaces, so with a down-level MinVersion the
+        # deployment stack treats the package as a legacy full-trust app and
+        # ignores the appContainer/appSilo attributes even on a 26100 host. This
+        # raises the minimum OS — the package will no longer install before 24H2.
+        $isoMin = [version]'10.0.26100.0'
+        $desktopTdf = @($manifest.Package.Dependencies.TargetDeviceFamily) |
+            Where-Object { $_.GetAttribute('Name') -eq 'Windows.Desktop' }
+        if (-not $desktopTdf) {
+            Write-MsixLog -Level Warning -Message 'No Windows.Desktop TargetDeviceFamily found; cannot raise MinVersion. Win32 App Isolation requires a Windows.Desktop target at MinVersion 10.0.26100.0.'
+        }
+        foreach ($tdf in $desktopTdf) {
+            $cur = $null
+            $parsed = [version]::TryParse($tdf.GetAttribute('MinVersion'), [ref]$cur)
+            if (-not $parsed -or $cur -lt $isoMin) {
+                $tdf.SetAttribute('MinVersion', '10.0.26100.0')
+                Write-MsixLog -Level Warning -Message "TargetDeviceFamily 'Windows.Desktop' MinVersion raised to 10.0.26100.0 (required for Win32 App Isolation). The package will no longer install on Windows older than 24H2."
+            }
+        }
 
         $uap18Uri  = Get-MsixManifestNamespaceUri -Prefix 'uap18'
         $rescapUri = Get-MsixManifestNamespaceUri -Prefix 'rescap'

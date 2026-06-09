@@ -5,7 +5,72 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
-## Unreleased - Security review fixes (#49, #50, #51, #52, #53, #54, #55, #56) + integration tests (#61) + perf (#58)
+## v0.71.0 - 2026-06-09 — Win32 App Isolation, security hardening, offreg scanning & test infrastructure
+
+### Win32 App Isolation — now writes a manifest that actually isolates
+
+- **`Add-MsixAppIsolation` emits the attributes that enable isolation, not just
+  the capability.** It previously added an `isolatedWin32-*` `rescap:Capability`
+  and nothing else — which does not isolate anything. It now writes, per the MS
+  Learn packaging guidance, the `uap18` attributes on each `<Application>`
+  (`EntryPoint="Windows.FullTrustApplication"`, `uap18:EntryPoint="Isolated.App"`,
+  `uap18:TrustLevel="appContainer"`, `uap18:RuntimeBehavior="appSilo"`), declares
+  the `uap18` namespace (and adds it to `IgnorableNamespaces`), and **raises the
+  `Windows.Desktop` `TargetDeviceFamily` MinVersion to 10.0.26100.0** — isolation
+  only engages when the package targets 24H2, so the package will no longer
+  install on older Windows. (#91, #92)
+- **`runFullTrust` is retained, by design.** The isolated app keeps the
+  `Windows.FullTrustApplication` entry point, and the AppxManifest schema
+  *requires* `runFullTrust` for that entry point (MakeAppx rejects the package
+  with `0x80080204` otherwise). So `runFullTrust` and isolation are required
+  *together*, not mutually exclusive; isolation is enforced by the `uap18`
+  appContainer/appSilo attributes. `-RemoveRunFullTrust` / `-KeepRunFullTrust`
+  switches added for control. (#91)
+- **COM context menus under isolation:** when the package has a
+  `windows.comServer` / `FileExplorerContextMenus` extension,
+  `isolatedWin32-shellExtensionContextMenu` is auto-added so the menu keeps
+  working inside the AppContainer. (#91)
+- **PSF packages are detected and warned about.** A package whose entry point is
+  `PsfLauncher*.exe` cannot be isolated — PSF injects fixup DLLs into the target
+  process, which AppContainer blocks — so `Add-MsixAppIsolation` now warns
+  clearly instead of silently producing a non-isolating package. (#93)
+- **`Remove-MsixAppIsolation`** now also strips the `uap18` attributes, fully
+  reversing `Add`. (#91)
+- **`Get-MsixIsolationCapability`** rebuilt against the MS Learn supported-
+  capabilities page: returns rich objects (`Name` / `ElementType` /
+  `Description`), the full documented `isolatedWin32-*` set, and device
+  capabilities (`microphone`, `webcam`) emitted as `<DeviceCapability>`. Fixed an
+  `OrderedDictionary.ContainsKey` runtime error in `Add-MsixAppIsolation` (it's
+  `.Contains()`, not `.ContainsKey()`). (#85, #86)
+- **`Import-MsixSparseShellExtension`** resolves a bare nested-package filename
+  by searching the unpacked package, and skips gracefully (a warning, not a
+  throw) when the nested package is absent — so `Invoke-MsixAutoFixFromAnalysis`
+  no longer aborts mid-run on a `NestedPackage` finding. (#94)
+
+> **Runtime note.** Win32 App Isolation is a **preview** Windows feature. A
+> correctly-formed isolated package still **falls back to full trust** on an OS
+> where the feature isn't active — it's flighted on Insider builds, not lit up
+> on retail 24H2 servicing builds — and it does **not** engage inside Windows
+> Sandbox. A package running at Medium integrity with no `S-1-15-2` AppContainer
+> SID means the OS isn't activating the feature, not that the manifest is wrong.
+> See `TEST-PLAN.md` Scenario 6 to verify activation.
+
+### Test infrastructure & repo
+
+- **Real-MSIX integration harness** (`Build-MsixTestFixture` + a dedicated CI
+  job) packs genuine `.msix` fixtures via MakeAppx, enabling end-to-end
+  integration tests for the mutating cmdlets instead of mock-only coverage.
+  (#61, #87)
+- **Pester suite restructured** by cmdlet-family + cross-cutting contract;
+  issue/version-named test files dissolved into feature-named homes; a
+  coverage-map guardrail asserts every exported `Add`/`Remove`/`Set`/`Update`
+  mutator is actually *invoked* by a test (the gap that let the
+  `.ContainsKey()` bug ship). `CONTRIBUTING.md` gained function-authoring
+  conventions (approved verbs, comment-based-help skeleton, per-function test
+  rule). (#88, #89)
+- `.gitignore` added for generated test artifacts; `actions/checkout` bumped to
+  v6 (Node 24); CI parse-check gate so a syntactically broken module fails lint
+  rather than Pester. (#90)
 
 ### Bug fixes
 

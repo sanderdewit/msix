@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.70.6'
+    ModuleVersion     = '0.71.0'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, PSADT-style standard scripts, TMEditX-style heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -222,155 +222,80 @@
                             'TMEditX','Enterprise','CICD','Pester','PSADT')
             ProjectUri  = 'https://github.com/microsoft/MSIX-PackageSupportFramework'
             ReleaseNotes = @'
-## v0.70.6
+## v0.71.0
 
-### Correctness fixes from the post-v0.70.5 code review
-- Atomic pack-sign-move in Add-MsixCapability + Remove-MsixUninstaller-
-  Artifact (#34). Both used to pack straight to $PackagePath and then
-  sign; a signing failure left the user with an unsigned modified copy
-  of their signed package. Both now pack to a scratch path, sign at
-  the scratch, and Move-Item to the target only on success.
-  -UnsignedOutputPath preserves the scratch on signing failure.
-- Compare-MsixTrace.Summary now exposes ResolvedRowCount /
-  PersistedRowCount / IntroducedRowCount alongside the categorised
-  finding counts (#35). Uncategorised regressions on paths outside
-  System32 / WindowsApps / HKLM / LoadLibrary used to silently
-  disappear from the summary; a Warning fires when IntroducedRow-
-  Count > IntroducedCount.
+### Win32 App Isolation — now writes a manifest that actually isolates
+- Add-MsixAppIsolation previously only added an isolatedWin32-* capability,
+  which does NOT isolate anything. It now writes the uap18 attributes that
+  enable isolation on each <Application> (EntryPoint="Windows.FullTrustApplication",
+  uap18:EntryPoint="Isolated.App", uap18:TrustLevel="appContainer",
+  uap18:RuntimeBehavior="appSilo"), declares the uap18 namespace, and raises the
+  Windows.Desktop TargetDeviceFamily MinVersion to 10.0.26100.0 (isolation only
+  engages when the package targets 24H2; it will no longer install on older
+  Windows). (#91, #92)
+- runFullTrust is retained by design: the FullTrust entry point requires it
+  (MakeAppx 0x80080204 otherwise), so isolation + runFullTrust are required
+  together, not mutually exclusive. -RemoveRunFullTrust / -KeepRunFullTrust
+  switches added. (#91)
+- COM context menus: isolatedWin32-shellExtensionContextMenu is auto-added when
+  the package has a comServer / FileExplorerContextMenus extension. (#91)
+- PSF packages (PsfLauncher*.exe entry point) are detected and warned about —
+  they cannot be isolated (PSF injects fixup DLLs, which AppContainer blocks). (#93)
+- Remove-MsixAppIsolation also strips the uap18 attributes now. (#91)
+- Get-MsixIsolationCapability rebuilt against the MS Learn supported-capabilities
+  page: rich objects (Name/ElementType/Description), full isolatedWin32-* set,
+  and device capabilities (microphone/webcam) as <DeviceCapability>. Fixed an
+  OrderedDictionary.ContainsKey runtime error. (#85, #86)
+- Import-MsixSparseShellExtension resolves a bare nested-package name and skips
+  gracefully (warning, not a throw) when the nested package is absent, so
+  Invoke-MsixAutoFixFromAnalysis no longer aborts mid-run. (#94)
 
-### Refactors (no public API change)
-- _MsixInstallArchiveTool + _MsixUpdateToolByAge helpers (#36) collapse
-  six near-identical toolchain installers (Procmon, DebugView, msixmgr)
-  + four age-based updaters (Procmon, DebugView, msixmgr, AppRuntime)
-  to thin wrappers. Bespoke installers with version-aware idempotency
-  (PSF / SDK BuildTools / AppRuntime multi-channel) remain self-
-  contained because forcing them into the helper would create a leaky
-  abstraction.
-- _MsixMutatePackage helper (#37) centralises the unpack -> mutate ->
-  atomic-pack-sign-move pattern for the four heuristic mutators
-  (Add-MsixCapability, Remove-MsixUninstallerArtifact,
-  Remove-MsixUpdaterArtifact, Remove-MsixShellRegistryArtifact). The
-  H1 atomic semantics from #34 are now enforced by construction.
-- MSIX.Heuristics.ps1 (2764 lines) split into MSIX.Scanners.ps1,
-  MSIX.PackageMutators.ps1, and MSIX.AutoFix.ps1 (#38). All ten
-  plural-noun back-compat aliases carried forward.
+  NOTE: Win32 App Isolation is a preview Windows feature. A correct package
+  still falls back to full trust on an OS where the feature isn't active
+  (Insider builds vs retail 24H2 servicing) and does not engage in Windows
+  Sandbox. See TEST-PLAN.md Scenario 6 to verify activation.
 
-### Subtle behaviour change
-- Update-MsixMgr now previews 'Update msixmgr' uniformly under -WhatIf
-  instead of 'Install missing msixmgr' / 'Refresh msixmgr' depending
-  on state. Matches the pattern already used by Update-MsixProcMon /
-  Update-MsixDebugView / Update-MsixAppRuntime.
+### Shell / context menus
+- Folder context menus (e.g. 7-Zip): the scanner now walks the Folder and Drive
+  shell classes, and -FileTypes accepts container item-types. DragDropHandlers
+  are scanned and stripped. (#80, #84)
+- #81: install-relative VFS plugin folders are routed via PSF FileRedirection;
+  Set-MsixFileSystemWriteVirtualization validates ExcludedDirectory entries
+  against the $(KnownFolder:Name) schema and skips invalid ones, so it can never
+  emit a manifest MakeAppx rejects.
 
-### Quality bar
-- Pester (PowerShell 7): 364 pass / 0 fail / 1 skip
-  (was 351 in v0.70.5; +13 new regression guards).
-- PSScriptAnalyzer (scoped to MSIX module): 0 findings.
+### Security hardening (post code-security review)
+- Fixed P1 findings: template injection, XXE, Zip-Slip, TLS floor (#49–#52).
+- AzureSignTool client secret delivered via environment variable, never the
+  command line (#53).
+- Authenticode-verify resolved SDK tools before use (#54).
+- Opt-in download integrity: SHA-256 + per-publisher thumbprint pinning (#55).
+- Escape package-derived values in scanner recommendation snippets (#60).
+- Reserved the SignerSignEx signing backend (API only) (#17).
 
-## v0.70.5
+### Offline-registry scanning & reliability
+- Run-key scan now uses offreg parsing instead of raw strings; fixed
+  _MsixOfflineEnumValueNames returning empty names (#56).
+- Validate the offline hive before parsing; _MsixWithOfflineHive wrapper (#59).
+- Bind mutator scriptblocks to module session state so private offreg helpers
+  resolve at invocation (#83).
+- Unpack the package once per analysis run (#58).
+- Set-MsixManifestMaxVersionTested handles multi-TDF packages and short
+  version strings (#57).
+- Complete -LiteralPath migration + guard; -DisableTestResult switch (#46, #47).
+- Always-use-named-parameters rule documented + swept across the module (#48).
 
-### Tier-2 remediation orchestration: #30 + #31 + #32
-- Compare-MsixTrace (#31): before/after correlation of two runtime
-  trace captures (DebugView .log/.txt or ProcMon .pml). Classifies
-  every observed failure row as Resolved / Persisted / Introduced
-  based on a (Function x Path x Result) match key. -Sarif emits a
-  three-run SARIF 2.1.0 document so regressions show up as errors,
-  fixes show up as notes.
-- New/Export/Import/Test/Invoke-MsixRemediationPlan (#32):
-  serialise a remediation plan to YAML, route through change-control,
-  and replay it deterministically against a later package build.
-  Strict cmdlet-safety guard (only MSIX module cmdlets may appear in
-  appliedFixes), identity + SHA-256 fingerprint drift detection,
-  single-sign-at-end semantics matching Invoke-MsixPlaybook.
-  YAML emitter/parser is dependency-free and scalar-only - same
-  security stance as the accelerator YAML.
-- Invoke-MsixAutoFixLoop (#30): multi-pass remediation pipeline.
-  Per-pass artefacts under $env:TEMP\msix-autofix-loop-<runId>\pass-N\,
-  optional Compare-MsixTrace integration for NoRegressions stop
-  condition, MinConfidence gate from the evidence model, signs once
-  at the end. Closes the loop on chained MSIX issues where fixing
-  one problem reveals the next.
+### Test infrastructure & repo
+- Real-MSIX integration harness (Build-MsixTestFixture) + CI job; end-to-end
+  integration tests for the mutating cmdlets (#61, #87).
+- Pester suite restructured by cmdlet-family + cross-cutting contract;
+  issue/version-named files dissolved; coverage-map guardrail asserts every
+  Add/Remove/Set/Update mutator is invoked by a test (#88, #89).
+- .gitignore for test artifacts; actions/checkout bumped to v6 / Node 24 (#90).
+- CI parse-check gate so a syntactically broken module fails lint, not Pester.
 
-### PowerShell 5.1 compatibility
-- Removed PS7-only null-coalescing operator (??) from Merge-MsixFinding
-  and Invoke-MsixAutoFixLoop.
-- Stripped em-dashes from string literals in MSIX.RemediationPlan.ps1
-  and MSIX.AutoFixLoop.ps1: the UTF-8 byte 0x94 was read as a curly
-  double-quote terminator under CP-1252 when files lack a BOM, which
-  is the default on Windows PowerShell 5.1.
+Full history: CHANGELOG.md.
 
-### Quality bar
-- Pester: 351 pass / 0 fail / 1 skip on PowerShell 7
-  (27 new tests for the Tier-2 features).
-- PSScriptAnalyzer (scoped to MSIX module): 0 findings.
-
-## v0.70.4
-
-### Tier-1 foundation: unified evidence model + confidence scoring (#29)
-- New MSIX.Evidence.ps1: New-MsixFinding / Add-MsixEvidence /
-  Merge-MsixFinding / Get-MsixFindingConfidence /
-  ConvertTo-MsixFinding (legacy adapter) / ConvertTo-MsixLegacyFinding.
-- Invoke-MsixAutoFixFromAnalysis: new -MinConfidence gate (default 0.85).
-  Legacy findings without EvidenceItems are treated as confident so the
-  migration is incremental and nothing regresses.
-- SARIF emitter surfaces evidenceItems[] and confidence in
-  result.properties when the analyzer populated them.
-- Unblocks #30 (Invoke-MsixAutoFixLoop), #31 (Compare-MsixTrace),
-  #32 (Export/Import/Invoke-MsixRemediationPlan).
-
-### PSSA cleanup
-- Get-MsixManifestApplication: per-parameter-set OutputType (XmlNode
-  for First/ById, XmlNode[] for All), plus return-site casts so PSSA's
-  static type inference matches.
-- Get-MsixRequiredAppRuntimeChannel: returns [string[]] (was Object[]).
-- Tests: trailing whitespace stripped from Recommendations test file.
-- PSScriptAnalyzer (scoped to MSIX module): 0 findings.
-- Pester: 325 pass / 0 fail / 1 skip.
-
-## v0.70.0
-
-### Security hardening
-- Authenticode verification for every downloaded toolchain binary
-  (PSF, Procmon, msixmgr, SDK tools) before use.
-- SecureString for all signing/PFX secrets end-to-end. ConvertTo-SecureString
-  -AsPlainText -Force is banned; tests use ConvertTo-TestSecureString instead.
-- Secret non-leakage: Get-MsixDebugRecommendation emits a Read-Host
-  -AsSecureString placeholder, never the real value. SignTool with -Pfx
-  now emits a -WarningVariable-capturable warning about cmdline exposure.
-- XML hardening: all manifest loading via _MsixLoadXmlSecure
-  (DtdProcessing=Prohibit, MaxCharactersFromEntities=1MB). XXE and
-  billion-laughs payloads are rejected.
-- powershell-yaml dependency removed; accelerator parser is a restricted
-  scalar-only implementation that cannot instantiate .NET objects from
-  untrusted YAML.
-
-### Reliability & architecture
-- Atomic pack-sign-move: Invoke-MsixPipeline packs to a scratch path,
-  signs at the scratch, then Move-Item to the target only on success.
-  UnsignedOutputPath preserves the scratch when signing fails.
-- Consistent -WhatIf semantics across every mutating cmdlet.
-- Pure manifest transforms: Invoke-MsixManifestTransform,
-  Set-MsixManifestPublisher, Set-MsixManifestIdentity (in-memory XML
-  only, no pack/sign).
-- Three signing backends: SignTool (default), TrustedSigning,
-  AzureSignTool. PFX password is a SecureString throughout.
-- offreg.dll integration: Get-MsixUninstallRegistryEntry,
-  Get-MsixShellContextMenuEntry, Get-MsixComServerEntry, and the
-  Remove-MsixUninstallerArtifact registry-cleanup path no longer
-  require elevation. reg.exe load (admin-only) replaced with the
-  Offline Registry API.
-- Shell-extension context menus generated via the TMEditX-verified
-  desktop4 + desktop5 schema. New AppExecutionAlias autofix stage.
-  Alias inheritance from parent Application Executable.
-
-### Documentation & testing
-- EXAMPLES.md: 19 copy-paste recipes covering all major use cases.
-- TEST-PLAN.md: 13 integration scenarios + release checklist.
-- CONTRIBUTING.md: coding standards (SecureString hygiene, XML loading,
-  WhatIf semantics, Authenticode requirements).
-- 230+ Pester tests; CI runs PSScriptAnalyzer (Error+Warning) and Pester
-  on every push/PR. All tests import via .psd1 (not .psm1).
-
-Full release history: see CHANGELOG.md in the project repository.
 '@
         }
     }

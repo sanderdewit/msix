@@ -5,6 +5,61 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.71.1 - 2026-06-09 — App isolation that actually isolates (partial-trust / AppContainer)
+
+The v0.71.0 isolation work emitted the `uap18` appSilo attributes but kept
+`EntryPoint="Windows.FullTrustApplication"` and `runFullTrust` — and the
+full-trust entry point hard-requires `runFullTrust`, which keeps the process
+full-trust. Result: packages "isolated" by v0.71.0 still ran full-trust
+(Medium integrity, no `S-1-15-2` AppContainer SID). Verified on a real 25H2
+host: a perfectly-formed v0.71.0 package never entered an AppContainer.
+
+**Root cause + fix.** The AppContainer boundary is the `TrustLevel="appContainer"`
+attribute, and to reach it a packaged Win32 app must use
+`EntryPoint="Windows.PartialTrustApplication"` and **drop `runFullTrust`** (per
+the MSIX AppContainer guidance, https://learn.microsoft.com/windows/msix/msix-container).
+`Add-MsixAppIsolation` now does exactly that, and a minimal probe built this way
+**provably isolates** (token shows an `S-1-15-2` AppContainer SID; `C:\` access
+is denied).
+
+### `Add-MsixAppIsolation` reworked — two modes
+
+- **AppContainer (default)** — GA `packagedClassicApp` AppContainer
+  (`uap10:TrustLevel="appContainer"` + `uap10:RuntimeBehavior="packagedClassicApp"`,
+  `EntryPoint="Windows.PartialTrustApplication"`, no `runFullTrust`). Ungranted
+  access is denied. `-Capabilities` are standard package capabilities (default:
+  none).
+- **AppSilo** (`-Mode AppSilo`) — the preview Win32 App Isolation silo
+  (`uap18:RuntimeBehavior="appSilo"` + `uap18:EntryPoint="Isolated.App"` +
+  `isolatedWin32-*` broker capabilities), layered on the same partial-trust
+  AppContainer base; raises `Windows.Desktop` MinVersion to 10.0.26100.0.
+  `-Capabilities` are `isolatedWin32-*` / device caps (default:
+  `isolatedWin32-promptForAccess`).
+
+`runFullTrust` is now **always removed** (it's incompatible with AppContainer and
+the partial-trust entry point doesn't require it). The obsolete
+`-RemoveRunFullTrust` / `-KeepRunFullTrust` switches are gone.
+
+### Things that block isolation (now detected)
+
+- **PSF** (`PsfLauncher*.exe` entry point) — warns; PSF injects fixup DLLs the
+  AppContainer blocks.
+- **`windows.comServer` extensions** (e.g. a COM shell context-menu like NppShell)
+  — throws: that extension is invalid with a partial-trust entry point. Strip the
+  comServer + its `desktop4:FileExplorerContextMenus` first.
+
+### `Remove-MsixAppIsolation`
+
+Restores `EntryPoint="Windows.FullTrustApplication"` + `runFullTrust` and strips
+the uap10/uap18 isolation attributes and `isolatedWin32-*` capabilities — i.e.
+returns the package to a normal full-trust packaged app.
+
+### Docs
+
+README Win32 App Isolation section and TEST-PLAN Scenario 6 rewritten for the
+partial-trust model; the incorrect "Insider-only" runtime claim from v0.71.0
+corrected (the feature ships on GA 24H2/25H2).
+
 ## v0.71.0 - 2026-06-09 — Win32 App Isolation, security hardening, offreg scanning & test infrastructure
 
 ### Win32 App Isolation — now writes a manifest that actually isolates
@@ -47,13 +102,12 @@ older lives here.
   throw) when the nested package is absent — so `Invoke-MsixAutoFixFromAnalysis`
   no longer aborts mid-run on a `NestedPackage` finding. (#94)
 
-> **Runtime note.** Win32 App Isolation is a **preview** Windows feature. A
-> correctly-formed isolated package still **falls back to full trust** on an OS
-> where the feature isn't active — it's flighted on Insider builds, not lit up
-> on retail 24H2 servicing builds — and it does **not** engage inside Windows
-> Sandbox. A package running at Medium integrity with no `S-1-15-2` AppContainer
-> SID means the OS isn't activating the feature, not that the manifest is wrong.
-> See `TEST-PLAN.md` Scenario 6 to verify activation.
+> **Runtime note.** (Superseded by v0.71.1 — see below.) This release kept
+> `EntryPoint="Windows.FullTrustApplication"` + `runFullTrust`, which kept the
+> process full-trust, so packages built by this version do **not** actually
+> isolate. v0.71.1 fixes the model (partial-trust entry point + drop
+> `runFullTrust`). The earlier claim that the feature is "Insider-only" was
+> incorrect — Win32 App Isolation ships on GA 24H2/25H2.
 
 ### Test infrastructure & repo
 

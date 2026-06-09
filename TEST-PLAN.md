@@ -230,42 +230,45 @@ Verifies `Add-MsixAppIsolation` produces a Win32 App Isolation-enabled package.
 ### Steps
 
 ```powershell
-Add-MsixAppIsolation `
-    -PackagePath 'C:\lab\App.msix' `
-    -Capabilities 'isolatedWin32-promptForAccess', 'isolatedWin32-accessToDownloadsFolder' `
+# AppContainer (default, GA): strict isolation, ungranted access denied.
+Add-MsixAppIsolation -PackagePath 'C:\lab\App.msix' -OutputPath 'C:\lab\App-isolated.msix'
+
+# Grant specific access:
+Add-MsixAppIsolation -PackagePath 'C:\lab\App.msix' -Capabilities internetClient `
     -OutputPath 'C:\lab\App-isolated.msix'
+
+# AppSilo (preview): brokered access (consent prompts).
+Add-MsixAppIsolation -PackagePath 'C:\lab\App.msix' -Mode AppSilo `
+    -OutputPath 'C:\lab\App-silo.msix'
 ```
 
-### Expected
+### Expected — the AppContainer base (both modes)
 
-- `xmlns:uap18` and `xmlns:rescap` added (both in `IgnorableNamespaces`).
-- **The `<Application>` carries the attributes that actually enable isolation**
-  (the capability alone does nothing):
-  - `EntryPoint="Windows.FullTrustApplication"`
-  - `uap18:EntryPoint="Isolated.App"`
-  - `uap18:TrustLevel="appContainer"`
-  - `uap18:RuntimeBehavior="appSilo"`
-- The `Windows.Desktop` `TargetDeviceFamily` `MinVersion` is raised to
-  **`10.0.26100.0`**, and `MaxVersionTested` ≥ 10.0.26100.0. The MinVersion bump
-  is **mandatory** — isolation only engages when the package *targets* 24H2;
-  with a lower MinVersion, Windows treats the package as legacy full-trust and
-  ignores the `uap18` attributes (because `uap18` is in `IgnorableNamespaces`).
-  Consequence: the isolated package will **no longer install on Windows older
-  than 24H2**.
-- One `<rescap:Capability>` per requested capability, plus
-  `isolatedWin32-shellExtensionContextMenu` auto-added if the package has a COM
-  context menu (`com:Extension windows.comServer` / `FileExplorerContextMenus`).
-- **`runFullTrust` REMAINS** in `<Capabilities>`. It is *not* incompatible with
-  isolation — it is required *together* with it: the isolated app keeps
-  `EntryPoint="Windows.FullTrustApplication"`, and the AppxManifest schema
-  requires `runFullTrust` for that entry point (MakeAppx rejects the package
-  without it, error `0x80080204`). Isolation is enforced by the `uap18`
-  appContainer/appSilo attributes, not by removing `runFullTrust`. Use
-  `-RemoveRunFullTrust` only on a toolchain/runtime that accepts the isolated
-  entry point without it.
-- The package installs and runs with isolation active. Verify access prompts
-  fire as expected, and confirm the process runs in an AppContainer (e.g.
-  Process Explorer → the process shows an AppContainer SID / low integrity).
+The isolation boundary is `TrustLevel="appContainer"` reached via a **partial-trust
+entry point**. On each `<Application>`:
+
+- `EntryPoint="Windows.PartialTrustApplication"` — the full-trust entry point
+  hard-requires `runFullTrust` (which keeps the process full-trust), so it can
+  never isolate; the partial-trust entry point is what lets the app drop to
+  AppContainer.
+- `TrustLevel="appContainer"`.
+- **`runFullTrust` is REMOVED** — it's incompatible with AppContainer, and the
+  partial-trust entry point doesn't require it. (This is the change that actually
+  makes the app isolate; the earlier full-trust + runFullTrust approach never did.)
+
+**AppContainer mode** (default, GA — Win10 2004+): adds
+`uap10:TrustLevel="appContainer"` + `uap10:RuntimeBehavior="packagedClassicApp"`.
+`-Capabilities` are standard package capabilities (e.g. `internetClient`),
+resolved to their namespace.
+
+**AppSilo mode** (preview — Win11 24H2): adds `uap18:RuntimeBehavior="appSilo"`,
+`uap18:EntryPoint="Isolated.App"`, the requested `isolatedWin32-*` capabilities
+(default `isolatedWin32-promptForAccess`), and raises `Windows.Desktop`
+MinVersion to `10.0.26100.0` (so the package won't install before 24H2).
+
+**Cannot be isolated** (the cmdlet detects both): a `PsfLauncher*.exe` entry
+point (PSF — warns) and a `windows.comServer` extension (invalid with a
+partial-trust entry point — throws; strip the COM server + its context-menu first).
 
 ### How to confirm isolation is *actually* active
 
@@ -283,33 +286,30 @@ In **Process Explorer → Security**, an isolated process shows an
 instead see **Medium** integrity and no `S-1-15-2` SID, the app is **not**
 isolated regardless of what the manifest says.
 
-### Common failure mode — "manifest is correct but it still runs full-trust"
+### Common failure mode — "it still runs full-trust"
 
-Win32 App Isolation is a **preview** feature. When the OS doesn't have it
-active, it **silently falls back to full trust** (documented behaviour, build
-26100.2161 release notes) — a perfectly-formed isolated package then runs
-exactly like a normal full-trust packaged app. Work through these in order:
+The single most important cause was the manifest model itself: an app that keeps
+`EntryPoint="Windows.FullTrustApplication"` + `runFullTrust` runs full-trust no
+matter what other isolation attributes are present (this was the v0.71.0 bug,
+fixed in v0.71.1 by switching to `Windows.PartialTrustApplication` and removing
+`runFullTrust`). If you still see Medium integrity / no `S-1-15-2` SID:
 
-1. **`MinVersion` < 10.0.26100.0** → the OS ignores the `uap18` attributes.
-   `Add-MsixAppIsolation` raises it automatically; a package hand-edited or
-   re-packed by another tool may have reset it.
-2. **OS patch level.** Check `(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').UBR`
-   — isolation needs build **26100.2161+**. (`[Environment]::OSVersion.Version`
-   does *not* report the UBR.)
-3. **Windows Sandbox does not engage isolation.** It's a reduced, disposable VM;
-   a correct isolated package runs full-trust there. Verify on a real host.
-4. **The feature simply isn't active on this build/channel.** It's flighted on
-   Insider (Canary/Dev) builds and not necessarily lit up on a retail 24H2
-   servicing build, with no Settings toggle. If even a *minimal* isolated
-   control app (a trivial exe + the isolation manifest, nothing else) runs
-   full-trust on the host, the package is fine — the machine isn't activating
-   the feature. Build the official VS "Blank App, isolated" sample (or a minimal
-   control) and compare.
-5. **PSF.** A `PsfLauncher*.exe` entry point can never isolate (PSF injects
-   fixup DLLs, which AppContainer blocks). `Add-MsixAppIsolation` warns on this.
-
-The module's job ends at emitting the documented manifest; steps 2–4 are OS
-feature-enablement, outside packaging.
+1. **Re-pack with v0.71.1+.** Confirm the manifest has
+   `EntryPoint="Windows.PartialTrustApplication"`, `TrustLevel="appContainer"`,
+   and **no** `runFullTrust`. The GA AppContainer mode (default) isolates on
+   Windows 10 2004+ / 11.
+2. **Right process?** Make sure you launched the **packaged** app
+   (`…\WindowsApps\…`), not a same-named desktop install. A packaged app — even
+   a non-isolated one — carries package SIDs; the *desktop* install won't.
+3. **Don't confuse ASR with isolation.** An ASR "block executable …" prompt is
+   not the isolation broker; only an `S-1-15-2` AppContainer SID confirms isolation.
+4. **AppSilo brokering is preview.** `-Mode AppContainer` (GA) reliably enters an
+   AppContainer (access denied). The `-Mode AppSilo` broker (consent prompts) is a
+   preview layer; if it doesn't engage on a given build, the app still runs in the
+   AppContainer — access is denied rather than prompted. Windows Sandbox is a
+   reduced VM and is not a reliable place to verify isolation; use a real host.
+5. **Blockers.** A `PsfLauncher*.exe` entry point (PSF) or a `windows.comServer`
+   extension cannot be isolated — `Add-MsixAppIsolation` warns / throws.
 
 ---
 

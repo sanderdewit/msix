@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.71.0'
+    ModuleVersion     = '0.71.1'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, PSADT-style standard scripts, TMEditX-style heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -222,80 +222,42 @@
                             'TMEditX','Enterprise','CICD','Pester','PSADT')
             ProjectUri  = 'https://github.com/microsoft/MSIX-PackageSupportFramework'
             ReleaseNotes = @'
-## v0.71.0
+## v0.71.1
 
-### Win32 App Isolation — now writes a manifest that actually isolates
-- Add-MsixAppIsolation previously only added an isolatedWin32-* capability,
-  which does NOT isolate anything. It now writes the uap18 attributes that
-  enable isolation on each <Application> (EntryPoint="Windows.FullTrustApplication",
-  uap18:EntryPoint="Isolated.App", uap18:TrustLevel="appContainer",
-  uap18:RuntimeBehavior="appSilo"), declares the uap18 namespace, and raises the
-  Windows.Desktop TargetDeviceFamily MinVersion to 10.0.26100.0 (isolation only
-  engages when the package targets 24H2; it will no longer install on older
-  Windows). (#91, #92)
-- runFullTrust is retained by design: the FullTrust entry point requires it
-  (MakeAppx 0x80080204 otherwise), so isolation + runFullTrust are required
-  together, not mutually exclusive. -RemoveRunFullTrust / -KeepRunFullTrust
-  switches added. (#91)
-- COM context menus: isolatedWin32-shellExtensionContextMenu is auto-added when
-  the package has a comServer / FileExplorerContextMenus extension. (#91)
-- PSF packages (PsfLauncher*.exe entry point) are detected and warned about —
-  they cannot be isolated (PSF injects fixup DLLs, which AppContainer blocks). (#93)
-- Remove-MsixAppIsolation also strips the uap18 attributes now. (#91)
-- Get-MsixIsolationCapability rebuilt against the MS Learn supported-capabilities
-  page: rich objects (Name/ElementType/Description), full isolatedWin32-* set,
-  and device capabilities (microphone/webcam) as <DeviceCapability>. Fixed an
-  OrderedDictionary.ContainsKey runtime error. (#85, #86)
-- Import-MsixSparseShellExtension resolves a bare nested-package name and skips
-  gracefully (warning, not a throw) when the nested package is absent, so
-  Invoke-MsixAutoFixFromAnalysis no longer aborts mid-run. (#94)
+### App isolation that actually isolates (partial-trust / AppContainer)
+v0.71.0 emitted the uap18 appSilo attributes but kept
+EntryPoint="Windows.FullTrustApplication" + runFullTrust, which keeps the process
+full-trust — so v0.71.0 "isolated" packages still ran full-trust (Medium
+integrity, no S-1-15-2 AppContainer SID). Verified on a real 25H2 host.
 
-  NOTE: Win32 App Isolation is a preview Windows feature. A correct package
-  still falls back to full trust on an OS where the feature isn't active
-  (Insider builds vs retail 24H2 servicing) and does not engage in Windows
-  Sandbox. See TEST-PLAN.md Scenario 6 to verify activation.
+Fix: the AppContainer boundary is TrustLevel="appContainer", reached via
+EntryPoint="Windows.PartialTrustApplication" with runFullTrust REMOVED (per the
+MSIX AppContainer guidance). Add-MsixAppIsolation now does that, and a minimal
+probe built this way provably isolates (S-1-15-2 AppContainer SID; C:\ denied).
 
-### Shell / context menus
-- Folder context menus (e.g. 7-Zip): the scanner now walks the Folder and Drive
-  shell classes, and -FileTypes accepts container item-types. DragDropHandlers
-  are scanned and stripped. (#80, #84)
-- #81: install-relative VFS plugin folders are routed via PSF FileRedirection;
-  Set-MsixFileSystemWriteVirtualization validates ExcludedDirectory entries
-  against the $(KnownFolder:Name) schema and skips invalid ones, so it can never
-  emit a manifest MakeAppx rejects.
+Add-MsixAppIsolation -Mode {AppContainer|AppSilo}, default AppContainer:
+- AppContainer (GA, Win10 2004+): uap10:TrustLevel=appContainer +
+  uap10:RuntimeBehavior=packagedClassicApp. Ungranted access denied.
+  -Capabilities are standard package capabilities (default: none).
+- AppSilo (preview, Win11 24H2): uap18:RuntimeBehavior=appSilo +
+  uap18:EntryPoint=Isolated.App + isolatedWin32-* broker caps; raises MinVersion
+  to 10.0.26100.0. -Capabilities are isolatedWin32-*/device caps (default:
+  isolatedWin32-promptForAccess).
 
-### Security hardening (post code-security review)
-- Fixed P1 findings: template injection, XXE, Zip-Slip, TLS floor (#49–#52).
-- AzureSignTool client secret delivered via environment variable, never the
-  command line (#53).
-- Authenticode-verify resolved SDK tools before use (#54).
-- Opt-in download integrity: SHA-256 + per-publisher thumbprint pinning (#55).
-- Escape package-derived values in scanner recommendation snippets (#60).
-- Reserved the SignerSignEx signing backend (API only) (#17).
+runFullTrust is now ALWAYS removed; the obsolete -RemoveRunFullTrust /
+-KeepRunFullTrust switches are gone.
 
-### Offline-registry scanning & reliability
-- Run-key scan now uses offreg parsing instead of raw strings; fixed
-  _MsixOfflineEnumValueNames returning empty names (#56).
-- Validate the offline hive before parsing; _MsixWithOfflineHive wrapper (#59).
-- Bind mutator scriptblocks to module session state so private offreg helpers
-  resolve at invocation (#83).
-- Unpack the package once per analysis run (#58).
-- Set-MsixManifestMaxVersionTested handles multi-TDF packages and short
-  version strings (#57).
-- Complete -LiteralPath migration + guard; -DisableTestResult switch (#46, #47).
-- Always-use-named-parameters rule documented + swept across the module (#48).
+Blockers detected: PsfLauncher*.exe entry point (PSF — warns) and
+windows.comServer extensions (invalid with partial trust — throws; strip the COM
+server + its context menu first).
 
-### Test infrastructure & repo
-- Real-MSIX integration harness (Build-MsixTestFixture) + CI job; end-to-end
-  integration tests for the mutating cmdlets (#61, #87).
-- Pester suite restructured by cmdlet-family + cross-cutting contract;
-  issue/version-named files dissolved; coverage-map guardrail asserts every
-  Add/Remove/Set/Update mutator is invoked by a test (#88, #89).
-- .gitignore for test artifacts; actions/checkout bumped to v6 / Node 24 (#90).
-- CI parse-check gate so a syntactically broken module fails lint, not Pester.
+Remove-MsixAppIsolation restores Windows.FullTrustApplication + runFullTrust and
+strips the uap10/uap18 attributes and isolatedWin32-* capabilities.
+
+Docs: README + TEST-PLAN Scenario 6 rewritten for the partial-trust model; the
+incorrect "Insider-only" claim corrected (the feature ships on GA 24H2/25H2).
 
 Full history: CHANGELOG.md.
-
 '@
         }
     }

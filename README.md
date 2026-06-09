@@ -271,48 +271,57 @@ Bundled templates: `CreateShortcut`, `CopyIconToAppData`, `CleanupOldUserData`,
 
 ## Win32 App Isolation
 
-Opt-in isolation. `Add-MsixAppIsolation` writes the full set the OS needs to
-run the app in an AppContainer silo — not just a capability:
+Opt-in AppContainer isolation. The actual isolation switch is the **AppContainer
+trust level on a partial-trust entry point** — `Add-MsixAppIsolation` sets, on
+each `<Application>`:
 
-- the `uap18` attributes on each `<Application>`
-  (`EntryPoint="Windows.FullTrustApplication"`, `uap18:EntryPoint="Isolated.App"`,
-  `uap18:TrustLevel="appContainer"`, `uap18:RuntimeBehavior="appSilo"`) — **these
-  are what actually enable isolation; the capability alone does nothing**;
-- the requested `isolatedWin32-*` `rescap:Capability` entries (and device caps
-  like `microphone` / `webcam` as `<DeviceCapability>`);
-- it **raises `Windows.Desktop` MinVersion to 10.0.26100.0** (isolation only
-  engages when the package targets 24H2 — so the package will no longer install
-  on older Windows);
-- it **keeps `runFullTrust`** — the FullTrust entry point requires it (MakeAppx
-  rejects the package otherwise), so isolation and `runFullTrust` are required
-  *together*, not mutually exclusive;
-- a COM context menu (`comServer`) gets `isolatedWin32-shellExtensionContextMenu`
-  added automatically so it works under isolation.
+- `EntryPoint="Windows.PartialTrustApplication"` (the full-trust entry point
+  hard-requires `runFullTrust`, which keeps the process full-trust — so it could
+  never isolate);
+- `TrustLevel="appContainer"`; and
+- **removes `runFullTrust`** (incompatible with AppContainer; the partial-trust
+  entry point doesn't need it).
+
+Two modes:
+
+| `-Mode` | Manifest | Status | Behavior |
+|---|---|---|---|
+| **AppContainer** (default) | `uap10:RuntimeBehavior="packagedClassicApp"` | **GA** (Win10 2004+) | ungranted access **denied** |
+| **AppSilo** | `uap18:RuntimeBehavior="appSilo"` + `uap18:EntryPoint="Isolated.App"` + `isolatedWin32-*` | **preview** (Win11 24H2) | access **brokered** (consent prompts); raises MinVersion to 26100 |
+
+`-Capabilities` are standard package capabilities in AppContainer mode (default:
+none — strictest) and `isolatedWin32-*` / device capabilities in AppSilo mode
+(default: `isolatedWin32-promptForAccess`).
 
 ```powershell
 $pw = Read-Host -AsSecureString
 
-Get-MsixIsolationCapability   # rich objects: Name / ElementType / Description
+Get-MsixIsolationCapability   # rich objects: Name / ElementType / Description (AppSilo caps)
 
-Add-MsixAppIsolation -PackagePath app.msix `
-    -Capabilities 'isolatedWin32-promptForAccess', 'isolatedWin32-userProfileMinimal' `
-    -Pfx cert.pfx -PfxPassword $pw
+# GA AppContainer (strict): app runs in an AppContainer, ungranted access denied.
+Add-MsixAppIsolation -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw
 
-Remove-MsixAppIsolation -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw   # also strips the uap18 attrs
+# ... grant specific access:
+Add-MsixAppIsolation -PackagePath app.msix -Capabilities internetClient -Pfx cert.pfx -PfxPassword $pw
+
+# Win32 App Isolation silo (preview) with the file-access broker:
+Add-MsixAppIsolation -PackagePath app.msix -Mode AppSilo -Pfx cert.pfx -PfxPassword $pw
+
+Remove-MsixAppIsolation -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw   # restores full trust
 ```
 
-**Not compatible with PSF.** A package whose entry point is `PsfLauncher*.exe`
-cannot be isolated — PSF injects fixup DLLs into the target process, which
-AppContainer blocks. `Add-MsixAppIsolation` detects this and warns.
+**Two things that can't be isolated** (the cmdlet warns/throws):
+- **PSF packages** (`PsfLauncher*.exe` entry point) — PSF injects fixup DLLs into
+  the target process, which AppContainer blocks.
+- **`windows.comServer` extensions** (e.g. a COM shell context-menu like NppShell)
+  — that extension is invalid with a partial-trust entry point; strip it first.
 
-> **Runtime note.** Win32 App Isolation is a **preview** Windows feature.
-> Requires Windows 11 24H2 (build **26100.2161+**). A correct package still
-> **falls back to full trust** where the feature isn't active (flighted on
-> Insider builds; not lit up on retail 24H2 servicing builds) and does **not**
-> engage inside Windows Sandbox. Medium integrity / no `S-1-15-2` AppContainer
-> SID at runtime means the OS isn't activating the feature — not that the
-> manifest is wrong. **Validate the app first** — many legacy apps break under
-> isolation. See `TEST-PLAN.md` Scenario 6 to verify activation.
+> **Validate first.** Many legacy apps break under isolation because they expect
+> broad filesystem/registry access. Confirm isolation actually engaged: the
+> process should show an **`S-1-15-2` AppContainer SID** / Low integrity (e.g. in
+> Process Explorer). The **AppSilo** layer is a **preview** feature; if its
+> brokering doesn't engage on a given build the app still runs in the
+> AppContainer (access denied rather than prompted). See `TEST-PLAN.md` Scenario 6.
 
 `Invoke-MsixPipeline` supports `AppIsolation` as a first-class config key —
 applied in the same unpack/repack/sign pass as publisher updates and PSF

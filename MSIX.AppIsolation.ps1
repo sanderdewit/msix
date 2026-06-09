@@ -92,77 +92,72 @@ function Get-MsixIsolationCapability {
 function Add-MsixAppIsolation {
     <#
     .SYNOPSIS
-        Enables Win32 App Isolation on an MSIX package: sets the uap18 isolation
-        attributes on each <Application>, declares the requested isolated-Win32
-        capabilities, and reconciles the runFullTrust capability.
+        Makes a packaged Win32 app run isolated (in an AppContainer) by switching
+        the Application to the partial-trust entry point, declaring the AppContainer
+        trust level, and removing runFullTrust.
 
     .DESCRIPTION
-        Adding an isolatedWin32-* capability alone does NOT isolate an app — the
-        isolation is switched on by the uap18 attributes on <Application>. This
-        cmdlet writes the full set the MS Learn guidance requires:
+        The isolation boundary is the AppContainer TrustLevel. To actually drop a
+        packaged Win32 app into an AppContainer you must (per the MSIX
+        AppContainer guidance, https://learn.microsoft.com/windows/msix/msix-container):
+          1. set Application EntryPoint to "Windows.PartialTrustApplication"
+             (the full-trust entry point hard-requires runFullTrust, which keeps
+             the process full-trust — so it can never isolate);
+          2. declare TrustLevel="appContainer"; and
+          3. REMOVE the runFullTrust capability.
+        This cmdlet does all three. (The earlier capability-only / FullTrust
+        approach never isolated — the app stayed full-trust.)
 
-          - Declares the `uap18` and `rescap` namespaces (and adds them to
-            IgnorableNamespaces) if absent.
-          - On every <Application> (or just -AppId), sets:
-                EntryPoint="Windows.FullTrustApplication"
-                uap18:EntryPoint="Isolated.App"
-                uap18:TrustLevel="appContainer"
-                uap18:RuntimeBehavior="appSilo"
-          - Adds one <rescap:Capability>/<DeviceCapability> per -Capabilities.
-          - If the package has a COM context-menu (windows.comServer /
-            FileExplorerContextMenus), auto-adds
-            `isolatedWin32-shellExtensionContextMenu` so the menu runs under
-            isolation.
-          - Ensures runFullTrust (see below).
-          - Bumps MaxVersionTested to 10.0.26100.0, and RAISES the Windows.Desktop
-            TargetDeviceFamily MinVersion to 10.0.26100.0. The MinVersion bump is
-            mandatory: isolation only engages when the package targets 24H2, so
-            this also means the package will no longer install on older Windows.
+        Two modes (-Mode), both built on the same AppContainer base
+        (PartialTrustApplication + appContainer + no runFullTrust):
 
-        runFullTrust: an isolated app keeps EntryPoint="Windows.FullTrustApplication"
-        (the down-level entry point), and the AppxManifest schema REQUIRES the
-        runFullTrust capability for that entry point — MakeAppx rejects the
-        package without it (error 80080204). runFullTrust and isolation are
-        therefore NOT mutually exclusive; they are required together. Isolation
-        is enforced by the uap18 appContainer/appSilo attributes, not by the
-        absence of runFullTrust.
-          - Default: ENSURE runFullTrust is present (add if missing) and log why.
-          - -RemoveRunFullTrust: force-remove it. Warns that the repack will fail
-            on toolchains that still require it for the FullTrust entry point.
-          - -KeepRunFullTrust: retain it silently (the default already keeps it;
-            this just suppresses the explanatory note).
+          AppContainer (default) — the GA "packagedClassicApp" AppContainer:
+            uap10:TrustLevel="appContainer", uap10:RuntimeBehavior="packagedClassicApp".
+            Ungranted access is denied (no consent prompts). Available since
+            Windows 10 2004 (build 19041). -Capabilities here are standard
+            package capabilities (e.g. internetClient, broadFileSystemAccess,
+            microphone) resolved to their namespace automatically.
+
+          AppSilo — the Win32 App Isolation silo (PREVIEW, Win11 24H2 / build
+            26100+): adds uap18:RuntimeBehavior="appSilo",
+            uap18:EntryPoint="Isolated.App", and the isolatedWin32-* capability
+            broker (consent prompts via isolatedWin32-promptForAccess, etc.).
+            appSilo is a further specialisation of appContainer. -Capabilities
+            here are isolatedWin32-* / device capabilities. MinVersion is raised
+            to 10.0.26100.0 (so the package will no longer install before 24H2).
 
         Repacks and re-signs the package.
 
-        WARNING: this is opt-in. Many existing MSIX packages will break under
-        isolation because the app expects broad filesystem/registry access.
-        Validate with the Application Capability Profiler (ACP) first:
+        WARNING: opt-in. Many legacy apps break under isolation because they
+        expect broad filesystem/registry access. Validate with the Application
+        Capability Profiler (ACP) first:
         https://github.com/microsoft/win32-app-isolation/releases
 
-        NOTE: Packages built with the Package Support Framework (PSF) — i.e. whose
-        Application Executable is PsfLauncher*.exe — CANNOT be isolated. PSF
-        injects fixup DLLs into the target process, which AppContainer blocks, and
-        PSF/isolation have opposite goals. This cmdlet warns when it detects a PSF
-        launcher; the produced package will not actually run isolated. Re-package
-        without PSF first.
+        NOTE: Packages built with the Package Support Framework (PSF) — Application
+        Executable PsfLauncher*.exe — cannot be isolated. PSF injects fixup DLLs
+        into the target process, which AppContainer blocks. This cmdlet warns when
+        it detects a PSF launcher.
+
+        NOTE: A package that declares a windows.comServer extension (e.g. a COM
+        shell context-menu like NppShell) CANNOT be isolated — that extension is
+        invalid with a partial-trust entry point and MakeAppx rejects it. This
+        cmdlet throws with guidance; strip the COM server + its context-menu first.
 
     .PARAMETER PackagePath
         .msix file to modify.
 
+    .PARAMETER Mode
+        AppContainer (default) — GA packagedClassicApp AppContainer.
+        AppSilo — preview Win32 App Isolation silo with the broker.
+
     .PARAMETER Capabilities
-        Capabilities to add. Defaults to a conservative starter set:
-        promptForAccess + accessFromLowIntegrityLevel.
+        Capabilities to declare. In -Mode AppContainer these are standard package
+        capability names (default: none — strictest). In -Mode AppSilo these are
+        isolatedWin32-* / device capabilities (default: isolatedWin32-promptForAccess).
 
     .PARAMETER AppId
-        Restrict the uap18 isolation attributes to the Application with this Id.
+        Restrict the isolation attributes to the Application with this Id.
         Default: every <Application> in the package.
-
-    .PARAMETER RemoveRunFullTrust
-        Force-remove the runFullTrust capability even when a blocking extension
-        (e.g. firewallRules) is present.
-
-    .PARAMETER KeepRunFullTrust
-        Never remove the runFullTrust capability.
 
     .PARAMETER OutputPath
         Write the modified package here instead of overwriting -PackagePath.
@@ -174,15 +169,19 @@ function Add-MsixAppIsolation {
         Signing certificate.
 
     .EXAMPLE
-        Add-MsixAppIsolation -PackagePath app.msix `
-            -Capabilities 'isolatedWin32-promptForAccess','isolatedWin32-userProfileMinimal' `
-            -Pfx cert.pfx -PfxPassword 'P@ss'
+        # GA AppContainer (strict): the app runs in an AppContainer, ungranted
+        # access is denied.
+        Add-MsixAppIsolation -PackagePath app.msix -SkipSigning
 
     .EXAMPLE
-        # A packaged Win32 app whose only full-trust reason is its shell
-        # context menu: isolation keeps the menu via the isolation capability
-        # and drops runFullTrust automatically.
-        Add-MsixAppIsolation -PackagePath npp.msix -SkipSigning
+        # AppContainer with internet + a known folder granted.
+        Add-MsixAppIsolation -PackagePath app.msix `
+            -Capabilities internetClient -Pfx cert.pfx -PfxPassword $pw
+
+    .EXAMPLE
+        # Win32 App Isolation silo (preview) with the file-access broker.
+        Add-MsixAppIsolation -PackagePath app.msix -Mode AppSilo `
+            -Capabilities 'isolatedWin32-promptForAccess' -SkipSigning
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'AppId',
@@ -190,13 +189,10 @@ function Add-MsixAppIsolation {
     param(
         [Parameter(Mandatory)]
         [string]$PackagePath,
-        [string[]]$Capabilities = @(
-            'isolatedWin32-promptForAccess',
-            'isolatedWin32-accessFromLowIntegrityLevel'
-        ),
+        [ValidateSet('AppContainer', 'AppSilo')]
+        [string]$Mode = 'AppContainer',
+        [string[]]$Capabilities,
         [string]$AppId,
-        [switch]$RemoveRunFullTrust,
-        [switch]$KeepRunFullTrust,
         [string]$OutputPath,
         [Alias('NoSign')]
         [switch]$SkipSigning,
@@ -204,57 +200,60 @@ function Add-MsixAppIsolation {
         [SecureString]$PfxPassword
     )
 
-    if ($RemoveRunFullTrust -and $KeepRunFullTrust) {
-        throw '-RemoveRunFullTrust and -KeepRunFullTrust are mutually exclusive.'
+    # Per-mode default capability set.
+    if (-not $PSBoundParameters.ContainsKey('Capabilities')) {
+        $Capabilities = if ($Mode -eq 'AppSilo') { @('isolatedWin32-promptForAccess') } else { @() }
     }
 
+    # Validate capability names against the mode (warn only).
     foreach ($c in $Capabilities) {
-        $knownIsolated = $script:KnownIsolationCapabilities.Contains($c)
-        $knownDevice   = $script:KnownIsolationDeviceCapabilities.Contains($c)
-        if (-not $knownIsolated -and -not $knownDevice) {
-            Write-MsixLog -Level Warning -Message "'$c' is not in the documented capability set. Verify against MS Learn before publishing."
+        if ($Mode -eq 'AppSilo') {
+            $known = $script:KnownIsolationCapabilities.Contains($c) -or $script:KnownIsolationDeviceCapabilities.Contains($c)
+            if (-not $known) {
+                Write-MsixLog -Level Warning -Message "'$c' is not a documented Win32-isolation capability. Verify against MS Learn before publishing."
+            }
+        } else {
+            if ($c -like 'isolatedWin32-*') {
+                Write-MsixLog -Level Warning -Message "'$c' is an appSilo (Win32 App Isolation) capability and is ignored in -Mode AppContainer. Use -Mode AppSilo for isolatedWin32-* capabilities, or pass a standard package capability name here."
+            }
         }
     }
 
-    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Add App Isolation')
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Add App Isolation ($Mode)")
 
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
         -WhatIfPreview:$isWhatIf `
-        -Activity 'Add App Isolation' -Mutate {
+        -Activity "Add App Isolation ($Mode)" -Mutate {
         param([xml]$manifest)
 
-        Add-MsixManifestNamespace -Manifest $manifest -Prefix 'uap18'
-        Add-MsixManifestNamespace -Manifest $manifest -Prefix 'rescap'
-        # Win32 App Isolation requires Win11 24H2 (build 26100)
-        Set-MsixManifestMaxVersionTested -Manifest $manifest -MinBuild 26100
+        # ── Namespaces + minimum-version floor ────────────────────────────────
+        Add-MsixManifestNamespace -Manifest $manifest -Prefix 'uap10'
+        $uap10Uri = Get-MsixManifestNamespaceUri -Prefix 'uap10'
+        $uap18Uri = Get-MsixManifestNamespaceUri -Prefix 'uap18'   # for cleanup in both modes
+        if ($Mode -eq 'AppSilo') {
+            Add-MsixManifestNamespace -Manifest $manifest -Prefix 'uap18'
+            Add-MsixManifestNamespace -Manifest $manifest -Prefix 'rescap'
+            Set-MsixManifestMaxVersionTested -Manifest $manifest -MinBuild 26100
 
-        # The Windows.Desktop TargetDeviceFamily MinVersion MUST be raised to
-        # 10.0.26100.0. Isolation only engages when the package *targets* 24H2:
-        # uap18 lives in IgnorableNamespaces, so with a down-level MinVersion the
-        # deployment stack treats the package as a legacy full-trust app and
-        # ignores the appContainer/appSilo attributes even on a 26100 host. This
-        # raises the minimum OS — the package will no longer install before 24H2.
-        $isoMin = [version]'10.0.26100.0'
-        $desktopTdf = @($manifest.Package.Dependencies.TargetDeviceFamily) |
-            Where-Object { $_.GetAttribute('Name') -eq 'Windows.Desktop' }
-        if (-not $desktopTdf) {
-            Write-MsixLog -Level Warning -Message 'No Windows.Desktop TargetDeviceFamily found; cannot raise MinVersion. Win32 App Isolation requires a Windows.Desktop target at MinVersion 10.0.26100.0.'
-        }
-        foreach ($tdf in $desktopTdf) {
-            $cur = $null
-            $parsed = [version]::TryParse($tdf.GetAttribute('MinVersion'), [ref]$cur)
-            if (-not $parsed -or $cur -lt $isoMin) {
-                $tdf.SetAttribute('MinVersion', '10.0.26100.0')
-                Write-MsixLog -Level Warning -Message "TargetDeviceFamily 'Windows.Desktop' MinVersion raised to 10.0.26100.0 (required for Win32 App Isolation). The package will no longer install on Windows older than 24H2."
+            # appSilo (preview) only engages when the package targets 24H2.
+            $isoMin = [version]'10.0.26100.0'
+            $desktopTdf = @($manifest.Package.Dependencies.TargetDeviceFamily) |
+                Where-Object { $_.GetAttribute('Name') -eq 'Windows.Desktop' }
+            if (-not $desktopTdf) {
+                Write-MsixLog -Level Warning -Message 'No Windows.Desktop TargetDeviceFamily found; cannot raise MinVersion. appSilo requires a Windows.Desktop target at MinVersion 10.0.26100.0.'
+            }
+            foreach ($tdf in $desktopTdf) {
+                $cur = $null
+                $parsed = [version]::TryParse($tdf.GetAttribute('MinVersion'), [ref]$cur)
+                if (-not $parsed -or $cur -lt $isoMin) {
+                    $tdf.SetAttribute('MinVersion', '10.0.26100.0')
+                    Write-MsixLog -Level Warning -Message "TargetDeviceFamily 'Windows.Desktop' MinVersion raised to 10.0.26100.0 (required for the appSilo preview). The package will no longer install on Windows older than 24H2."
+                }
             }
         }
 
-        $uap18Uri  = Get-MsixManifestNamespaceUri -Prefix 'uap18'
-        $rescapUri = Get-MsixManifestNamespaceUri -Prefix 'rescap'
-
-        # ── Application isolation attributes ──────────────────────────────────
-        # These are what actually enable isolation; the capability alone does not.
+        # ── Locate target Application(s) ──────────────────────────────────────
         $apps = @($manifest.Package.Applications.Application)
         if ($AppId) {
             $apps = @($apps | Where-Object { $_.GetAttribute('Id') -eq $AppId })
@@ -262,38 +261,55 @@ function Add-MsixAppIsolation {
         }
         if (-not $apps) { throw 'No <Application> element found in the manifest.' }
 
+        # A windows.comServer extension cannot coexist with a partial-trust
+        # entry point — MakeAppx rejects it ("The 'windows.comServer' Extension
+        # can't be declared with Partial Trust EntryPoint", 0x80080204). A COM
+        # shell extension (e.g. NppShell) therefore blocks isolation outright.
+        # Fail fast with guidance instead of letting the repack die cryptically.
+        if ($manifest.SelectSingleNode("//*[local-name()='Extension' and @Category='windows.comServer']")) {
+            throw "Cannot isolate this package: it declares a 'windows.comServer' extension, which is incompatible with the partial-trust (AppContainer) entry point that isolation requires. Remove the COM server and its shell context-menu (the com:Extension 'windows.comServer' and the desktop4 'windows.fileExplorerContextMenus' extension) before isolating."
+        }
+
         foreach ($app in $apps) {
-            # Package Support Framework is fundamentally incompatible with Win32
-            # App Isolation. PSF's launcher injects fixup DLLs into the target
-            # process (cross-process injection), which AppContainer/appSilo
-            # blocks — and the two have opposite goals (PSF widens access for
-            # compat; isolation restricts it). A PSF package will NOT isolate:
-            # Windows runs it as a normal full-trust Win32 app. Warn loudly.
+            # PSF launcher cannot be isolated (cross-process DLL injection is
+            # blocked in an AppContainer).
             $exe = $app.GetAttribute('Executable')
             if ($exe -match 'PsfLauncher\d*\.exe$') {
-                Write-MsixLog -Level Warning -Message "Application '$($app.GetAttribute('Id'))' launches via the Package Support Framework (Executable '$exe'). PSF and Win32 App Isolation are mutually exclusive: PSF injects fixup DLLs into the target process, which AppContainer/appSilo blocks — this package will NOT run isolated (Windows runs it as a normal full-trust Win32 app). Re-package without PSF (point Executable at the real .exe and drop the fixups: PsfLauncher*/PsfRuntime*/FileRedirectionFixup*/config.json) before isolating."
+                Write-MsixLog -Level Warning -Message "Application '$($app.GetAttribute('Id'))' launches via the Package Support Framework (Executable '$exe'). PSF and AppContainer isolation are mutually exclusive: PSF injects fixup DLLs into the target process, which AppContainer blocks. This package will NOT run isolated. Re-package without PSF (point Executable at the real .exe; drop PsfLauncher*/PsfRuntime*/FileRedirectionFixup*/config.json) first."
             }
 
-            # Base entry point stays Windows.FullTrustApplication (down-level OS
-            # ignores the uap18 attrs and runs the app as a normal Win32 app).
-            $app.SetAttribute('EntryPoint', 'Windows.FullTrustApplication')
+            # The partial-trust entry point is what lets the app drop to
+            # AppContainer (and lets runFullTrust be removed — the full-trust
+            # entry point hard-requires it, which keeps the process full-trust).
+            $app.SetAttribute('EntryPoint', 'Windows.PartialTrustApplication')
 
-            foreach ($pair in @(
-                @{ Name = 'EntryPoint';      Value = 'Isolated.App'  },
-                @{ Name = 'TrustLevel';      Value = 'appContainer'  },
-                @{ Name = 'RuntimeBehavior'; Value = 'appSilo'       }
-            )) {
-                # Idempotent: drop any existing uap18:<name> before re-adding so
-                # re-runs don't duplicate, and a CreateAttribute(prefix,...) keeps
-                # the serialized prefix deterministic (uap18:).
-                $old = $app.GetAttributeNode($pair.Name, $uap18Uri)
-                if ($old) { $null = $app.Attributes.Remove($old) }
-                $attr = $manifest.CreateAttribute('uap18', $pair.Name, $uap18Uri)
-                $attr.Value = $pair.Value
+            # Idempotent + clean mode switch: remove any prior isolation attrs in
+            # BOTH namespaces before setting the mode-specific ones.
+            foreach ($ln in 'EntryPoint', 'TrustLevel', 'RuntimeBehavior') {
+                foreach ($uri in $uap10Uri, $uap18Uri) {
+                    $old = $app.GetAttributeNode($ln, $uri)
+                    if ($old) { $null = $app.Attributes.Remove($old) }
+                }
+            }
+
+            if ($Mode -eq 'AppSilo') {
+                $attrs = @(
+                    @{ Prefix = 'uap18'; Uri = $uap18Uri; Name = 'EntryPoint';      Value = 'Isolated.App' },
+                    @{ Prefix = 'uap18'; Uri = $uap18Uri; Name = 'TrustLevel';      Value = 'appContainer' },
+                    @{ Prefix = 'uap18'; Uri = $uap18Uri; Name = 'RuntimeBehavior'; Value = 'appSilo' }
+                )
+            } else {
+                $attrs = @(
+                    @{ Prefix = 'uap10'; Uri = $uap10Uri; Name = 'TrustLevel';      Value = 'appContainer' },
+                    @{ Prefix = 'uap10'; Uri = $uap10Uri; Name = 'RuntimeBehavior'; Value = 'packagedClassicApp' }
+                )
+            }
+            foreach ($a in $attrs) {
+                $attr = $manifest.CreateAttribute($a.Prefix, $a.Name, $a.Uri)
+                $attr.Value = $a.Value
                 $null = $app.Attributes.Append($attr)
             }
-            $idForLog = $app.GetAttribute('Id')
-            Write-MsixLog -Level Info -Message "Isolation attributes set on Application '$idForLog' (TrustLevel=appContainer, RuntimeBehavior=appSilo)."
+            Write-MsixLog -Level Info -Message "Isolation set on Application '$($app.GetAttribute('Id'))' (Mode=$Mode, EntryPoint=Windows.PartialTrustApplication, TrustLevel=appContainer)."
         }
 
         # ── Capabilities block ────────────────────────────────────────────────
@@ -303,79 +319,64 @@ function Add-MsixAppIsolation {
             $null     = $manifest.Package.AppendChild($capsNode)
         }
 
-        # If the package surfaces a COM-based shell context menu, it needs the
-        # isolation-native capability (the replacement for runFullTrust for that
-        # extension). Auto-include it so the menu survives isolation.
-        $wantedCaps = [System.Collections.Generic.List[string]]::new()
-        foreach ($c in $Capabilities) { $wantedCaps.Add($c) }
-        $hasComServer = $null -ne $manifest.SelectSingleNode("//*[local-name()='Extension' and @Category='windows.comServer']")
-        $hasCtxMenu   = $null -ne $manifest.SelectSingleNode("//*[local-name()='FileExplorerContextMenus']")
-        if (($hasComServer -or $hasCtxMenu) -and -not $wantedCaps.Contains('isolatedWin32-shellExtensionContextMenu')) {
-            $wantedCaps.Add('isolatedWin32-shellExtensionContextMenu')
-            Write-MsixLog -Level Info -Message 'COM context-menu detected: auto-adding isolatedWin32-shellExtensionContextMenu (isolation-native replacement for runFullTrust).'
+        # runFullTrust is incompatible with AppContainer and is NOT required by
+        # the partial-trust entry point. Always remove it — this is the change
+        # that actually lets the app fall into the AppContainer.
+        foreach ($n in @($capsNode.ChildNodes)) {
+            if ($n.LocalName -eq 'Capability' -and $n.GetAttribute('Name') -eq 'runFullTrust') {
+                $null = $capsNode.RemoveChild($n)
+                Write-MsixLog -Level Info -Message 'Removed runFullTrust (incompatible with AppContainer; the partial-trust entry point does not require it).'
+            }
         }
 
-        foreach ($cap in $wantedCaps) {
-            # Device capabilities use <DeviceCapability> (default namespace);
-            # isolatedWin32-* capabilities use <rescap:Capability>.
-            $isDeviceCap = $script:KnownIsolationDeviceCapabilities.Contains($cap)
-            $targetLocal = if ($isDeviceCap) { 'DeviceCapability' } else { 'Capability' }
+        # Assemble the capability list.
+        $wantedCaps = [System.Collections.Generic.List[string]]::new()
+        foreach ($c in $Capabilities) { if ($c) { $null = $wantedCaps.Add($c) } }
 
-            $alreadyThere = $false
+        $rescapUri = Get-MsixManifestNamespaceUri -Prefix 'rescap'
+        foreach ($cap in $wantedCaps) {
+            if ($Mode -eq 'AppContainer' -and $cap -like 'isolatedWin32-*') { continue }  # warned earlier
+
+            $isDeviceCap = $script:KnownIsolationDeviceCapabilities.Contains($cap)
+
+            # Pick element + namespace.
+            if ($isDeviceCap) {
+                $localName = 'DeviceCapability'
+            } else {
+                $localName = 'Capability'
+            }
+
+            # Idempotency: skip if already present (match LocalName + Name).
+            $exists = $false
             foreach ($child in $capsNode.ChildNodes) {
-                if ($child.LocalName -eq $targetLocal -and $child.GetAttribute('Name') -eq $cap) {
-                    $alreadyThere = $true
-                    break
-                }
+                if ($child.LocalName -eq $localName -and $child.GetAttribute('Name') -eq $cap) { $exists = $true; break }
             }
-            if ($alreadyThere) {
-                Write-MsixLog -Level Info -Message "Capability already present: $cap"
-                continue
-            }
+            if ($exists) { Write-MsixLog -Level Info -Message "Capability already present: $cap"; continue }
 
             if ($isDeviceCap) {
                 $node = $manifest.CreateElement('DeviceCapability', $manifest.Package.NamespaceURI)
-            } else {
+            }
+            elseif ($Mode -eq 'AppSilo') {
+                # isolatedWin32-* live in rescap.
                 $node = $manifest.CreateElement('rescap:Capability', $rescapUri)
+            }
+            else {
+                # AppContainer: resolve a standard package capability to its namespace.
+                $ns = $script:KnownCapabilities[$cap]
+                if ($ns -and $ns -ne 'standard') {
+                    Add-MsixManifestNamespace -Manifest $manifest -Prefix $ns
+                    $nsUri = Get-MsixManifestNamespaceUri -Prefix $ns
+                    $node  = $manifest.CreateElement("${ns}:Capability", $nsUri)
+                } else {
+                    if (-not $ns) {
+                        Write-MsixLog -Level Warning -Message "Capability '$cap' is not in the known-capabilities table; emitting a plain <Capability>. Verify it is valid for an AppContainer app."
+                    }
+                    $node = $manifest.CreateElement('Capability', $manifest.Package.NamespaceURI)
+                }
             }
             $node.SetAttribute('Name', $cap)
             $null = $capsNode.AppendChild($node)
             Write-MsixLog -Level Info -Message "Capability added: $cap"
-        }
-
-        # ── runFullTrust reconciliation ───────────────────────────────────────
-        # The isolated app retains EntryPoint="Windows.FullTrustApplication" (the
-        # down-level entry point that lets it still run as a normal Win32 app on
-        # OSes without isolation support). The AppxManifest schema REQUIRES the
-        # runFullTrust capability for that entry point — MakeAppx rejects the
-        # package without it (error 80080204). So by default we ENSURE
-        # runFullTrust is present and explain why; the app is still isolated via
-        # the uap18 appContainer/appSilo attributes, and a COM context menu runs
-        # via isolatedWin32-shellExtensionContextMenu. -RemoveRunFullTrust forces
-        # removal for toolchains/runtimes that accept the isolated entry point
-        # without it (the repack will fail on toolchains that don't).
-        $rftNode = $null
-        foreach ($child in $capsNode.ChildNodes) {
-            if ($child.LocalName -eq 'Capability' -and $child.GetAttribute('Name') -eq 'runFullTrust') {
-                $rftNode = $child
-                break
-            }
-        }
-        if ($RemoveRunFullTrust) {
-            if ($rftNode) { $null = $capsNode.RemoveChild($rftNode) }
-            Write-MsixLog -Level Warning -Message 'Removed runFullTrust (-RemoveRunFullTrust). NOTE: EntryPoint="Windows.FullTrustApplication" normally requires it and MakeAppx may reject the repack (error 80080204) unless your packaging toolchain/runtime supports the isolated entry point without runFullTrust.'
-        }
-        else {
-            if (-not $rftNode) {
-                $rftNode = $manifest.CreateElement('rescap:Capability', $rescapUri)
-                $rftNode.SetAttribute('Name', 'runFullTrust')
-                $null = $capsNode.AppendChild($rftNode)
-            }
-            if ($KeepRunFullTrust) {
-                Write-MsixLog -Level Info -Message 'runFullTrust retained (-KeepRunFullTrust).'
-            } else {
-                Write-MsixLog -Level Info -Message 'runFullTrust retained: required by EntryPoint="Windows.FullTrustApplication" (the down-level entry point the isolated app keeps). Isolation is enforced by uap18 appContainer/appSilo; a COM context menu runs via isolatedWin32-shellExtensionContextMenu. Pass -RemoveRunFullTrust only if your toolchain supports dropping it.'
-            }
         }
     }
 }
@@ -384,16 +385,15 @@ function Add-MsixAppIsolation {
 function Remove-MsixAppIsolation {
     <#
     .SYNOPSIS
-        Reverses Add-MsixAppIsolation: strips every `isolatedWin32-*` capability
-        and the uap18 isolation attributes (TrustLevel / RuntimeBehavior /
-        uap18:EntryPoint) from each <Application>.
+        Reverses Add-MsixAppIsolation: returns the app to a normal full-trust
+        packaged app (Windows.FullTrustApplication + runFullTrust) and strips the
+        AppContainer / appSilo attributes and isolatedWin32-* capabilities.
 
     .DESCRIPTION
-        Removes the uap18 isolation attributes so the app no longer runs in an
-        AppContainer silo, and deletes the isolatedWin32-* capabilities. The base
-        EntryPoint="Windows.FullTrustApplication" is left intact. runFullTrust is
-        NOT re-added — its original presence can't be inferred, so re-add it
-        explicitly with Add-MsixCapability if the app needs it.
+        Removes the uap10/uap18 isolation attributes (TrustLevel / RuntimeBehavior
+        / uap18:EntryPoint) from each <Application>, sets EntryPoint back to
+        "Windows.FullTrustApplication", re-adds the runFullTrust capability (the
+        normal packaged-Win32 default), and deletes any isolatedWin32-* capabilities.
 
     .PARAMETER PackagePath
         .msix file to modify.
@@ -419,13 +419,16 @@ function Remove-MsixAppIsolation {
     )
 
     PROCESS {
-        # Quick pre-check: does the package have isolation caps OR uap18 attrs?
+        # Pre-check: any isolation attrs or isolatedWin32-* caps present?
         $preCheck  = Get-MsixManifest -Path $PackagePath
+        $uap10Uri  = Get-MsixManifestNamespaceUri -Prefix 'uap10'
         $uap18Uri  = Get-MsixManifestNamespaceUri -Prefix 'uap18'
         $hasCaps = @($preCheck.Package.Capabilities.ChildNodes) |
             Where-Object { $_.LocalName -eq 'Capability' -and $_.Name -like 'isolatedWin32-*' }
-        $hasAttrs = @($preCheck.Package.Applications.Application) |
-            Where-Object { $_.GetAttributeNode('TrustLevel', $uap18Uri) -or $_.GetAttributeNode('RuntimeBehavior', $uap18Uri) }
+        $hasAttrs = @($preCheck.Package.Applications.Application) | Where-Object {
+            $_.GetAttributeNode('TrustLevel', $uap10Uri) -or $_.GetAttributeNode('RuntimeBehavior', $uap10Uri) -or
+            $_.GetAttributeNode('TrustLevel', $uap18Uri) -or $_.GetAttributeNode('RuntimeBehavior', $uap18Uri)
+        }
         if (-not $hasCaps -and -not $hasAttrs) {
             Write-MsixLog -Level Info -Message 'No isolation capabilities or attributes found; nothing to do.'
             return
@@ -439,28 +442,50 @@ function Remove-MsixAppIsolation {
             -Activity 'Remove App Isolation' -Mutate {
             param([xml]$manifest)
 
+            $u10 = Get-MsixManifestNamespaceUri -Prefix 'uap10'
             $u18 = Get-MsixManifestNamespaceUri -Prefix 'uap18'
 
-            # Strip the uap18 isolation attributes from every Application.
             foreach ($app in @($manifest.Package.Applications.Application)) {
-                foreach ($local in 'EntryPoint', 'TrustLevel', 'RuntimeBehavior') {
-                    $node = $app.GetAttributeNode($local, $u18)
-                    if ($node) {
-                        $null = $app.Attributes.Remove($node)
-                        Write-MsixLog -Level Info -Message "Removed uap18:$local from Application '$($app.GetAttribute('Id'))'."
+                # Strip uap10 + uap18 isolation attributes.
+                foreach ($ln in 'EntryPoint', 'TrustLevel', 'RuntimeBehavior') {
+                    foreach ($uri in $u10, $u18) {
+                        $node = $app.GetAttributeNode($ln, $uri)
+                        if ($node) {
+                            $null = $app.Attributes.Remove($node)
+                            Write-MsixLog -Level Info -Message "Removed isolation attribute $ln from Application '$($app.GetAttribute('Id'))'."
+                        }
                     }
                 }
+                # Restore the normal full-trust packaged-Win32 entry point.
+                $app.SetAttribute('EntryPoint', 'Windows.FullTrustApplication')
+            }
+
+            $capsNode = $manifest.Package.Capabilities
+            if (-not $capsNode) {
+                $capsNode = $manifest.CreateElement('Capabilities', $manifest.Package.NamespaceURI)
+                $null     = $manifest.Package.AppendChild($capsNode)
             }
 
             # Strip isolatedWin32-* capabilities.
-            $capsNode = $manifest.Package.Capabilities
-            if ($capsNode) {
-                foreach ($n in @($capsNode.ChildNodes)) {
-                    if ($n.LocalName -eq 'Capability' -and $n.Name -like 'isolatedWin32-*') {
-                        $null = $capsNode.RemoveChild($n)
-                        Write-MsixLog -Level Info -Message "Removed: $($n.Name)"
-                    }
+            foreach ($n in @($capsNode.ChildNodes)) {
+                if ($n.LocalName -eq 'Capability' -and $n.Name -like 'isolatedWin32-*') {
+                    $null = $capsNode.RemoveChild($n)
+                    Write-MsixLog -Level Info -Message "Removed: $($n.Name)"
                 }
+            }
+
+            # Re-add runFullTrust (required by the restored full-trust entry point).
+            $hasRft = $false
+            foreach ($n in $capsNode.ChildNodes) {
+                if ($n.LocalName -eq 'Capability' -and $n.GetAttribute('Name') -eq 'runFullTrust') { $hasRft = $true; break }
+            }
+            if (-not $hasRft) {
+                Add-MsixManifestNamespace -Manifest $manifest -Prefix 'rescap'
+                $rescapUri = Get-MsixManifestNamespaceUri -Prefix 'rescap'
+                $rft = $manifest.CreateElement('rescap:Capability', $rescapUri)
+                $rft.SetAttribute('Name', 'runFullTrust')
+                $null = $capsNode.AppendChild($rft)
+                Write-MsixLog -Level Info -Message 'Re-added runFullTrust (required by Windows.FullTrustApplication).'
             }
         }
     }

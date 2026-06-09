@@ -267,13 +267,49 @@ Add-MsixAppIsolation `
   fire as expected, and confirm the process runs in an AppContainer (e.g.
   Process Explorer → the process shows an AppContainer SID / low integrity).
 
-### Common failure mode — "isolation doesn't do anything"
+### How to confirm isolation is *actually* active
 
-If the app still runs with full file-system/registry access after installing on
-24H2, check the manifest's `TargetDeviceFamily MinVersion`. If it is below
-`10.0.26100.0` the OS ignores the `uap18` attributes and runs the app as a
-normal full-trust Win32 app. `Add-MsixAppIsolation` raises it automatically;
-a package hand-edited or re-packed by another tool may have reset it.
+The behavioural test (the access prompt) is necessary but not sufficient —
+prompts can come from other features (e.g. ASR rules). The **definitive** check
+is the process token:
+
+```powershell
+# launch the PACKAGED app (not a same-named desktop install), then:
+Get-Process <exe> | Select-Object Id, Path     # Path must be under …\WindowsApps\…
+```
+
+In **Process Explorer → Security**, an isolated process shows an
+**AppContainer SID `S-1-15-2-…`** and **AppContainer / Low** integrity. If you
+instead see **Medium** integrity and no `S-1-15-2` SID, the app is **not**
+isolated regardless of what the manifest says.
+
+### Common failure mode — "manifest is correct but it still runs full-trust"
+
+Win32 App Isolation is a **preview** feature. When the OS doesn't have it
+active, it **silently falls back to full trust** (documented behaviour, build
+26100.2161 release notes) — a perfectly-formed isolated package then runs
+exactly like a normal full-trust packaged app. Work through these in order:
+
+1. **`MinVersion` < 10.0.26100.0** → the OS ignores the `uap18` attributes.
+   `Add-MsixAppIsolation` raises it automatically; a package hand-edited or
+   re-packed by another tool may have reset it.
+2. **OS patch level.** Check `(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').UBR`
+   — isolation needs build **26100.2161+**. (`[Environment]::OSVersion.Version`
+   does *not* report the UBR.)
+3. **Windows Sandbox does not engage isolation.** It's a reduced, disposable VM;
+   a correct isolated package runs full-trust there. Verify on a real host.
+4. **The feature simply isn't active on this build/channel.** It's flighted on
+   Insider (Canary/Dev) builds and not necessarily lit up on a retail 24H2
+   servicing build, with no Settings toggle. If even a *minimal* isolated
+   control app (a trivial exe + the isolation manifest, nothing else) runs
+   full-trust on the host, the package is fine — the machine isn't activating
+   the feature. Build the official VS "Blank App, isolated" sample (or a minimal
+   control) and compare.
+5. **PSF.** A `PsfLauncher*.exe` entry point can never isolate (PSF injects
+   fixup DLLs, which AppContainer blocks). `Add-MsixAppIsolation` warns on this.
+
+The module's job ends at emitting the documented manifest; steps 2–4 are OS
+feature-enablement, outside packaging.
 
 ---
 

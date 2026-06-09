@@ -1,4 +1,4 @@
-# MSIX PowerShell Module — v0.70.0
+# MSIX PowerShell Module — v0.71.0
 
 Enterprise-grade MSIX packaging automation for mission-critical environments.
 Covers the full conversion lifecycle: static + runtime investigation, PSF
@@ -34,6 +34,7 @@ suite.
 - [Debug & sandbox](#debug--sandbox)
 - [CI/CD](#cicd)
 - [Tests](#tests)
+- [What's new in v0.71](#whats-new-in-v071)
 - [What's new in v0.70](#whats-new-in-v070)
 - [License](#license)
 
@@ -70,9 +71,9 @@ References this module automates:
 
 ## Quick start
 
-> The maintainer owns the `MSIX` name on PSGallery. Until v0.70.0 is
-> published there, import by full path to avoid conflicts with any community
-> module of the same name.
+> The maintainer owns the `MSIX` name on PSGallery (`Install-Module MSIX`).
+> When developing against a working copy, import by full path so you load the
+> repo version rather than the installed one.
 
 ```powershell
 Import-Module 'C:\path\to\MSIX\MSIX.psd1' -Force
@@ -99,7 +100,7 @@ Skip individual components: `Initialize-MsixToolchain -Skip Sdk,Procmon,MsixMgr`
 
 ```
 MSIX\
-├── MSIX.psd1                  Module manifest (v0.70.0)
+├── MSIX.psd1                  Module manifest (v0.71.0)
 ├── MSIX.psm1                  Root module — dot-sources all sub-modules
 ├── MSIX.Logging.ps1           Write-MsixLog + log-level / file controls
 ├── MSIX.Core.ps1              Workspace, process runner, tools resolution
@@ -270,24 +271,51 @@ Bundled templates: `CreateShortcut`, `CopyIconToAppData`, `CleanupOldUserData`,
 
 ## Win32 App Isolation
 
-Opt-in isolation via `rescap:Capability` entries. Requires Windows 11 24H2
-(build 26100+). **Validate the app first** — many legacy apps break under
-isolation.
+Opt-in isolation. `Add-MsixAppIsolation` writes the full set the OS needs to
+run the app in an AppContainer silo — not just a capability:
+
+- the `uap18` attributes on each `<Application>`
+  (`EntryPoint="Windows.FullTrustApplication"`, `uap18:EntryPoint="Isolated.App"`,
+  `uap18:TrustLevel="appContainer"`, `uap18:RuntimeBehavior="appSilo"`) — **these
+  are what actually enable isolation; the capability alone does nothing**;
+- the requested `isolatedWin32-*` `rescap:Capability` entries (and device caps
+  like `microphone` / `webcam` as `<DeviceCapability>`);
+- it **raises `Windows.Desktop` MinVersion to 10.0.26100.0** (isolation only
+  engages when the package targets 24H2 — so the package will no longer install
+  on older Windows);
+- it **keeps `runFullTrust`** — the FullTrust entry point requires it (MakeAppx
+  rejects the package otherwise), so isolation and `runFullTrust` are required
+  *together*, not mutually exclusive;
+- a COM context menu (`comServer`) gets `isolatedWin32-shellExtensionContextMenu`
+  added automatically so it works under isolation.
 
 ```powershell
 $pw = Read-Host -AsSecureString
 
-Get-MsixIsolationCapability   # see all documented capabilities
+Get-MsixIsolationCapability   # rich objects: Name / ElementType / Description
 
 Add-MsixAppIsolation -PackagePath app.msix `
     -Capabilities 'isolatedWin32-promptForAccess', 'isolatedWin32-userProfileMinimal' `
     -Pfx cert.pfx -PfxPassword $pw
 
-Remove-MsixAppIsolation -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw
+Remove-MsixAppIsolation -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw   # also strips the uap18 attrs
 ```
 
+**Not compatible with PSF.** A package whose entry point is `PsfLauncher*.exe`
+cannot be isolated — PSF injects fixup DLLs into the target process, which
+AppContainer blocks. `Add-MsixAppIsolation` detects this and warns.
+
+> **Runtime note.** Win32 App Isolation is a **preview** Windows feature.
+> Requires Windows 11 24H2 (build **26100.2161+**). A correct package still
+> **falls back to full trust** where the feature isn't active (flighted on
+> Insider builds; not lit up on retail 24H2 servicing builds) and does **not**
+> engage inside Windows Sandbox. Medium integrity / no `S-1-15-2` AppContainer
+> SID at runtime means the OS isn't activating the feature — not that the
+> manifest is wrong. **Validate the app first** — many legacy apps break under
+> isolation. See `TEST-PLAN.md` Scenario 6 to verify activation.
+
 `Invoke-MsixPipeline` supports `AppIsolation` as a first-class config key —
-it is applied in the same unpack/repack/sign pass as publisher updates and PSF
+applied in the same unpack/repack/sign pass as publisher updates and PSF
 injection.
 
 ---
@@ -419,10 +447,12 @@ Invoke-MsixPipeline -PackagePath $env:BUILD_OUTPUT -OutputPath $env:BUILD_FIXED 
 
 ## Tests
 
-Pester v5 tests under `MSIX.Tests\`. 200+ tests cover pure functions, manifest
+Pester v5 tests under `MSIX.Tests\`. 500+ tests cover pure functions, manifest
 transforms, XML security (XXE / billion-laughs rejection), secret non-leakage,
-input validation, idempotency, and the module export contract. No toolchain
-install required.
+input validation, idempotency, and the module export contract — plus
+`Integration`-tagged tests that pack real `.msix` fixtures via MakeAppx (skipped
+when the SDK toolchain isn't present). A coverage-map guardrail asserts every
+mutating cmdlet is exercised by a test.
 
 ```powershell
 Install-Module Pester -MinimumVersion 5.5 -Scope CurrentUser
@@ -438,6 +468,51 @@ Install-Module Pester -MinimumVersion 5.5 -Scope CurrentUser
 CI runs PSScriptAnalyzer (Error + Warning) and Pester on every push / PR via
 `.github/workflows/ci.yml`. Releases publish to PSGallery via
 `.github/workflows/publish.yml`.
+
+---
+
+## What's new in v0.71
+
+### Win32 App Isolation — now actually isolates
+
+`Add-MsixAppIsolation` was previously a no-op for isolation: it added an
+`isolatedWin32-*` capability but none of the attributes that switch isolation
+on. It now writes the full `uap18` attribute set, raises MinVersion to 26100,
+keeps `runFullTrust` (required by the entry point), auto-adds
+`isolatedWin32-shellExtensionContextMenu` for comServer menus, and warns when a
+PSF-launcher package (which can't be isolated) is passed. `Remove-MsixAppIsolation`
+reverses all of it. `Get-MsixIsolationCapability` was rebuilt against the MS Learn
+supported-capabilities page (rich objects + device caps), and a runtime
+`OrderedDictionary.ContainsKey` error was fixed. (#85, #86, #91, #92, #93)
+See the [Win32 App Isolation](#win32-app-isolation) section for the preview-feature
+runtime caveat.
+
+### Security hardening (post code-security review)
+
+| Area | Change |
+|---|---|
+| **P1 findings** | Template injection, XXE, Zip-Slip, and a TLS floor fixed across the analysis + accelerator paths (#49–#52). |
+| **AzureSignTool secret** | Client secret delivered via environment variable, never the command line (#53). |
+| **Tool verification** | Resolved SDK tools are Authenticode-verified before use, not just freshly-downloaded ones (#54). |
+| **Download integrity** | Opt-in SHA-256 + per-publisher thumbprint pinning closes the CN-prefix-only gap (#55). |
+| **Snippet escaping** | Package-derived values are escaped in scanner recommendation snippets (#60). |
+
+### Scanning, reliability & quality
+
+| Area | Change |
+|---|---|
+| **offreg Run-key scan** | Run-key detection parses the hive via offreg instead of raw strings; fixed empty value-name enumeration (#56, #59). |
+| **Mutator scope** | Mutator scriptblocks are bound to module session state so private offreg helpers resolve at invocation (#83). |
+| **Folder context menus** | Scanner walks the `Folder`/`Drive` shell classes and `DragDropHandlers`; install-dir plugin folders route via PSF rather than an invalid `ExcludedDirectory` (#80, #81, #84). |
+| **Perf / correctness** | Package unpacked once per analysis run (#58); multi-TDF + short-version `MaxVersionTested` (#57); full `-LiteralPath` + named-parameter sweep (#46–#48). |
+
+### Test infrastructure
+
+| Area | Change |
+|---|---|
+| **Real-MSIX integration** | `Build-MsixTestFixture` packs genuine `.msix` fixtures via MakeAppx; end-to-end integration tests for the mutating cmdlets + a dedicated CI job (#61, #87). |
+| **Suite restructure** | Tests grouped by cmdlet-family + cross-cutting contract; issue/version-named files dissolved; a coverage-map guardrail fails the build when a mutator has no test that invokes it (#88, #89). |
+| **Repo hygiene** | `.gitignore` for test artifacts; `actions/checkout` v6 (Node 24); CI parse-check gate (#90). |
 
 ---
 

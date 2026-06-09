@@ -5,7 +5,7 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
-## v0.72.0 - 2026-06-09 — App isolation that actually isolates (partial-trust / AppContainer)
+## v0.71.1 - 2026-06-09 — App isolation that actually isolates (partial-trust / AppContainer)
 
 The v0.71.0 isolation work emitted the `uap18` appSilo attributes but kept
 `EntryPoint="Windows.FullTrustApplication"` and `runFullTrust` — and the
@@ -102,10 +102,10 @@ corrected (the feature ships on GA 24H2/25H2).
   throw) when the nested package is absent — so `Invoke-MsixAutoFixFromAnalysis`
   no longer aborts mid-run on a `NestedPackage` finding. (#94)
 
-> **Runtime note.** (Superseded by v0.72.0 — see below.) This release kept
+> **Runtime note.** (Superseded by v0.71.1 — see below.) This release kept
 > `EntryPoint="Windows.FullTrustApplication"` + `runFullTrust`, which kept the
 > process full-trust, so packages built by this version do **not** actually
-> isolate. v0.72.0 fixes the model (partial-trust entry point + drop
+> isolate. v0.71.1 fixes the model (partial-trust entry point + drop
 > `runFullTrust`). The earlier claim that the feature is "Insider-only" was
 > incorrect — Win32 App Isolation ships on GA 24H2/25H2.
 

@@ -291,10 +291,10 @@ isolated regardless of what the manifest says.
 The single most important cause was the manifest model itself: an app that keeps
 `EntryPoint="Windows.FullTrustApplication"` + `runFullTrust` runs full-trust no
 matter what other isolation attributes are present (this was the v0.71.0 bug,
-fixed in v0.72.0 by switching to `Windows.PartialTrustApplication` and removing
+fixed in v0.71.1 by switching to `Windows.PartialTrustApplication` and removing
 `runFullTrust`). If you still see Medium integrity / no `S-1-15-2` SID:
 
-1. **Re-pack with v0.72.0+.** Confirm the manifest has
+1. **Re-pack with v0.71.1+.** Confirm the manifest has
    `EntryPoint="Windows.PartialTrustApplication"`, `TrustLevel="appContainer"`,
    and **no** `runFullTrust`. The GA AppContainer mode (default) isolates on
    Windows 10 2004+ / 11.

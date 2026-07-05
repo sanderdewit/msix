@@ -66,6 +66,36 @@ the two registrations against the same CLSID.
   `-AddAppIsolation` (with `Remove-MsixPsf` preparation and COM/PSF
   incompatibility guards).
 
+### Niche extension points (#120)
+
+- **`Add-MsixAppExtensionHost`** / **`Add-MsixAppExtension`** — the uap3
+  plugin-ecosystem contract pair (host declares contract names; extension
+  packages target them; discovery via the AppExtensionCatalog API).
+- **`Add-MsixAutoPlayHandler`** — AutoPlay content/device launch actions
+  (`windows.autoPlayContent` / `windows.autoPlayDevice`).
+- **`Add-MsixShareTarget`** — Share-sheet target (file types, any-file,
+  data formats).
+- **`Add-MsixFullTrustProcess`** — full-trust companion process for a UWP
+  main app (+ auto-added runFullTrust).
+- **`Add-MsixPackageCertificate`** — bundles a .cer into the package and
+  declares it via the `windows.certificates` package extension (Root / CA /
+  TrustedPeople / TrustedPublisher), replacing the capture's certutil step.
+- **`Get-MsixPackageCertificateCandidate`** (new scanner, + plural alias) —
+  finds shipped-but-undeclared .cer/.crt files; surfaces as a
+  `ManifestFix:PackageCertificate` static-analysis finding; autofix declares
+  them via the opt-in `-DeclarePackageCertificates`
+  (+ `-PackageCertificateStore`, default TrustedPeople — a trust decision is
+  never made automatically).
+
+### Signing fail-closed fix (#77)
+
+- `Invoke-MsixSigning -Signer SignerSignEx` now throws the reserved-backend
+  error even when `-Pfx`/`-PfxPassword` are supplied. Previously those
+  parameters bound the SignToolPfx parameter set, whose set-name inference
+  silently overrode the explicit `-Signer` and entered the SignTool path
+  (including its command-line password exposure). Explicit `-Signer` now
+  always wins; regression test added.
+
 ### Fixes & docs
 
 - `Set-MsixBrandMetadata` warns when the target field is pri-localized

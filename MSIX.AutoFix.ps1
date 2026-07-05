@@ -280,6 +280,7 @@ function Invoke-MsixAutoFixFromAnalysis {
           VcRuntime                            -> Add-MsixPackageDependency (with -VcRuntimeAsPackageDependency)
           ManifestFix:PackagedService          -> Add-MsixService
           ManifestFix:ShellHandlerExtension    -> Add-MsixShellHandlerExtension
+          ManifestFix:PackageCertificate       -> Add-MsixPackageCertificate (opt-in via -DeclarePackageCertificates)
           ManifestFix:FileSystemWriteVirt..    -> Set-MsixFileSystemWriteVirtualization
           ManifestFix:RegistryWriteVirt..      -> Set-MsixRegistryWriteVirtualization
           ManifestFix:StartupTask              -> Add-MsixStartupTask  (needs -StartupTaskAppId / -StartupTaskName)
@@ -302,6 +303,15 @@ function Invoke-MsixAutoFixFromAnalysis {
         When both a PSF and a manifest fix are suggested for the same symptom,
         pick the manifest one (modern Windows builds only).
         Default: $true.
+
+    .PARAMETER DeclarePackageCertificates
+        Opt in to declaring bundled-but-undeclared .cer/.crt files via the
+        windows.certificates extension (Add-MsixPackageCertificate). Off by
+        default: installing a certificate into a store is a trust decision.
+
+    .PARAMETER PackageCertificateStore
+        Store for -DeclarePackageCertificates: Root, CA, TrustedPeople
+        (default) or TrustedPublisher.
 
     .PARAMETER VcRuntimeSourceFolder
         VS Redist folder; required when a VcRuntime finding is in the report.
@@ -402,6 +412,13 @@ function Invoke-MsixAutoFixFromAnalysis {
         [string[]]$IsolationCapabilities,
         [string]$IsolationAppId,
         [switch]$RemoveComServerForIsolation,
+        # windows.certificates (issue #120): declaring a shipped .cer into a
+        # store is a TRUST decision, so it is opt-in, and the store must be
+        # chosen deliberately (default TrustedPeople - the least powerful of
+        # the allowed stores; use Root/CA only for internal-CA chains).
+        [switch]$DeclarePackageCertificates,
+        [ValidateSet('Root', 'CA', 'TrustedPeople', 'TrustedPublisher')]
+        [string]$PackageCertificateStore = 'TrustedPeople',
         # Confidence threshold below which a finding is NOT auto-fixed.
         # Findings between [MinConfidenceReport, MinConfidence) still
         # appear in the printed plan as "recommendation only".
@@ -532,6 +549,34 @@ function Invoke-MsixAutoFixFromAnalysis {
                     }
                 }
             })
+        }
+    }
+
+    # Stage 2b' - bundled certificates (windows.certificates, issue #120).
+    # Opt-in: installing a certificate into a store is a trust decision.
+    if ($byCat.ContainsKey('ManifestFix:PackageCertificate')) {
+        if ($DeclarePackageCertificates) {
+            $certEntries = @($Report.Findings |
+                Where-Object Category -eq 'ManifestFix:PackageCertificate' |
+                ForEach-Object { @($_.CertificateEntries) } |
+                Where-Object { $_ -and $_.CanAutoFix })
+            if ($certEntries) {
+                $capturedCertEntries = $certEntries
+                $capturedCertStore   = $PackageCertificateStore
+                $plan.Add([pscustomobject]@{
+                    Stage  = 'DeclarePackageCertificates'
+                    Reason = "Declare $($capturedCertEntries.Count) bundled certificate(s) into the $capturedCertStore store via windows.certificates"
+                    Action = {
+                        foreach ($cert in $capturedCertEntries) {
+                            Add-MsixPackageCertificate -PackagePath $current `
+                                -CertificatePath $cert.RelativePath `
+                                -StoreName $capturedCertStore -SkipSigning
+                        }
+                    }
+                })
+            }
+        } else {
+            Write-MsixLog -Level Info -Message 'Bundled undeclared certificate(s) found. Pass -DeclarePackageCertificates (and optionally -PackageCertificateStore) to declare them via windows.certificates, or run Add-MsixPackageCertificate manually.'
         }
     }
 

@@ -2519,3 +2519,586 @@ function Set-MsixMutablePackageDirectory {
 }
 
 #endregion
+
+#region Niche extension points (issue #120) ----------------------------------
+
+function Add-MsixAppExtensionHost {
+    <#
+    .SYNOPSIS
+        Declares the application as a plugin HOST (uap3 windows.appExtensionHost)
+        so extension packages can target it by contract name.
+
+    .DESCRIPTION
+        Adds uap3:Extension Category="windows.appExtensionHost" with one
+        uap3:Name per contract. Extension packages then declare
+        windows.appExtension with a matching Name and Windows brokers
+        discovery via the AppExtensionCatalog API.
+
+    .PARAMETER PackagePath
+        The .msix file to modify.
+
+    .PARAMETER AppId
+        Application to attach to (default: first Application).
+
+    .PARAMETER Name
+        One or more extension-contract names the host consumes
+        (reverse-DNS convention, e.g. com.contoso.myapp.plugin).
+
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the signing pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package here.
+
+    .EXAMPLE
+        Add-MsixAppExtensionHost -PackagePath host.msix `
+            -Name 'com.contoso.editor.plugin' -SkipSigning
+
+    .LINK
+        https://learn.microsoft.com/windows/uwp/launch-resume/how-to-create-an-extensible-app
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
+    param(
+        [Parameter(Mandatory)] [string]$PackagePath,
+        [ValidatePattern('^[A-Za-z_][A-Za-z0-9_.-]*$')]
+        [string]$AppId,
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$')]
+        [string[]]$Name,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
+    )
+
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Add AppExtensionHost')
+
+    _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+                        -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+                        -UnsignedOutputPath $UnsignedOutputPath `
+                        -WhatIfPreview:$isWhatIf `
+                        -Activity 'Add AppExtensionHost' -Mutate {
+        param([xml]$M)
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'uap3'
+        $u3 = Get-MsixManifestNamespaceUri -Prefix 'uap3'
+        $app    = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
+        $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
+
+        $hostNode = $M.SelectSingleNode("//*[local-name()='AppExtensionHost']")
+        if (-not $hostNode) {
+            $ext = $M.CreateElement('uap3:Extension', $u3)
+            $ext.SetAttribute('Category', 'windows.appExtensionHost')
+            $hostNode = $M.CreateElement('uap3:AppExtensionHost', $u3)
+            $null = $ext.AppendChild($hostNode)
+            $null = $appExt.AppendChild($ext)
+        }
+        foreach ($n in $Name) {
+            $exists = @($hostNode.ChildNodes) | Where-Object { $_.LocalName -eq 'Name' -and $_.InnerText -eq $n }
+            if ($exists) { Write-MsixLog -Level Info -Message "AppExtensionHost name already declared: $n"; continue }
+            $nameNode = $M.CreateElement('uap3:Name', $u3)
+            $nameNode.InnerText = $n
+            $null = $hostNode.AppendChild($nameNode)
+            Write-MsixLog -Level Info -Message "AppExtensionHost contract declared: $n"
+        }
+    }
+}
+
+
+function Add-MsixAppExtension {
+    <#
+    .SYNOPSIS
+        Declares the application as a PLUGIN (uap3 windows.appExtension)
+        targeting a host's extension-contract name.
+
+    .DESCRIPTION
+        Adds uap3:Extension Category="windows.appExtension" with the contract
+        Name (matching the host's AppExtensionHost declaration), this
+        extension's Id, DisplayName/Description, and the PublicFolder whose
+        content the host may read.
+
+    .PARAMETER PackagePath
+        The .msix file to modify.
+
+    .PARAMETER AppId
+        Application to attach to (default: first Application).
+
+    .PARAMETER Name
+        The HOST contract name this extension plugs into
+        (e.g. com.contoso.editor.plugin).
+
+    .PARAMETER Id
+        Identifier for this extension, unique within the package.
+
+    .PARAMETER DisplayName
+        Human-readable extension name. Default: the Id.
+
+    .PARAMETER Description
+        Short description. Default: the DisplayName.
+
+    .PARAMETER PublicFolder
+        Package-relative folder exposed read-only to the host. Default 'Public'.
+
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the signing pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package here.
+
+    .EXAMPLE
+        Add-MsixAppExtension -PackagePath plugin.msix `
+            -Name 'com.contoso.editor.plugin' -Id 'markdown-tools' `
+            -DisplayName 'Markdown tools' -SkipSigning
+
+    .LINK
+        https://learn.microsoft.com/windows/uwp/launch-resume/how-to-create-an-extensible-app
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
+    param(
+        [Parameter(Mandatory)] [string]$PackagePath,
+        [ValidatePattern('^[A-Za-z_][A-Za-z0-9_.-]*$')]
+        [string]$AppId,
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$')]
+        [string]$Name,
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')]
+        [string]$Id,
+        [string]$DisplayName,
+        [string]$Description,
+        [string]$PublicFolder = 'Public',
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
+    )
+
+    if (-not $DisplayName) { $DisplayName = $Id }
+    if (-not $Description) { $Description = $DisplayName }
+
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Add AppExtension '$Id'")
+
+    _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+                        -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+                        -UnsignedOutputPath $UnsignedOutputPath `
+                        -WhatIfPreview:$isWhatIf `
+                        -Activity "Add AppExtension '$Id'" -Mutate {
+        param([xml]$M)
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'uap3'
+        $u3 = Get-MsixManifestNamespaceUri -Prefix 'uap3'
+        $app    = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
+        $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
+
+        if ($M.SelectSingleNode("//*[local-name()='AppExtension' and @Id='$Id']")) {
+            Write-MsixLog -Level Info -Message "AppExtension '$Id' already declared - skipping."
+            return
+        }
+
+        $ext = $M.CreateElement('uap3:Extension', $u3)
+        $ext.SetAttribute('Category', 'windows.appExtension')
+        $ax = $M.CreateElement('uap3:AppExtension', $u3)
+        $ax.SetAttribute('Name',         $Name)
+        $ax.SetAttribute('Id',           $Id)
+        $ax.SetAttribute('DisplayName',  $DisplayName)
+        $ax.SetAttribute('Description',  $Description)
+        $ax.SetAttribute('PublicFolder', $PublicFolder.Replace('/', '\'))
+        $null = $ext.AppendChild($ax)
+        $null = $appExt.AppendChild($ext)
+        Write-MsixLog -Level Info -Message "AppExtension '$Id' declared against host contract '$Name'."
+    }
+}
+
+
+function Add-MsixAutoPlayHandler {
+    <#
+    .SYNOPSIS
+        Declares an AutoPlay handler (uap windows.autoPlayContent /
+        windows.autoPlayDevice) so the app appears in the AutoPlay dialog.
+
+    .DESCRIPTION
+        Content kind: fires on volume/content events (e.g.
+        ShowPicturesOnArrival, PlayMusicFilesOnArrival). Device kind: fires on
+        device events (WPD interface arrival). One uap:LaunchAction per call;
+        call repeatedly for multiple verbs.
+
+    .PARAMETER PackagePath
+        The .msix file to modify.
+
+    .PARAMETER AppId
+        Application to attach to (default: first Application).
+
+    .PARAMETER Kind
+        Content | Device.
+
+    .PARAMETER Verb
+        Verb string passed to app activation (e.g. 'show').
+
+    .PARAMETER ActionDisplayName
+        Text shown in the AutoPlay dialog.
+
+    .PARAMETER ContentEvent
+        (Kind=Content) e.g. ShowPicturesOnArrival, PlayMusicFilesOnArrival,
+        StorageOnArrival.
+
+    .PARAMETER DeviceEvent
+        (Kind=Device) e.g. WPD\ImageSource.
+
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the signing pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package here.
+
+    .EXAMPLE
+        Add-MsixAutoPlayHandler -PackagePath app.msix -Kind Content `
+            -Verb show -ActionDisplayName 'Import photos' `
+            -ContentEvent ShowPicturesOnArrival -SkipSigning
+
+    .LINK
+        https://learn.microsoft.com/windows/uwp/launch-resume/auto-launching-with-autoplay
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
+    param(
+        [Parameter(Mandatory)] [string]$PackagePath,
+        [ValidatePattern('^[A-Za-z_][A-Za-z0-9_.-]*$')]
+        [string]$AppId,
+        [Parameter(Mandatory)]
+        [ValidateSet('Content', 'Device')]
+        [string]$Kind,
+        [Parameter(Mandatory)] [string]$Verb,
+        [Parameter(Mandatory)] [string]$ActionDisplayName,
+        [string]$ContentEvent,
+        [string]$DeviceEvent,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
+    )
+
+    if ($Kind -eq 'Content' -and -not $ContentEvent) { throw '-ContentEvent is required for -Kind Content.' }
+    if ($Kind -eq 'Device'  -and -not $DeviceEvent)  { throw '-DeviceEvent is required for -Kind Device.' }
+
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Add AutoPlay $Kind handler")
+
+    _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+                        -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+                        -UnsignedOutputPath $UnsignedOutputPath `
+                        -WhatIfPreview:$isWhatIf `
+                        -Activity "Add AutoPlay $Kind handler" -Mutate {
+        param([xml]$M)
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'uap'
+        $uapUri = Get-MsixManifestNamespaceUri -Prefix 'uap'
+        $app    = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
+        $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
+
+        $category  = if ($Kind -eq 'Content') { 'windows.autoPlayContent' } else { 'windows.autoPlayDevice' }
+        $container = if ($Kind -eq 'Content') { 'uap:AutoPlayContent' } else { 'uap:AutoPlayDevice' }
+
+        $node = $appExt.SelectSingleNode("*[local-name()='Extension' and @Category='$category']/*")
+        if (-not $node) {
+            $ext = $M.CreateElement('uap:Extension', $uapUri)
+            $ext.SetAttribute('Category', $category)
+            $node = $M.CreateElement($container, $uapUri)
+            $null = $ext.AppendChild($node)
+            $null = $appExt.AppendChild($ext)
+        }
+
+        $dup = @($node.ChildNodes) | Where-Object {
+            $_.LocalName -eq 'LaunchAction' -and $_.GetAttribute('Verb') -eq $Verb
+        }
+        if ($dup) { Write-MsixLog -Level Info -Message "AutoPlay verb '$Verb' already declared - skipping."; return }
+
+        $action = $M.CreateElement('uap:LaunchAction', $uapUri)
+        $action.SetAttribute('Verb', $Verb)
+        $action.SetAttribute('ActionDisplayName', $ActionDisplayName)
+        if ($Kind -eq 'Content') { $action.SetAttribute('ContentEvent', $ContentEvent) }
+        else                     { $action.SetAttribute('DeviceEvent',  $DeviceEvent) }
+        $null = $node.AppendChild($action)
+        Write-MsixLog -Level Info -Message "AutoPlay $Kind handler declared (Verb=$Verb)."
+    }
+}
+
+
+function Add-MsixShareTarget {
+    <#
+    .SYNOPSIS
+        Declares the app as a Share-charm target (uap windows.shareTarget) so
+        it appears in the Windows Share sheet for the given types/formats.
+
+    .PARAMETER PackagePath
+        The .msix file to modify.
+
+    .PARAMETER AppId
+        Application to attach to (default: first Application).
+
+    .PARAMETER FileTypes
+        Extensions the app accepts (e.g. '.png','.jpg').
+        Omit together with -SupportsAnyFileType/-DataFormats for formats-only.
+
+    .PARAMETER SupportsAnyFileType
+        Accept any shared file type.
+
+    .PARAMETER DataFormats
+        Data formats accepted (e.g. 'Text', 'WebLink', 'Bitmap').
+
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the signing pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package here.
+
+    .EXAMPLE
+        Add-MsixShareTarget -PackagePath app.msix `
+            -FileTypes '.png','.jpg' -DataFormats Bitmap -SkipSigning
+
+    .LINK
+        https://learn.microsoft.com/windows/uwp/app-to-app/receive-data
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
+    param(
+        [Parameter(Mandatory)] [string]$PackagePath,
+        [ValidatePattern('^[A-Za-z_][A-Za-z0-9_.-]*$')]
+        [string]$AppId,
+        [string[]]$FileTypes,
+        [switch]$SupportsAnyFileType,
+        [string[]]$DataFormats,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
+    )
+
+    if (-not $FileTypes -and -not $SupportsAnyFileType -and -not $DataFormats) {
+        throw 'Pass at least one of -FileTypes / -SupportsAnyFileType / -DataFormats.'
+    }
+
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Add ShareTarget')
+
+    _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+                        -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+                        -UnsignedOutputPath $UnsignedOutputPath `
+                        -WhatIfPreview:$isWhatIf `
+                        -Activity 'Add ShareTarget' -Mutate {
+        param([xml]$M)
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'uap'
+        $uapUri = Get-MsixManifestNamespaceUri -Prefix 'uap'
+        $app    = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
+        $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
+
+        if ($M.SelectSingleNode("//*[local-name()='Extension' and @Category='windows.shareTarget']")) {
+            Write-MsixLog -Level Info -Message 'ShareTarget already declared - skipping.'
+            return
+        }
+
+        $ext = $M.CreateElement('uap:Extension', $uapUri)
+        $ext.SetAttribute('Category', 'windows.shareTarget')
+        $st = $M.CreateElement('uap:ShareTarget', $uapUri)
+
+        if ($SupportsAnyFileType -or $FileTypes) {
+            $sft = $M.CreateElement('uap:SupportedFileTypes', $uapUri)
+            if ($SupportsAnyFileType) {
+                $null = $sft.AppendChild($M.CreateElement('uap:SupportsAnyFileType', $uapUri))
+            } else {
+                foreach ($ft in $FileTypes) {
+                    if (-not $ft.StartsWith('.')) { $ft = ".$ft" }
+                    $t = $M.CreateElement('uap:FileType', $uapUri)
+                    $t.InnerText = $ft.ToLowerInvariant()
+                    $null = $sft.AppendChild($t)
+                }
+            }
+            $null = $st.AppendChild($sft)
+        }
+        foreach ($df in @($DataFormats | Where-Object { $_ })) {
+            $d = $M.CreateElement('uap:DataFormat', $uapUri)
+            $d.InnerText = $df
+            $null = $st.AppendChild($d)
+        }
+
+        $null = $ext.AppendChild($st)
+        $null = $appExt.AppendChild($ext)
+        Write-MsixLog -Level Info -Message 'ShareTarget declared.'
+    }
+}
+
+
+function Add-MsixFullTrustProcess {
+    <#
+    .SYNOPSIS
+        Declares a full-trust companion process (desktop windows.fullTrustProcess)
+        that a UWP main app can launch via FullTrustProcessLauncher.
+
+    .DESCRIPTION
+        Adds desktop:Extension Category="windows.fullTrustProcess" with the
+        executable and optional parameter groups, plus the runFullTrust
+        capability the launcher API requires. This is the INVERSE direction of
+        most of this module (UWP main app + Win32 companion); for packaged
+        Win32 apps the main executable is already full trust.
+
+    .PARAMETER PackagePath
+        The .msix file to modify.
+
+    .PARAMETER AppId
+        Application to attach to (default: first Application).
+
+    .PARAMETER Executable
+        Package-relative path of the full-trust exe.
+
+    .PARAMETER ParameterGroups
+        Optional array of hashtables: @{ GroupId = 'sync'; Parameters = '/sync' }.
+
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the signing pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package here.
+
+    .EXAMPLE
+        Add-MsixFullTrustProcess -PackagePath app.msix `
+            -Executable 'FullTrust\companion.exe' `
+            -ParameterGroups @(@{ GroupId = 'sync'; Parameters = '/sync' }) `
+            -SkipSigning
+
+    .LINK
+        https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-desktop-extension
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
+    param(
+        [Parameter(Mandatory)] [string]$PackagePath,
+        [ValidatePattern('^[A-Za-z_][A-Za-z0-9_.-]*$')]
+        [string]$AppId,
+        [Parameter(Mandatory)] [string]$Executable,
+        [hashtable[]]$ParameterGroups,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
+    )
+
+    foreach ($g in @($ParameterGroups | Where-Object { $null -ne $_ })) {
+        if (-not $g.GroupId) { throw "Each -ParameterGroups entry needs a GroupId key (got: $($g.Keys -join ', '))." }
+    }
+
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Add fullTrustProcess')
+
+    _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+                        -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+                        -UnsignedOutputPath $UnsignedOutputPath `
+                        -WhatIfPreview:$isWhatIf `
+                        -Activity 'Add fullTrustProcess' -Mutate {
+        param([xml]$M)
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'desktop'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'rescap'
+        $deskUri = Get-MsixManifestNamespaceUri -Prefix 'desktop'
+        $app     = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
+        $appExt  = $app.SelectSingleNode('*[local-name()="Extensions"]')
+
+        if ($M.SelectSingleNode("//*[local-name()='Extension' and @Category='windows.fullTrustProcess']")) {
+            Write-MsixLog -Level Info -Message 'fullTrustProcess already declared - skipping.'
+            return
+        }
+
+        $ext = $M.CreateElement('desktop:Extension', $deskUri)
+        $ext.SetAttribute('Category',   'windows.fullTrustProcess')
+        $ext.SetAttribute('Executable', $Executable.Replace('/', '\'))
+        if ($ParameterGroups) {
+            $ftp = $M.CreateElement('desktop:FullTrustProcess', $deskUri)
+            foreach ($g in $ParameterGroups) {
+                $grp = $M.CreateElement('desktop:ParameterGroup', $deskUri)
+                $grp.SetAttribute('GroupId', [string]$g.GroupId)
+                $params = if ($g.Parameters) { [string]$g.Parameters } else { '' }
+                $grp.SetAttribute('Parameters', $params)
+                $null = $ftp.AppendChild($grp)
+            }
+            $null = $ext.AppendChild($ftp)
+        }
+        $null = $appExt.AppendChild($ext)
+
+        # FullTrustProcessLauncher requires runFullTrust.
+        $capsNode = $M.Package.Capabilities
+        if (-not $capsNode) {
+            $capsNode = $M.CreateElement('Capabilities', $M.Package.NamespaceURI)
+            $null     = $M.Package.AppendChild($capsNode)
+        }
+        $has = $capsNode.ChildNodes | Where-Object {
+            $_.LocalName -eq 'Capability' -and $_.GetAttribute('Name') -eq 'runFullTrust' }
+        if (-not $has) {
+            $rescapUri = Get-MsixManifestNamespaceUri -Prefix 'rescap'
+            $cap = $M.CreateElement('rescap:Capability', $rescapUri)
+            $cap.SetAttribute('Name', 'runFullTrust')
+            $null = $capsNode.AppendChild($cap)
+            Write-MsixLog -Level Info -Message 'Capability added: runFullTrust (required by FullTrustProcessLauncher).'
+        }
+        Write-MsixLog -Level Info -Message "fullTrustProcess declared (Executable=$Executable)."
+    }
+}
+
+#endregion

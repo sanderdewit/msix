@@ -95,6 +95,28 @@ Describe 'Invoke-MsixAutoFixFromAnalysis planner' -Tag 'AutoFix' {
         $r.Plan.Stage | Should -Contain 'StartupTask'
     }
 
+    It 'Plans certificate declarations only when -DeclarePackageCertificates is passed (issue #120)' {
+        $stub = [pscustomobject]@{
+            PackagePath = 'C:\nope.msix'
+            Findings    = @(
+                [pscustomobject]@{
+                    Severity = 'Info'; Category = 'ManifestFix:PackageCertificate'; Symptom = 'x'; Recommendation = 'y'; Evidence = 'Certs\ca.cer'
+                    CertificateEntries = @([pscustomobject]@{
+                        RelativePath = 'Certs\ca.cer'; FileName = 'ca.cer'; SizeBytes = 10
+                        AlreadyDeclared = $false; CanAutoFix = $true
+                    })
+                }
+            )
+            SuggestedFixups = @()
+        }
+        # Without the opt-in switch: trust decision, no stage planned.
+        $r1 = Invoke-MsixAutoFixFromAnalysis -Report $stub -DryRun
+        @($r1.Plan | Where-Object Stage -eq 'DeclarePackageCertificates') | Should -BeNullOrEmpty
+
+        # With the opt-in switch: stage planned.
+        $r2 = Invoke-MsixAutoFixFromAnalysis -Report $stub -DryRun -DeclarePackageCertificates -PackageCertificateStore CA
+        $r2.Plan.Stage | Should -Contain 'DeclarePackageCertificates'
+    }
     It 'Plans packaged service declarations when service entries are auto-fixable' {
         $stub = [pscustomobject]@{
             PackagePath = 'C:\nope.msix'

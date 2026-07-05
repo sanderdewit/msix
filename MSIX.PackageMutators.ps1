@@ -958,3 +958,129 @@ function Update-MsixPackageVersion {
 # ---------------------------------------------------------------------------
 Set-Alias Get-MsixKnownCapabilities       Get-MsixKnownCapability
 Set-Alias Remove-MsixUninstallerArtifacts Remove-MsixUninstallerArtifact
+
+#region Package certificates (issue #120) ------------------------------------
+
+function Add-MsixPackageCertificate {
+    <#
+    .SYNOPSIS
+        Bundles a certificate into the package and declares it via the
+        windows.certificates extension so it installs into the chosen store
+        with the package.
+
+    .DESCRIPTION
+        Copies the .cer into the package payload (under Certificates\) and adds
+        a Package-level uap:Extension Category="windows.certificates" with a
+        uap:Certificate StoreName/Content entry. Windows installs the
+        certificate into the per-package store when the package deploys and
+        removes it on uninstall - the clean way to ship a self-signed or
+        internal-CA chain the app needs.
+
+    .PARAMETER PackagePath
+        The .msix file to modify.
+
+    .PARAMETER CertificatePath
+        Path to a DER/Base64 .cer file on disk (copied into the package), OR a
+        package-relative path of a certificate already inside the payload.
+
+    .PARAMETER StoreName
+        Certificate store: Root, CA, TrustedPeople or TrustedPublisher.
+
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the signing pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package here.
+
+    .EXAMPLE
+        Add-MsixPackageCertificate -PackagePath app.msix `
+            -CertificatePath .\internal-ca.cer -StoreName CA -SkipSigning
+
+    .LINK
+        https://learn.microsoft.com/windows/apps/desktop/modernize/desktop-to-uwp-extensions
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '',
+        Justification = 'ShouldProcess is invoked inside _MsixMutatePackage; PSSA cannot trace it through the scriptblock dispatch (issue #40).')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutator scriptblock passed to _MsixMutatePackage.')]
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] [string]$PackagePath,
+        [Parameter(Mandatory)] [string]$CertificatePath,
+        [Parameter(Mandatory)]
+        [ValidateSet('Root', 'CA', 'TrustedPeople', 'TrustedPublisher')]
+        [string]$StoreName,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
+    )
+
+    $null = _MsixMutatePackage -PackagePath $PackagePath -Operation 'pkgcert' `
+        -OutputPath $OutputPath -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+        -UnsignedOutputPath $UnsignedOutputPath `
+        -NoChangeMessage 'Certificate already declared; nothing to do.' `
+        -Mutator {
+            param($workspace)
+
+            # Resolve: on-disk file (copy in) vs already-package-relative.
+            $isExternal = Test-Path -LiteralPath $CertificatePath -PathType Leaf
+            if ($isExternal) {
+                $leaf = [IO.Path]::GetFileName($CertificatePath)
+                $certDir = Join-Path -Path $workspace -ChildPath 'Certificates'
+                if (-not (Test-Path -LiteralPath $certDir)) { New-Item -ItemType Directory -Path $certDir -Force | Out-Null }
+                Copy-Item -LiteralPath $CertificatePath -Destination (Join-Path -Path $certDir -ChildPath $leaf) -Force
+                $content = "Certificates\$leaf"
+            } else {
+                $content = $CertificatePath.Replace('/', '\')
+                if (-not (Test-Path -LiteralPath (Join-Path -Path $workspace -ChildPath $content))) {
+                    throw "Certificate not found: '$CertificatePath' is neither an on-disk file nor a package-relative path inside the payload."
+                }
+            }
+
+            $manifestPath = Join-Path -Path $workspace -ChildPath 'AppxManifest.xml'
+            [xml]$manifest = Get-MsixManifest -Path $manifestPath
+            # windows.certificates is a PACKAGE-level extension in the plain
+            # foundation namespace - a uap:Extension here fails MakeAppx schema
+            # validation ("uap Extension is unexpected ... parent Extensions").
+            $foundationUri = $manifest.Package.NamespaceURI
+
+            $pkgExt = _MsixGetOrCreatePackageExtensions -Manifest $manifest
+            $certs = $manifest.SelectSingleNode("//*[local-name()='Extension' and @Category='windows.certificates']/*[local-name()='Certificates']")
+            if (-not $certs) {
+                $ext = $manifest.CreateElement('Extension', $foundationUri)
+                $ext.SetAttribute('Category', 'windows.certificates')
+                $certs = $manifest.CreateElement('Certificates', $foundationUri)
+                $null = $ext.AppendChild($certs)
+                $null = $pkgExt.AppendChild($ext)
+            }
+
+            $dup = @($certs.ChildNodes) | Where-Object {
+                $_.LocalName -eq 'Certificate' -and
+                $_.GetAttribute('Content') -eq $content -and
+                $_.GetAttribute('StoreName') -eq $StoreName
+            }
+            if ($dup) { return $null }
+
+            $cert = $manifest.CreateElement('Certificate', $foundationUri)
+            $cert.SetAttribute('StoreName', $StoreName)
+            $cert.SetAttribute('Content',   $content)
+            $null = $certs.AppendChild($cert)
+            Save-MsixManifest -Manifest $manifest -Path $manifestPath
+            Write-MsixLog -Level Info -Message "Package certificate declared: $content -> $StoreName store."
+            @{ Certificate = $content; StoreName = $StoreName }
+        }
+}
+
+#endregion

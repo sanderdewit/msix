@@ -361,7 +361,28 @@ Alternatives to PSF for symptoms the modern manifest schema handles natively
 | `Add-MsixFirewallRule` | desktop2 | 15063 | post-install netsh |
 | `Add-MsixStartupTask` | uap5 | 15063 | HKLM/HKCU `\Run` keys |
 | `Add-MsixProtocolHandler` | uap | any | host-side protocol script |
-| `Add-MsixFileTypeAssociation` | uap | any | host-side FTA script |
+| `Add-MsixFileTypeAssociation` | uap | any | host-side FTA script (now with `-Logo`/`-InfoTip`/EditFlags/`-Verbs`) |
+| `Add-MsixService` | desktop6 | 19041 | services the capture's installer registered (agents/updaters/licensing) |
+| `Add-MsixShellHandlerExtension` | desktop2 | 15063 | preview/property/thumbnail shell handlers from the registry |
+| `Add-MsixToastActivator` | desktop + com | 16299 | toast click re-activation |
+| `Add-MsixPackageDependency` | foundation | any | bundling framework DLLs (VCLibs, WindowsAppRuntime as `<PackageDependency>`) |
+| `Set-MsixMutablePackageDirectory` | desktop6 | 18362 | plugin/mod folders via `%ProgramFiles%\ModifiableWindowsApps` |
+| `Add-MsixPackageCertificate` | foundation | any | the capture's `certutil` step (`windows.certificates`, per-package store) |
+| `Add-MsixAppExtensionHost` / `Add-MsixAppExtension` | uap3 | 14393 | ad-hoc plugin folder drops (AppExtensionCatalog contract) |
+| `Add-MsixAutoPlayHandler` | uap | any | AutoPlay registry handlers |
+| `Add-MsixShareTarget` | uap | any | Share-sheet integration |
+| `Add-MsixFullTrustProcess` | desktop | 14393 | UWP-main + Win32-companion pattern |
+
+Scanners feed these into `Invoke-MsixInvestigation` findings and
+`Invoke-MsixAutoFixFromAnalysis` planning: `Get-MsixServiceEntry`,
+`Get-MsixShellHandlerEntry`, `Get-MsixPackageCertificateCandidate`
+(certificate declaration is opt-in via `-DeclarePackageCertificates` +
+`-PackageCertificateStore` — installing a certificate is a trust decision).
+
+**Distribution** (after post-processing): `New-MsixAppInstallerFile` generates
+a `.appinstaller` with the full auto-update policy; `New-MsixModificationPackage`
+builds a `uap4:MainPackageDependency` customization package that layers
+settings/plugins onto a vendor MSIX without touching it.
 
 ---
 
@@ -428,6 +449,13 @@ Add-MsixLegacyContextMenu -PackagePath app.msix `
 Add-MsixFileExplorerContextMenu -PackagePath app.msix `
     -AppId 'App' -VerbId 'open' -VerbClsid '{XXXXXXXX-…}' `
     -FileTypes '.txt', '.log'
+
+# Alternative classic-handler schema (-Schema desktop9|Both): the MS-documented /
+# Advanced Installer shape (windows.fileExplorerClassicContextMenuHandler).
+# Win11 21H2+ only; appears in the CLASSIC menu ("Show more options").
+Add-MsixLegacyContextMenu -PackagePath app.msix -Schema Both `
+    -ShellExtDll 'VFS\ProgramFilesX64\App\ShellExt.dll' `
+    -Clsid 'XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX' -DisplayName 'My Context Menu'
 ```
 
 ---

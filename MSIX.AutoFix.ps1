@@ -502,7 +502,12 @@ function Invoke-MsixAutoFixFromAnalysis {
     }
 
     # Stage 2a - packaged Windows services (desktop6 windows.service).
-    if ($byCat.ContainsKey('ManifestFix:PackagedService')) {
+    # Incompatible with -AddAppIsolation: packaged services run full-trust and
+    # need runFullTrust semantics, which the isolation stage removes.
+    if ($byCat.ContainsKey('ManifestFix:PackagedService') -and $AddAppIsolation) {
+        Write-MsixLog -Level Warning -Message 'Skipping AddPackagedServices: app isolation was requested, and packaged services (full-trust, runFullTrust) cannot coexist with the partial-trust isolation entry point. Fix the services in a separate non-isolated pass, or drop -AddAppIsolation.'
+    }
+    elseif ($byCat.ContainsKey('ManifestFix:PackagedService')) {
         $serviceEntries = @($Report.Findings |
             Where-Object Category -eq 'ManifestFix:PackagedService' |
             ForEach-Object { @($_.ServiceEntries) } |

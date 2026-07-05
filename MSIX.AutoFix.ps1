@@ -277,6 +277,9 @@ function Invoke-MsixAutoFixFromAnalysis {
           UpdaterArtifact                      -> Remove-MsixUpdaterArtifact (skip with -IgnoreUpdaters)
           AppExecutionAlias                    -> Add-MsixAlias (only AppIds without an existing alias)
           VcRuntime                            -> Add-MsixVcRuntimeBundle (needs -VcRuntimeSourceFolder)
+          VcRuntime                            -> Add-MsixPackageDependency (with -VcRuntimeAsPackageDependency)
+          ManifestFix:PackagedService          -> Add-MsixService
+          ManifestFix:ShellHandlerExtension    -> Add-MsixShellHandlerExtension
           ManifestFix:FileSystemWriteVirt..    -> Set-MsixFileSystemWriteVirtualization
           ManifestFix:RegistryWriteVirt..      -> Set-MsixRegistryWriteVirtualization
           ManifestFix:StartupTask              -> Add-MsixStartupTask  (needs -StartupTaskAppId / -StartupTaskName)
@@ -302,6 +305,17 @@ function Invoke-MsixAutoFixFromAnalysis {
 
     .PARAMETER VcRuntimeSourceFolder
         VS Redist folder; required when a VcRuntime finding is in the report.
+
+    .PARAMETER VcRuntimeAsPackageDependency
+        For VcRuntime findings, declare a VCLibs PackageDependency instead of
+        bundling DLLs. Requires -VcRuntimeMinVersion.
+
+    .PARAMETER VcRuntimeDependencyName
+        Framework dependency name to declare when -VcRuntimeAsPackageDependency
+        is used. Defaults to Microsoft.VCLibs.140.00.UWPDesktop.
+
+    .PARAMETER VcRuntimeMinVersion
+        Minimum framework version for -VcRuntimeAsPackageDependency.
 
     .PARAMETER StartupTaskAppId
         Required when a ManifestFix:StartupTask finding is in the report.
@@ -339,6 +353,12 @@ function Invoke-MsixAutoFixFromAnalysis {
         which covers everything from Win10 2004 onward; pass this switch
         when the target fleet still has earlier builds.
 
+    .PARAMETER AddAppIsolation
+        Opt into adding AppContainer / Win32 App Isolation after compatible
+        fixes. If the report shows PSF, Remove-MsixPsf is planned first.
+        If the report shows windows.comServer, pass -RemoveComServerForIsolation
+        to allow the lossy COM/context-menu removal required by isolation.
+
     .PARAMETER DryRun
         Print the plan and return without mutating.
 
@@ -366,6 +386,9 @@ function Invoke-MsixAutoFixFromAnalysis {
         [string]$PackagePath,
         [bool]$PreferManifestOverPsf = $true,
         [string]$VcRuntimeSourceFolder,
+        [switch]$VcRuntimeAsPackageDependency,
+        [string]$VcRuntimeDependencyName = 'Microsoft.VCLibs.140.00.UWPDesktop',
+        [string]$VcRuntimeMinVersion,
         [string]$StartupTaskAppId,
         [string]$StartupTaskName,
         [string[]]$LoaderPaths,
@@ -373,6 +396,12 @@ function Invoke-MsixAutoFixFromAnalysis {
         [switch]$IgnorePluginDirectories,
         [switch]$LegacyPluginFix,
         [switch]$IgnoreNestedPackages,
+        [switch]$AddAppIsolation,
+        [ValidateSet('AppContainer', 'AppSilo')]
+        [string]$IsolationMode = 'AppContainer',
+        [string[]]$IsolationCapabilities,
+        [string]$IsolationAppId,
+        [switch]$RemoveComServerForIsolation,
         # Confidence threshold below which a finding is NOT auto-fixed.
         # Findings between [MinConfidenceReport, MinConfidence) still
         # appear in the printed plan as "recommendation only".
@@ -442,6 +471,15 @@ function Invoke-MsixAutoFixFromAnalysis {
         })
     }
 
+    # Stage 1c - strip PSF when the operator explicitly opts into isolation.
+    if ($AddAppIsolation -and ($byCat.ContainsKey('IsolationBlockedByPsf') -or $byCat.ContainsKey('PSF'))) {
+        $plan.Add([pscustomobject]@{
+            Stage  = 'RemovePsfForIsolation'
+            Reason = 'App isolation was requested and PSF launchers cannot run in an AppContainer'
+            Action = { Remove-MsixPsf -PackagePath $current -SkipSigning }
+        })
+    }
+
     # Stage 2 — manifest-only virtualization (preferred over PSF when matching)
     $hasFsManifestFix  = $byCat.ContainsKey('ManifestFix:FileSystemWriteVirtualization')
     $hasRegManifestFix = $byCat.ContainsKey('ManifestFix:RegistryWriteVirtualization')
@@ -463,12 +501,41 @@ function Invoke-MsixAutoFixFromAnalysis {
         })
     }
 
+    # Stage 2a - packaged Windows services (desktop6 windows.service).
+    if ($byCat.ContainsKey('ManifestFix:PackagedService')) {
+        $serviceEntries = @($Report.Findings |
+            Where-Object Category -eq 'ManifestFix:PackagedService' |
+            ForEach-Object { @($_.ServiceEntries) } |
+            Where-Object { $_ -and $_.CanAutoFix })
+        if ($serviceEntries) {
+            $capturedServiceEntries = $serviceEntries
+            $plan.Add([pscustomobject]@{
+                Stage  = 'AddPackagedServices'
+                Reason = "Declare $($capturedServiceEntries.Count) Windows service(s) via desktop6:Service"
+                Action = {
+                    foreach ($svc in $capturedServiceEntries) {
+                        $svcArgs = @{
+                            PackagePath  = $current
+                            Executable   = $svc.VfsExecutable
+                            Name         = $svc.Name
+                            StartupType  = $svc.StartupType
+                            StartAccount = $svc.StartAccount
+                            SkipSigning  = $true
+                        }
+                        if ($svc.Dependencies) { $svcArgs['Dependencies'] = @($svc.Dependencies) }
+                        Add-MsixService @svcArgs
+                    }
+                }
+            })
+        }
+    }
+
     # Stage 2.5 — plugin/theme/extension directories.
     # Modern path: enable desktop6:FileSystemWriteVirtualization + add each
     # plugin dir to <virtualization:ExcludedDirectories> so writes there
     # pass through to the host filesystem and survive across sessions.
     # Legacy path: PSF FileRedirection mapping the dir to per-user AppData.
-    if ($byCat.ContainsKey('PluginDirectory') -and -not $IgnorePluginDirectories) {
+    if ($byCat.ContainsKey('PluginDirectory') -and -not $IgnorePluginDirectories -and -not $AddAppIsolation) {
         $pluginFindings = @($Report.Findings | Where-Object Category -eq 'PluginDirectory')
         $pluginDirs = @($pluginFindings | ForEach-Object { $_.Evidence } | Where-Object { $_ } | Sort-Object -Unique)
         if ($pluginDirs) {
@@ -521,6 +588,9 @@ function Invoke-MsixAutoFixFromAnalysis {
                 })
             }
         }
+    }
+    elseif ($byCat.ContainsKey('PluginDirectory') -and $AddAppIsolation) {
+        Write-MsixLog -Level Info -Message 'Skipping PluginDirectory autofix because app isolation was requested; the current automatic route uses PSF FileRedirection, which is incompatible with AppContainer isolation.'
     }
     if ($hasStartupFix) {
         if ($StartupTaskAppId -and $StartupTaskName) {
@@ -620,7 +690,7 @@ function Invoke-MsixAutoFixFromAnalysis {
     }
 
     # Stage 2g — COM shellex context menu via desktop4 + desktop5 (TMEditX pattern)
-    if ($byCat.ContainsKey('ShellExt')) {
+    if ($byCat.ContainsKey('ShellExt') -and -not $AddAppIsolation) {
         $shellExtFinding = @($Report.Findings | Where-Object Category -eq 'ShellExt') | Select-Object -First 1
         $autoFixable     = @($shellExtFinding.ShellEntries | Where-Object { $_.Clsid -and $_.VfsDllPath })
         if ($autoFixable) {
@@ -659,9 +729,41 @@ function Invoke-MsixAutoFixFromAnalysis {
             Write-MsixLog -Level Info -Message "ShellExt: CLSID/VFS DLL path could not be resolved (the bundled DLL may not be Authenticode-stamped with the CLSID, or the package omits the COM class registration). Call Add-MsixLegacyContextMenu manually with the CLSID and -ShellExtDll path."
         }
     }
+    elseif ($byCat.ContainsKey('ShellExt') -and $AddAppIsolation) {
+        Write-MsixLog -Level Info -Message 'Skipping ShellExt autofix because app isolation was requested; windows.comServer shell extensions are incompatible with the partial-trust entry point.'
+    }
+
+    # Stage 2g.5 - preview/property/thumbnail shell handlers.
+    if ($byCat.ContainsKey('ManifestFix:ShellHandlerExtension') -and -not $AddAppIsolation) {
+        $handlerEntries = @($Report.Findings |
+            Where-Object Category -eq 'ManifestFix:ShellHandlerExtension' |
+            ForEach-Object { @($_.ShellHandlerEntries) } |
+            Where-Object { $_ -and $_.CanAutoFix })
+        if ($handlerEntries) {
+            $capturedHandlerEntries = $handlerEntries
+            $plan.Add([pscustomobject]@{
+                Stage  = 'AddShellHandlerExtensions'
+                Reason = "Declare $($capturedHandlerEntries.Count) preview/property/thumbnail handler(s)"
+                Action = {
+                    foreach ($entry in $capturedHandlerEntries) {
+                        Add-MsixShellHandlerExtension -PackagePath $current `
+                            -Kind $entry.Kind `
+                            -Clsid $entry.Clsid `
+                            -Dll $entry.VfsDllPath `
+                            -FileTypes @($entry.FileType) `
+                            -FtaName $entry.FtaName `
+                            -SkipSigning
+                    }
+                }
+            })
+        }
+    }
+    elseif ($byCat.ContainsKey('ManifestFix:ShellHandlerExtension') -and $AddAppIsolation) {
+        Write-MsixLog -Level Info -Message 'Skipping shell-handler manifest autofix because app isolation was requested; the generated com:Extension is incompatible with the partial-trust entry point.'
+    }
 
     # Stage 2h — COM InProcessServer declaration (com:Extension, windows.comServer)
-    if ($byCat.ContainsKey('ComServer')) {
+    if ($byCat.ContainsKey('ComServer') -and -not $AddAppIsolation) {
         $comFinding = @($Report.Findings | Where-Object Category -eq 'ComServer') | Select-Object -First 1
         # Entries that have a VFS DLL path (package-bundled, auto-fixable)
         # and are not already handled by the ShellExt stage (SurrogateServer)
@@ -689,6 +791,9 @@ function Invoke-MsixAutoFixFromAnalysis {
             Write-MsixLog -Level Info -Message "ComServer: no auto-fixable InProc servers (none of the detected CLSIDs resolved to a VFS-bundled DLL)."
         }
     }
+    elseif ($byCat.ContainsKey('ComServer') -and $AddAppIsolation) {
+        Write-MsixLog -Level Info -Message 'Skipping ComServer autofix because app isolation was requested; windows.comServer is incompatible with the partial-trust entry point.'
+    }
 
     # Stage 2i — AppExecutionAlias suggestions
     # Get-MsixAliasCandidate emits one AppExecutionAlias finding per top-level
@@ -709,7 +814,25 @@ function Invoke-MsixAutoFixFromAnalysis {
 
     # Stage 3 — VC runtime bundle
     if ($byCat.ContainsKey('VcRuntime')) {
-        if ($VcRuntimeSourceFolder) {
+        if ($VcRuntimeAsPackageDependency) {
+            if ($VcRuntimeMinVersion) {
+                $capturedDependencyName = $VcRuntimeDependencyName
+                $capturedDependencyMinVersion = $VcRuntimeMinVersion
+                $plan.Add([pscustomobject]@{
+                    Stage  = 'AddVcRuntimePackageDependency'
+                    Reason = "Declare framework dependency $capturedDependencyName >= $capturedDependencyMinVersion"
+                    Action = {
+                        Add-MsixPackageDependency -PackagePath $current `
+                            -Name $capturedDependencyName `
+                            -MinVersion $capturedDependencyMinVersion `
+                            -SkipSigning
+                    }
+                })
+            } else {
+                Write-MsixLog -Level Warning -Message 'Skipping VcRuntime PackageDependency: -VcRuntimeMinVersion is required.'
+            }
+        }
+        elseif ($VcRuntimeSourceFolder) {
             $plan.Add([pscustomobject]@{
                 Stage  = 'BundleVcRuntimes'
                 Reason = 'Package references VC runtime DLLs that are not bundled'
@@ -720,8 +843,35 @@ function Invoke-MsixAutoFixFromAnalysis {
         }
     }
 
+    # Stage 3b - requested app isolation, after incompatible additions have been skipped.
+    if ($AddAppIsolation) {
+        if ($byCat.ContainsKey('IsolationBlockedByComServer') -and -not $RemoveComServerForIsolation) {
+            Write-MsixLog -Level Warning -Message 'Skipping AppIsolation: report contains windows.comServer and -RemoveComServerForIsolation was not supplied.'
+        } else {
+            $capturedIsolationMode = $IsolationMode
+            $capturedIsolationCapabilities = $IsolationCapabilities
+            $capturedIsolationAppId = $IsolationAppId
+            $capturedRemoveComServer = [bool]$RemoveComServerForIsolation
+            $plan.Add([pscustomobject]@{
+                Stage  = 'AddAppIsolation'
+                Reason = "Apply Add-MsixAppIsolation ($capturedIsolationMode)"
+                Action = {
+                    $isoArgs = @{
+                        PackagePath     = $current
+                        Mode            = $capturedIsolationMode
+                        RemoveComServer = $capturedRemoveComServer
+                        SkipSigning     = $true
+                    }
+                    if ($capturedIsolationCapabilities) { $isoArgs['Capabilities'] = $capturedIsolationCapabilities }
+                    if ($capturedIsolationAppId)        { $isoArgs['AppId']        = $capturedIsolationAppId }
+                    Add-MsixAppIsolation @isoArgs
+                }
+            })
+        }
+    }
+
     # Stage 4 — PSF fixups (only those NOT already covered by a manifest fix)
-    if ($Report.SuggestedFixups -and $Report.SuggestedFixups.Count -gt 0) {
+    if ($Report.SuggestedFixups -and $Report.SuggestedFixups.Count -gt 0 -and -not $AddAppIsolation) {
         $skipPsfFs  = $hasFsManifestFix  -and $PreferManifestOverPsf
         $skipPsfReg = $hasRegManifestFix -and $PreferManifestOverPsf
         $kept = @($Report.SuggestedFixups | Where-Object {
@@ -737,6 +887,9 @@ function Invoke-MsixAutoFixFromAnalysis {
                 Action = { Add-MsixPsfV2 -PackagePath $current -Fixups $kept -SkipSigning }
             })
         }
+    }
+    elseif ($Report.SuggestedFixups -and $Report.SuggestedFixups.Count -gt 0 -and $AddAppIsolation) {
+        Write-MsixLog -Level Info -Message 'Skipping PSF fixup injection because app isolation was requested; PSF cannot run inside the isolated AppContainer target.'
     }
 
     if (-not $plan -or -not $plan.Count) {

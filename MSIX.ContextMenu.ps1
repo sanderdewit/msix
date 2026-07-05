@@ -22,12 +22,25 @@
             CLSID. The verb Id defaults to 'ContextMenuHandlers' for
             -MenuType ContextMenu and 'DragDropHandlers' for -MenuType DragDrop.
 
-        NOTE: An earlier version of this cmdlet emitted desktop9 elements
-        (windows.fileExplorerClassicContextMenuHandler). That schema turned
-        out NOT to be the right shape for COM-based shell extensions —
-        desktop4 + desktop5 handles both legacy IContextMenu and modern
-        IExplorerCommand depending on which interface(s) the CLSID's COM
-        class implements.
+        Two schemas are supported via -Schema (issue #108):
+
+          desktop4 (default) — desktop4:FileExplorerContextMenus +
+            desktop5:ItemType/Verb. TMEditX-verified; activates from
+            Win10 1809 (17763) and drives both legacy IContextMenu and
+            modern IExplorerCommand depending on the COM class.
+
+          desktop9 — windows.fileExplorerClassicContextMenuHandler, the
+            MS-documented classic-handler registration (also what
+            Advanced Installer emits). Win11 21H2+ ONLY (MaxVersionTested
+            is raised to 10.0.22000.0) and the entry appears in the
+            CLASSIC menu ("Show more options"), not the new Win11 menu.
+            Context menus only (not -MenuType DragDrop).
+
+          Both — emit both registrations against the same CLSID.
+
+    .PARAMETER Schema
+        Which manifest registration to emit: desktop4 (default), desktop9,
+        or Both. See DESCRIPTION for the trade-offs.
 
     .PARAMETER PackagePath
         Path to the .msix file to modify.
@@ -141,6 +154,8 @@
         [string[]]$FileTypes = @('*'),
         [ValidateSet('ContextMenu', 'DragDrop')]
         [string]$MenuType    = 'ContextMenu',
+        [ValidateSet('desktop4', 'desktop9', 'Both')]
+        [string]$Schema      = 'desktop4',
         [string]$OutputPath,
         [Alias('NoSign')]
         [switch]$SkipSigning,
@@ -150,6 +165,12 @@
     )
 
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Add Legacy Context Menu')
+
+    # desktop9's classic-handler category has no drag/drop counterpart.
+    if ($MenuType -eq 'DragDrop' -and $Schema -ne 'desktop4') {
+        Write-MsixLog -Level Warning -Message 'windows.fileExplorerClassicContextMenuHandler (desktop9) has no DragDrop form; falling back to -Schema desktop4 for this call.'
+        $Schema = 'desktop4'
+    }
 
     # com:Class/@Id and desktop5:Verb/@Clsid both use the bare GUID format
     # (no curly braces): xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
@@ -230,11 +251,21 @@
         # via the same path because the CLSID's COM class implements whichever
         # interface(s) it supports.
         Add-MsixManifestNamespace -Manifest $manifest -Prefix 'com'
-        Add-MsixManifestNamespace -Manifest $manifest -Prefix 'desktop4'
-        Add-MsixManifestNamespace -Manifest $manifest -Prefix 'desktop5'
+        $emitD4 = $Schema -in @('desktop4', 'Both')
+        $emitD9 = $Schema -in @('desktop9', 'Both')
+        if ($emitD4) {
+            Add-MsixManifestNamespace -Manifest $manifest -Prefix 'desktop4'
+            Add-MsixManifestNamespace -Manifest $manifest -Prefix 'desktop5'
+        }
+        if ($emitD9) {
+            Add-MsixManifestNamespace -Manifest $manifest -Prefix 'desktop9'
+        }
 
-        # desktop4:windows.fileExplorerContextMenus requires Win10 1809 (17763).
-        Set-MsixManifestMaxVersionTested -Manifest $manifest -MinBuild 17763
+        # desktop4:windows.fileExplorerContextMenus requires Win10 1809 (17763);
+        # desktop9's classic handler only activates on Win11 21H2 (22000).
+        $minBuild = 17763
+        if ($emitD9) { $minBuild = 22000 }
+        Set-MsixManifestMaxVersionTested -Manifest $manifest -MinBuild $minBuild
 
         # ── Locate the target Application ─────────────────────────────────
         $apps = @($manifest.Package.Applications.Application)
@@ -258,14 +289,24 @@
 
         $comDeclared   = $null -ne $manifest.SelectSingleNode("//*[local-name()='Class' and @Id='$ClsidBare']")
         $existingMenus = $manifest.SelectSingleNode("//*[local-name()='FileExplorerContextMenus']")
+        $existingClassic = $manifest.SelectSingleNode("//*[local-name()='FileExplorerClassicContextMenuHandler']")
 
-        $missingTypes = @(foreach ($type in $FileTypes) {
-            if (-not $existingMenus) { $type; continue }
-            $q = "*[local-name()='ItemType' and @Type='$type']/*[local-name()='Verb' and @Id='$verbId' and @Clsid='$ClsidBare']"
-            if (-not ($existingMenus.SelectSingleNode($q))) { $type }
+        $missingTypes = @(if ($emitD4) {
+            foreach ($type in $FileTypes) {
+                if (-not $existingMenus) { $type; continue }
+                $q = "*[local-name()='ItemType' and @Type='$type']/*[local-name()='Verb' and @Id='$verbId' and @Clsid='$ClsidBare']"
+                if (-not ($existingMenus.SelectSingleNode($q))) { $type }
+            }
+        })
+        $missingClassicTypes = @(if ($emitD9) {
+            foreach ($type in $FileTypes) {
+                if (-not $existingClassic) { $type; continue }
+                $q = "*[local-name()='ExtensionHandler' and @Type='$type' and @Clsid='$ClsidBare']"
+                if (-not ($existingClassic.SelectSingleNode($q))) { $type }
+            }
         })
 
-        if ($comDeclared -and $missingTypes.Count -eq 0) {
+        if ($comDeclared -and $missingTypes.Count -eq 0 -and $missingClassicTypes.Count -eq 0) {
             Write-MsixLog -Level Info -Message "COM class $ClsidBare and all FileTypes ($($FileTypes -join ', ')) already declared — skipping."
             return
         }
@@ -313,26 +354,54 @@
         # Re-use an existing FileExplorerContextMenus block when present so
         # repeated calls for the same CLSID (different FileTypes) all land in
         # one <desktop4:FileExplorerContextMenus> element.
-        if ($existingMenus) {
-            $menus = $existingMenus
-        } else {
-            $d4Ext = $manifest.CreateElement('desktop4:Extension', $d4Uri)
-            $d4Ext.SetAttribute('Category', 'windows.fileExplorerContextMenus')
-            $menus = $manifest.CreateElement('desktop4:FileExplorerContextMenus', $d4Uri)
-            $null  = $d4Ext.AppendChild($menus)
-            $null  = $appExt.AppendChild($d4Ext)
+        if ($emitD4 -and $missingTypes.Count -gt 0) {
+            if ($existingMenus) {
+                $menus = $existingMenus
+            } else {
+                $d4Ext = $manifest.CreateElement('desktop4:Extension', $d4Uri)
+                $d4Ext.SetAttribute('Category', 'windows.fileExplorerContextMenus')
+                $menus = $manifest.CreateElement('desktop4:FileExplorerContextMenus', $d4Uri)
+                $null  = $d4Ext.AppendChild($menus)
+                $null  = $appExt.AppendChild($d4Ext)
+            }
+
+            foreach ($type in $missingTypes) {
+                $itemType = $manifest.CreateElement('desktop5:ItemType', $d5Uri)
+                $itemType.SetAttribute('Type', $type)
+
+                $verbNode = $manifest.CreateElement('desktop5:Verb', $d5Uri)
+                $verbNode.SetAttribute('Id',    $verbId)
+                $verbNode.SetAttribute('Clsid', $ClsidBare)
+
+                $null = $itemType.AppendChild($verbNode)
+                $null = $menus.AppendChild($itemType)
+            }
         }
 
-        foreach ($type in $missingTypes) {
-            $itemType = $manifest.CreateElement('desktop5:ItemType', $d5Uri)
-            $itemType.SetAttribute('Type', $type)
-
-            $verbNode = $manifest.CreateElement('desktop5:Verb', $d5Uri)
-            $verbNode.SetAttribute('Id',    $verbId)
-            $verbNode.SetAttribute('Clsid', $ClsidBare)
-
-            $null = $itemType.AppendChild($verbNode)
-            $null = $menus.AppendChild($itemType)
+        # ── desktop9 classic-handler declaration (issue #108) ─────────────
+        # The MS-documented / Advanced Installer shape:
+        #   <desktop9:Extension Category="windows.fileExplorerClassicContextMenuHandler">
+        #     <desktop9:FileExplorerClassicContextMenuHandler>
+        #       <desktop9:ExtensionHandler Type="*" Clsid="..."/>
+        # Win11 21H2+ only; surfaces in the CLASSIC menu (Show more options).
+        if ($emitD9 -and $missingClassicTypes.Count -gt 0) {
+            $d9Uri = Get-MsixManifestNamespaceUri -Prefix 'desktop9'
+            if ($existingClassic) {
+                $classic = $existingClassic
+            } else {
+                $d9Ext = $manifest.CreateElement('desktop9:Extension', $d9Uri)
+                $d9Ext.SetAttribute('Category', 'windows.fileExplorerClassicContextMenuHandler')
+                $classic = $manifest.CreateElement('desktop9:FileExplorerClassicContextMenuHandler', $d9Uri)
+                $null = $d9Ext.AppendChild($classic)
+                $null = $appExt.AppendChild($d9Ext)
+            }
+            foreach ($type in $missingClassicTypes) {
+                $handler = $manifest.CreateElement('desktop9:ExtensionHandler', $d9Uri)
+                $handler.SetAttribute('Type',  $type)
+                $handler.SetAttribute('Clsid', $ClsidBare)
+                $null = $classic.AppendChild($handler)
+            }
+            Write-MsixLog -Level Info -Message "desktop9 classic context-menu handler declared for: $($missingClassicTypes -join ', ') (Win11 21H2+; appears under 'Show more options')."
         }
     }
 }

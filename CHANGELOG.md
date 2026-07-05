@@ -5,6 +5,76 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.71.4 - 2026-07-05 — Manifest feature coverage: services, shell handlers, dependencies, distribution
+
+The v2 review's missing-feature list implemented (issues #108-#119, all but
+the #120 niche backlog), wired end-to-end into static analysis and autofix.
+
+### New manifest mutators
+
+- **`Add-MsixService`** (#112) — packaged Windows services (desktop6
+  `windows.service` + `desktop6:Service`), auto-adding `packagedServices`
+  (+ `localSystemServices` for `-StartAccount localSystem`), SCM
+  dependencies, MinVersion floor 19041. MakeAppx validates the service
+  executable exists in the package.
+- **`Add-MsixShellHandlerExtension`** (#113) — preview / property / thumbnail
+  shell handlers (`desktop2:DesktopPreviewHandler` /
+  `DesktopPropertyHandler` / `ThumbnailHandler` on an FTA) with the
+  registry-free `com:SurrogateServer` class registration in one call.
+- **`Add-MsixToastActivator`** (#114) — `windows.toastNotificationActivation`
+  + the `com:ExeServer` activator class, so toast clicks re-activate the
+  packaged app.
+- **`Add-MsixPackageDependency`** (#115) — declare framework dependencies
+  (`<PackageDependency>`); well-known Microsoft frameworks get the Publisher
+  auto-filled; MinVersion is raised but never lowered.
+- **`Set-MsixMutablePackageDirectory`** (#116) — desktop6
+  `windows.mutablePackageDirectories` extension + `modifiableApp` capability
+  (the OS-native plugin/mod-folder story; gated feature, documented).
+- **`Add-MsixFileTypeAssociation`** enriched (#119) — `-Logo`, `-InfoTip`,
+  `-OpenIsSafe`/`-AlwaysUnsafe` (EditFlags) and `-Verbs`
+  (uap2:SupportedVerbs / uap3:Verb with Parameters).
+
+### Context menus: desktop9 is back as an option (#108)
+
+`Add-MsixLegacyContextMenu -Schema desktop4|desktop9|Both` — desktop4/5
+remains the default (Win10 1809+, TMEditX-verified); `desktop9` emits the
+MS-documented / Advanced Installer classic-handler shape
+(`windows.fileExplorerClassicContextMenuHandler`, Win11 21H2+, classic
+"Show more options" menu, raises MaxVersionTested to 22000); `Both` emits
+the two registrations against the same CLSID.
+
+### Distribution (new MSIX.Distribution.ps1)
+
+- **`New-MsixAppInstallerFile`** (#117) — .appinstaller generation with the
+  full update policy (OnLaunch / HoursBetweenUpdateChecks / ShowPrompt /
+  UpdateBlocksActivation / ForceUpdateFromAnyVersion), identity read from
+  the package.
+- **`New-MsixModificationPackage`** (#118) — vendor-package customization:
+  builds a `uap4:MainPackageDependency` package (no Applications element)
+  from a content folder, packs + signs atomically.
+
+### Static analysis / autofix integration
+
+- New scanners: **`Get-MsixServiceEntry`** (packaged-service candidates) and
+  **`Get-MsixShellHandlerEntry`** (preview/property/thumbnail handlers) with
+  plural aliases.
+- `Invoke-MsixInvestigation` now reports the isolation blockers (PSF launcher,
+  `windows.comServer`) as static-analysis findings.
+- `Invoke-MsixAutoFix` plans/applies: `Add-MsixService`,
+  `Add-MsixShellHandlerExtension`, VCLibs via
+  `-VcRuntimeAsPackageDependency`, and opt-in isolation via
+  `-AddAppIsolation` (with `Remove-MsixPsf` preparation and COM/PSF
+  incompatibility guards).
+
+### Fixes & docs
+
+- `Set-MsixBrandMetadata` warns when the target field is pri-localized
+  (`ms-resource:` - the displayed value comes from resources.pri) (#109).
+- AppIsolation file banner + `Get-MsixIsolationCapability` help corrected for
+  the two-mode model; CHANGELOG marks 0.71.1 as source-only (#110).
+- Help example ratchet burned to EMPTY: all previously-grandfathered
+  functions now carry a `.EXAMPLE` (#111).
+
 ## v0.71.3 - 2026-07-05 — Isolation toolkit, module-review fixes, Get-Help repaired
 
 Everything from the full module review (issues #97-#106) plus four product
@@ -78,6 +148,10 @@ bugs the new coverage tests caught.
   existing one; use `Update-MsixSigner` to change the publisher.
 
 ## v0.71.1 - 2026-06-09 — App isolation that actually isolates (partial-trust / AppContainer)
+
+> *(Source-only: this version was merged to `main` but never published to
+> PSGallery — the gallery went 0.71.0 → 0.71.3, which includes everything
+> below.)*
 
 The v0.71.0 isolation work emitted the `uap18` appSilo attributes but kept
 `EntryPoint="Windows.FullTrustApplication"` and `runFullTrust` — and the

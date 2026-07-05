@@ -61,3 +61,28 @@ Describe 'Get-MsixStaticAnalysis idempotent ManifestFix detection' -Tag 'Static'
         ($src -match '(?s)if \(-not \$hasRegVirt\).*?Set-MsixRegistryWriteVirtualization') | Should -BeTrue
     }
 }
+
+Describe 'Static analysis coverage for new manifest/autofix features' -Tag 'Static' {
+
+    It 'exports the new service and shell-handler scanners' {
+        (Get-Command Get-MsixServiceEntry -Module MSIX -ErrorAction SilentlyContinue) | Should -Not -BeNullOrEmpty
+        (Get-Command Get-MsixShellHandlerEntry -Module MSIX -ErrorAction SilentlyContinue) | Should -Not -BeNullOrEmpty
+        (Get-Alias Get-MsixServiceEntries -ErrorAction SilentlyContinue).Definition | Should -Be 'Get-MsixServiceEntry'
+        (Get-Alias Get-MsixShellHandlerEntries -ErrorAction SilentlyContinue).Definition | Should -Be 'Get-MsixShellHandlerEntry'
+    }
+
+    It 'rolls new scanner categories into heuristic findings' {
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.Scanners.ps1')) -Raw
+        $src | Should -Match "Category\s+=\s+'ManifestFix:PackagedService'"
+        $src | Should -Match "Category\s+=\s+'ManifestFix:ShellHandlerExtension'"
+        $src | Should -Match 'Get-MsixServiceEntry -PackagePath \$PackagePath -WorkspacePath \$shared'
+        $src | Should -Match 'Get-MsixShellHandlerEntry -PackagePath \$PackagePath -WorkspacePath \$shared'
+    }
+
+    It 'emits explicit isolation blocker categories for v0.71.3 tooling' {
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.Investigation.ps1')) -Raw
+        $src | Should -Match "Category\s+=\s+'IsolationBlockedByPsf'"
+        $src | Should -Match "Category\s+=\s+'IsolationBlockedByComServer'"
+        $src | Should -Match 'Remove-MsixPsf before Add-MsixAppIsolation'
+    }
+}

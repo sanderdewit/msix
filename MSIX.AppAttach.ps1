@@ -491,6 +491,10 @@ function Test-MsixAppAttachImage {
     .SYNOPSIS
         Validates an existing image: mounts it, lists the package folder(s) it
         contains, dismounts. Use as a smoke-test before publishing to a share.
+        .EXAMPLE
+        # Validate an App Attach VHDX/CIM before staging it
+        Test-MsixAppAttachImage -ImagePath .\app.vhdx
+
     #>
     [CmdletBinding()]
     param(

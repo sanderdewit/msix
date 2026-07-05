@@ -263,6 +263,10 @@ function New-MsixRemediationPlan {
 
     .OUTPUTS
         [pscustomobject] with PSTypeName 'MsixRemediationPlan'.
+        .EXAMPLE
+        # Turn analysis findings into a reviewable plan file
+        New-MsixRemediationPlan -PackagePath app.msix -OutputPath plan.json
+
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [OutputType([pscustomobject])]
@@ -379,6 +383,10 @@ function Import-MsixRemediationPlan {
 
     .OUTPUTS
         [pscustomobject] with PSTypeName 'MsixRemediationPlan'.
+        .EXAMPLE
+        # Load a saved remediation plan for review or replay
+        $plan = Import-MsixRemediationPlan -Path .\plan.json
+
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -492,6 +500,10 @@ function Test-MsixRemediationPlan {
 
     .OUTPUTS
         [pscustomobject] @{ IsValid; Errors[] }.
+        .EXAMPLE
+        # Validate a plan file without executing it
+        Test-MsixRemediationPlan -Path .\plan.json
+
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]

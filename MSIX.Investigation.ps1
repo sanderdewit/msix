@@ -62,6 +62,10 @@ function Add-MsixDiagnosticTrace {
 
     .PARAMETER PfxPassword
         Signing certificate. Omit for /a (auto store).
+        .EXAMPLE
+        # Inject the PSF TraceFixup so DebugView shows API-level traces
+        Add-MsixDiagnosticTrace -PackagePath app.msix -SkipSigning
+
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -88,6 +92,10 @@ function Resolve-MsixProcMonPath {
     .SYNOPSIS
         Finds procmon.exe (Sysinternals Process Monitor). Order:
         $env:MSIX_PROCMON_PATH > PATH > C:\PSF\ProcessMonitor > Sysinternals install dirs.
+        .EXAMPLE
+        # Where is procmon.exe (downloads if missing)?
+        Resolve-MsixProcMonPath
+
     #>
     [CmdletBinding()]
     param()
@@ -134,6 +142,10 @@ function Invoke-MsixProcMonCapture {
     .NOTES
         Requires Sysinternals Process Monitor on PATH or at C:\PSF\ProcessMonitor.
         See https://learn.microsoft.com/sysinternals/downloads/procmon
+        .EXAMPLE
+        # Capture a ProcMon trace while exercising the app
+        $pml = Invoke-MsixProcMonCapture -ScriptBlock { Start-Process notepad -Wait }
+
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -200,6 +212,10 @@ function Get-MsixProcMonFailure {
 
     .PARAMETER ProcessName
         Optional filter on Process Name column.
+        .EXAMPLE
+        # Pull the failure rows out of a ProcMon capture
+        Get-MsixProcMonFailure -PmlPath .\trace.pml -ProcessName app
+
     #>
     [CmdletBinding()]
     param(
@@ -247,6 +263,10 @@ function Get-MsixStaticAnalysis {
 
     .PARAMETER PackagePath
         The .msix file to analyse (read-only; not modified).
+        .EXAMPLE
+        # Static PSF-fixable issue scan (no app launch needed)
+        Get-MsixStaticAnalysis -PackagePath app.msix
+
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
@@ -309,6 +329,26 @@ function Get-MsixStaticAnalysis {
                 Symptom      = 'Package already wraps applications with PsfLauncher.'
                 Recommendation = 'Inspect existing config.json before adding more fixups.'
                 AppId        = ($psfApps | ForEach-Object { $_.GetAttribute('Id') }) -join ','
+            }
+            $findings += [pscustomobject]@{
+                Severity       = 'Warning'
+                Category       = 'IsolationBlockedByPsf'
+                Symptom        = 'Package uses PSF launchers, which cannot be used with AppContainer / Win32 App Isolation.'
+                Recommendation = "Run Remove-MsixPsf before Add-MsixAppIsolation, then validate the app without the PSF behaviours that were stripped."
+                AppId          = ($psfApps | ForEach-Object { $_.GetAttribute('Id') }) -join ','
+                Evidence       = ($psfApps | ForEach-Object { $_.GetAttribute('Executable') }) -join ', '
+            }
+        }
+
+        $comServerExts = @($manifest.SelectNodes("//*[local-name()='Extension' and @Category='windows.comServer']"))
+        if ($comServerExts) {
+            $findings += [pscustomobject]@{
+                Severity       = 'Warning'
+                Category       = 'IsolationBlockedByComServer'
+                Symptom        = "Package declares $($comServerExts.Count) windows.comServer extension(s), which are invalid with the partial-trust entry point required for isolation."
+                Recommendation = "Use Add-MsixAppIsolation -RemoveComServer only if losing COM activation / shell menu functionality is acceptable."
+                AppId          = $null
+                Evidence       = 'windows.comServer'
             }
         }
 
@@ -465,6 +505,10 @@ function Get-MsixCompatibilityReport {
 
     .OUTPUTS
         [pscustomobject] with Findings (array) and SuggestedFixups (hashtable[]).
+        .EXAMPLE
+        # Full compatibility report for a package
+        Get-MsixCompatibilityReport -PackagePath app.msix | ConvertTo-MsixReportHtml -OutputPath report.html
+
     #>
     [CmdletBinding()]
     param(

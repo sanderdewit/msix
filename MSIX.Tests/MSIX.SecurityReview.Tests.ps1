@@ -97,3 +97,14 @@ Describe 'TLS floor is raised at import (#52)' -Tag 'Security' {
             Should -Not -Be 0
     }
 }
+
+Describe 'Distribution manifest generation is XML-safe' -Tag 'Security' {
+
+    It 'escapes generated modification-package identity names before here-string insertion' {
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.Distribution.ps1')) -Raw
+        $src | Should -Match '\$safeName = \[Security\.SecurityElement\]::Escape\(\$Name\)'
+        $src | Should -Match '\$safeMainName = \[Security\.SecurityElement\]::Escape\(\$mainName\)'
+        $src | Should -Match '<Identity Name="\$safeName"'
+        $src | Should -Match '<uap4:MainPackageDependency Name="\$safeMainName"'
+    }
+}

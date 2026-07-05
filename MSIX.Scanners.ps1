@@ -472,6 +472,28 @@ function _MsixRegPathToVfsRelative {
     return _MsixAbsoluteToVfsRelativeDirect -AbsPath $RegPath -WorkspacePath $WorkspacePath
 }
 
+function _MsixGetClsidInProcServerPath {
+    param([IntPtr]$Hive, [string]$Clsid)
+    foreach ($prefix in @(
+        'REGISTRY\MACHINE\SOFTWARE\Classes\CLSID',
+        'REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Classes\CLSID'
+    )) {
+        $v = _MsixOfflineGetValue -Parent $Hive -SubKey "$prefix\$Clsid\InProcServer32" -Name ''
+        if ($v) { return $v }
+    }
+    return $null
+}
+
+function _MsixExtractExecutableFromCommandLine {
+    param([string]$CommandLine)
+    if (-not $CommandLine) { return $null }
+    $s = $CommandLine.Trim()
+    if ($s -match '^(?i)\\\?\?\\(.+)$') { $s = $matches[1] }
+    if ($s -match '^"([^"]+\.exe)"') { return $matches[1] }
+    if ($s -match '^(.*?\.exe)(\s|$)') { return $matches[1] }
+    return $s
+}
+
 
 function Get-MsixShellContextMenuEntry {
     <#
@@ -532,19 +554,6 @@ function Get-MsixShellContextMenuEntry {
 
         $hive = _MsixOpenOfflineHive -Path $datPath
         try {
-            # Helper: read the InProcServer32 default value from either the
-            # 64-bit Classes\CLSID branch or the WOW6432Node fallback.
-            function _resolveClsidDll([IntPtr]$h, [string]$clsid) {
-                foreach ($prefix in @(
-                    'REGISTRY\MACHINE\SOFTWARE\Classes\CLSID',
-                    'REGISTRY\MACHINE\SOFTWARE\WOW6432Node\Classes\CLSID'
-                )) {
-                    $v = _MsixOfflineGetValue -Parent $h -SubKey "$prefix\$clsid\InProcServer32" -Name ''
-                    if ($v) { return $v }
-                }
-                return $null
-            }
-
             # Targets the shell uses for context-menu handlers. 'Folder' (issue
             # #80) covers folders incl. 7-Zip's handler; 'Directory' is
             # filesystem dirs; 'Drive' covers drive roots.
@@ -563,7 +572,7 @@ function Get-MsixShellContextMenuEntry {
                                 if ($ech -notmatch '^\{') { $ech = "{$ech}" }
                                 $dll = $null; $vfsDll = $null
                                 if ($ech -match $clsidGuidRegex) {
-                                    $dll = _resolveClsidDll $hive $ech
+                                    $dll = _MsixGetClsidInProcServerPath -Hive $hive -Clsid $ech
                                     if ($dll) { $vfsDll = _MsixRegPathToVfsRelative -RegPath $dll -WorkspacePath $workspace }
                                 }
                                 $results.Add([pscustomobject]@{
@@ -603,7 +612,7 @@ function Get-MsixShellContextMenuEntry {
                             if ($clsid -and $clsid -notmatch '^\{') { $clsid = "{$clsid}" }
                             $dll = $null; $vfsDll = $null
                             if ($clsid -and $clsid -match $clsidGuidRegex) {
-                                $dll = _resolveClsidDll $hive $clsid
+                                $dll = _MsixGetClsidInProcServerPath -Hive $hive -Clsid $clsid
                                 if ($dll) { $vfsDll = _MsixRegPathToVfsRelative -RegPath $dll -WorkspacePath $workspace }
                             }
                             $results.Add([pscustomobject]@{
@@ -631,7 +640,7 @@ function Get-MsixShellContextMenuEntry {
                             if ($clsid -and $clsid -notmatch '^\{') { $clsid = "{$clsid}" }
                             $dll = $null; $vfsDll = $null
                             if ($clsid -and $clsid -match $clsidGuidRegex) {
-                                $dll = _resolveClsidDll $hive $clsid
+                                $dll = _MsixGetClsidInProcServerPath -Hive $hive -Clsid $clsid
                                 if ($dll) { $vfsDll = _MsixRegPathToVfsRelative -RegPath $dll -WorkspacePath $workspace }
                             }
                             $results.Add([pscustomobject]@{
@@ -657,6 +666,199 @@ function Get-MsixShellContextMenuEntry {
         $seen = @{}
         return @($results | Where-Object {
             $key = "$($_.Type)|$($_.Target)|$(if ($_.Type -eq 'ShellVerb') { $_.VerbName } else { $_.HandlerName })"
+            if (-not $seen[$key]) { $seen[$key] = $true; $true } else { $false }
+        })
+    } finally {
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+#endregion
+#region Packaged service entries --------------------------------------------
+
+function Get-MsixServiceEntry {
+    <#
+    .SYNOPSIS
+        Scans Registry.dat for Windows service registrations that can be
+        converted to a desktop6 windows.service manifest declaration.
+
+    .DESCRIPTION
+        Reads HKLM\SYSTEM\*\Services entries from the package registry hive,
+        captures ImagePath/ObjectName/Start/DependOnService, and resolves
+        package-bundled service executables to VFS-relative paths. Entries with
+        a VFS-resolved executable can be auto-fixed with Add-MsixService.
+
+    .PARAMETER PackagePath
+        The .msix file to inspect.
+
+    .OUTPUTS
+        [pscustomobject[]] with Name, ImagePath, Executable, VfsExecutable,
+        StartupType, StartAccount, Dependencies, CanAutoFix.
+    .EXAMPLE
+        # Which Windows services does this capture carry?
+        Get-MsixServiceEntry -PackagePath app.msix
+
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [string]$WorkspacePath
+    )
+
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'services'
+    $workspace = $ws.Path
+    try {
+        $datPath = Join-Path -Path $workspace -ChildPath 'Registry.dat'
+        if (-not (Test-Path -LiteralPath $datPath)) { return @() }
+
+        $results = [System.Collections.Generic.List[object]]::new()
+        $hive = _MsixOpenOfflineHive -Path $datPath
+        try {
+            foreach ($branch in @(
+                'REGISTRY\MACHINE\SYSTEM\CurrentControlSet\Services',
+                'REGISTRY\MACHINE\SYSTEM\ControlSet001\Services'
+            )) {
+                $servicesKey = _MsixOfflineOpenKey -Parent $hive -SubKey $branch
+                if ($servicesKey -eq [IntPtr]::Zero) { continue }
+                try {
+                    foreach ($name in (_MsixOfflineEnumSubKeys -Key $servicesKey)) {
+                        $svcPath = "$branch\$name"
+                        $imagePath = _MsixOfflineGetValue -Parent $hive -SubKey $svcPath -Name 'ImagePath'
+                        if (-not $imagePath) { continue }
+
+                        $exe = _MsixExtractExecutableFromCommandLine -CommandLine $imagePath
+                        $vfsExe = _MsixRegPathToVfsRelative -RegPath $exe -WorkspacePath $workspace
+                        $startRaw = _MsixOfflineGetValue -Parent $hive -SubKey $svcPath -Name 'Start'
+                        $startupType = switch ([string]$startRaw) {
+                            '2' { 'auto'; break }
+                            '3' { 'demand'; break }
+                            default { 'manual' }
+                        }
+
+                        $objectName = _MsixOfflineGetValue -Parent $hive -SubKey $svcPath -Name 'ObjectName'
+                        $startAccount = switch -Regex ([string]$objectName) {
+                            'LocalSystem|^$' { 'localSystem'; break }
+                            'LocalService'   { 'localService'; break }
+                            'NetworkService' { 'networkService'; break }
+                            default          { $null }
+                        }
+
+                        $deps = @(_MsixOfflineGetValue -Parent $hive -SubKey $svcPath -Name 'DependOnService' |
+                            ForEach-Object { $_ } | Where-Object { $_ })
+
+                        $results.Add([pscustomobject]@{
+                            Name          = $name
+                            ImagePath     = $imagePath
+                            Executable    = $exe
+                            VfsExecutable = $vfsExe
+                            StartupType   = $startupType
+                            StartAccount  = $startAccount
+                            Dependencies  = $deps
+                            CanAutoFix    = [bool]($vfsExe -and $startAccount)
+                        })
+                    }
+                } finally {
+                    _MsixOfflineCloseKey -Key $servicesKey
+                }
+            }
+        } finally {
+            _MsixCloseOfflineHive -Hive $hive
+        }
+
+        $seen = @{}
+        return @($results | Where-Object {
+            if (-not $seen[$_.Name]) { $seen[$_.Name] = $true; $true } else { $false }
+        })
+    } finally {
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+#endregion
+#region Shell preview/thumbnail handler entries -----------------------------
+
+function Get-MsixShellHandlerEntry {
+    <#
+    .SYNOPSIS
+        Scans Registry.dat for preview/property/thumbnail shell handlers that
+        can be expressed via Add-MsixShellHandlerExtension.
+
+    .DESCRIPTION
+        Looks for extension or ProgID shellex registrations under HKCR:
+          Preview   -> shellex\{8895b1c6-b41f-4c1c-a562-0d564250836f}
+          Thumbnail -> shellex\{e357fccd-a995-4576-b01f-234630154e96}
+          Property  -> shellex\PropertyHandler
+
+        Returned entries include the file type, CLSID, original DLL path, and
+        package-relative VFS DLL when it can be resolved.
+    .EXAMPLE
+        # Preview/thumbnail/property handlers registered in the captured registry
+        Get-MsixShellHandlerEntry -PackagePath app.msix
+
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [string]$WorkspacePath
+    )
+
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'shellhandlers'
+    $workspace = $ws.Path
+    try {
+        $datPath = Join-Path -Path $workspace -ChildPath 'Registry.dat'
+        if (-not (Test-Path -LiteralPath $datPath)) { return @() }
+
+        $handlerKeys = @(
+            [pscustomobject]@{ Kind = 'Preview';   SubKey = 'shellex\{8895b1c6-b41f-4c1c-a562-0d564250836f}' }
+            [pscustomobject]@{ Kind = 'Thumbnail'; SubKey = 'shellex\{e357fccd-a995-4576-b01f-234630154e96}' }
+            [pscustomobject]@{ Kind = 'Property';  SubKey = 'shellex\PropertyHandler' }
+        )
+        $clsidGuidRegex = '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$'
+        $results = [System.Collections.Generic.List[object]]::new()
+
+        $hive = _MsixOpenOfflineHive -Path $datPath
+        try {
+            $classesRoot = 'REGISTRY\MACHINE\SOFTWARE\Classes'
+            $classesKey = _MsixOfflineOpenKey -Parent $hive -SubKey $classesRoot
+            if ($classesKey -eq [IntPtr]::Zero) { return @() }
+            try {
+                foreach ($ext in (_MsixOfflineEnumSubKeys -Key $classesKey)) {
+                    if ($ext -notmatch '^\.') { continue }
+                    $progId = _MsixOfflineGetValue -Parent $hive -SubKey "$classesRoot\$ext" -Name ''
+                    $targets = @($ext)
+                    if ($progId) { $targets += $progId }
+
+                    foreach ($target in ($targets | Sort-Object -Unique)) {
+                        foreach ($h in $handlerKeys) {
+                            $clsid = _MsixOfflineGetValue -Parent $hive -SubKey "$classesRoot\$target\$($h.SubKey)" -Name ''
+                            if (-not $clsid) { continue }
+                            if ($clsid -notmatch '^\{') { $clsid = "{$clsid}" }
+                            if ($clsid -notmatch $clsidGuidRegex) { continue }
+
+                            $dll = _MsixGetClsidInProcServerPath -Hive $hive -Clsid $clsid
+                            $vfsDll = if ($dll) { _MsixRegPathToVfsRelative -RegPath $dll -WorkspacePath $workspace } else { $null }
+                            $results.Add([pscustomobject]@{
+                                Kind       = $h.Kind
+                                FileType   = $ext
+                                FtaName    = (($ext.TrimStart('.')) + $h.Kind.ToLowerInvariant())
+                                Clsid      = $clsid
+                                DllPath    = $dll
+                                VfsDllPath = $vfsDll
+                                CanAutoFix = [bool]($vfsDll)
+                            })
+                        }
+                    }
+                }
+            } finally {
+                _MsixOfflineCloseKey -Key $classesKey
+            }
+        } finally {
+            _MsixCloseOfflineHive -Hive $hive
+        }
+
+        $seen = @{}
+        return @($results | Where-Object {
+            $key = "$($_.Kind)|$($_.FileType)|$($_.Clsid)"
             if (-not $seen[$key]) { $seen[$key] = $true; $true } else { $false }
         })
     } finally {
@@ -853,6 +1055,10 @@ function Get-MsixHeuristicFinding {
         Runs every read-only TMEditX-style analyzer against a package and
         returns merged findings. Used by Get-MsixStaticAnalysis to expand the
         report.
+        .EXAMPLE
+        # Run all heuristic scanners against a package
+        Get-MsixHeuristicFinding -PackagePath app.msix
+
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$PackagePath)
@@ -894,6 +1100,25 @@ function Get-MsixHeuristicFinding {
             })
         }
     } catch { Write-MsixLog -Level Debug -Message "Updater heuristic skipped: $_" }
+
+    # Windows service registry entries (now fixable via desktop6:Service).
+    try {
+        foreach ($svc in Get-MsixServiceEntry -PackagePath $PackagePath -WorkspacePath $shared) {
+            $out.Add([pscustomobject]@{
+                Severity       = if ($svc.CanAutoFix) { 'Warning' } else { 'Info' }
+                Category       = 'ManifestFix:PackagedService'
+                Symptom        = "Registry.dat declares Windows service '$($svc.Name)' ($($svc.ImagePath))."
+                Recommendation = if ($svc.CanAutoFix) {
+                    "Add-MsixService -PackagePath '$PackagePath' -Executable '$(_MsixEscapeSingleQuote $svc.VfsExecutable)' -Name '$(_MsixEscapeSingleQuote $svc.Name)' -StartupType $($svc.StartupType) -StartAccount $($svc.StartAccount)"
+                } else {
+                    "Review service '$($svc.Name)' manually: the executable or service account could not be mapped to an Add-MsixService declaration."
+                }
+                Evidence       = $svc.ImagePath
+                AppId          = $null
+                ServiceEntries = @($svc)
+            })
+        }
+    } catch { Write-MsixLog -Level Debug -Message "Service heuristic skipped: $_" }
 
     # Plugin / extension-point directories. Default fix path is
     # selective FileSystemWriteVirtualization (Win10 19041+); operators on
@@ -1053,6 +1278,25 @@ function Get-MsixHeuristicFinding {
         Write-MsixLog -Level Debug -Message "Shell context-menu heuristic failed: $_"
     }
 
+    # ── Shell preview/property/thumbnail handlers ───────────────────────────
+    try {
+        $shellHandlers = @(Get-MsixShellHandlerEntry -PackagePath $PackagePath -WorkspacePath $shared)
+        $fixableShellHandlers = @($shellHandlers | Where-Object CanAutoFix)
+        if ($fixableShellHandlers) {
+            $out.Add([pscustomobject]@{
+                Severity             = 'Warning'
+                Category             = 'ManifestFix:ShellHandlerExtension'
+                Symptom              = "Registry.dat declares $($fixableShellHandlers.Count) preview/property/thumbnail shell handler(s) that should be represented in the manifest."
+                Recommendation       = "Add-MsixShellHandlerExtension -PackagePath '$PackagePath' -Kind <Preview|Property|Thumbnail> -Clsid <clsid> -Dll <VFS-relative-dll> -FileTypes <extensions>"
+                Evidence             = ($fixableShellHandlers | ForEach-Object { "$($_.Kind):$($_.FileType)=$($_.Clsid)" }) -join '; '
+                AppId                = $null
+                ShellHandlerEntries  = $fixableShellHandlers
+            })
+        }
+    } catch {
+        Write-MsixLog -Level Debug -Message "Shell handler heuristic failed: $_"
+    }
+
     # ── COM server registrations in Registry.dat ──────────────────────────────
     try {
         $comEntries = Get-MsixComServerEntry -PackagePath $PackagePath -WorkspacePath $shared
@@ -1204,6 +1448,32 @@ function Get-MsixHeuristicFinding {
                         $comFinding[0].ComEntries = $stillMissing
                     }
                 }
+
+                # Suppress service findings already represented by desktop6:Service.
+                $declaredServices = @($mf.SelectNodes("//*[local-name()='Service']/@Name") | ForEach-Object { $_.Value })
+                foreach ($svcFinding in @($out | Where-Object Category -eq 'ManifestFix:PackagedService')) {
+                    $svcEntries = @($svcFinding.ServiceEntries)
+                    if ($svcEntries -and -not (@($svcEntries | Where-Object { $_.Name -notin $declaredServices }))) {
+                        [void]$out.Remove($svcFinding)
+                    }
+                }
+
+                # Suppress shell-handler findings already represented on an FTA.
+                $shellHandlerFinding = @($out | Where-Object Category -eq 'ManifestFix:ShellHandlerExtension') | Select-Object -First 1
+                if ($shellHandlerFinding) {
+                    $declaredHandlerClsids = @(
+                        $mf.SelectNodes("//*[local-name()='DesktopPreviewHandler' or local-name()='DesktopPropertyHandler' or local-name()='ThumbnailHandler']/@Clsid") |
+                            ForEach-Object { $_.Value }
+                    )
+                    $stillMissingHandlers = @($shellHandlerFinding.ShellHandlerEntries | Where-Object {
+                        ($_.Clsid.Trim('{}').ToLowerInvariant()) -notin @($declaredHandlerClsids | ForEach-Object { ([string]$_).Trim('{}').ToLowerInvariant() })
+                    })
+                    if (-not $stillMissingHandlers) {
+                        [void]$out.Remove($shellHandlerFinding)
+                    } elseif ($stillMissingHandlers.Count -lt @($shellHandlerFinding.ShellHandlerEntries).Count) {
+                        $shellHandlerFinding.ShellHandlerEntries = $stillMissingHandlers
+                    }
+                }
         }
     } catch {
         Write-MsixLog -Level Debug -Message "Manifest-fix heuristic failed: $_"
@@ -1229,6 +1499,8 @@ Set-Alias Get-MsixUninstallRegistryEntries Get-MsixUninstallRegistryEntry
 Set-Alias Get-MsixUpdaterCandidates        Get-MsixUpdaterCandidate
 Set-Alias Get-MsixRunKeyEntries            Get-MsixRunKeyEntry
 Set-Alias Get-MsixShellContextMenuEntries  Get-MsixShellContextMenuEntry
+Set-Alias Get-MsixServiceEntries           Get-MsixServiceEntry
+Set-Alias Get-MsixShellHandlerEntries      Get-MsixShellHandlerEntry
 Set-Alias Get-MsixComServerEntries         Get-MsixComServerEntry
 Set-Alias Get-MsixAliasCandidates          Get-MsixAliasCandidate
 Set-Alias Get-MsixHeuristicFindings        Get-MsixHeuristicFinding

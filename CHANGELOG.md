@@ -8,7 +8,7 @@ older lives here.
 ## v0.72.0 - 2026-07-05 — Bundles, resource-PRI regeneration, runtime deployment testing, in-process signing
 
 The first feature release beyond post-processing: multi-arch bundles,
-localization repair, a Rimo3-style runtime verification loop, and safe local
+localization repair, an automated runtime verification loop, and safe local
 signing.
 
 ### .msixbundle handling (#125)
@@ -32,7 +32,7 @@ signing.
   reference with the literal value *and* rebuilds the PRI so the displayed
   string actually changes.
 
-### Runtime deployment testing (Rimo3-style loop)
+### Runtime deployment testing (automated runtime loop)
 
 - **`Test-MsixDeployment`** — installs a signed package into a clean Hyper-V VM
   via PowerShell Direct (no VM networking), launches it through
@@ -85,8 +85,8 @@ the #120 niche backlog), wired end-to-end into static analysis and autofix.
 ### Context menus: desktop9 is back as an option (#108)
 
 `Add-MsixLegacyContextMenu -Schema desktop4|desktop9|Both` — desktop4/5
-remains the default (Win10 1809+, TMEditX-verified); `desktop9` emits the
-MS-documented / Advanced Installer classic-handler shape
+remains the default (Win10 1809+, field-verified); `desktop9` emits the
+MS-documented classic-handler shape (also used by commercial packaging tools)
 (`windows.fileExplorerClassicContextMenuHandler`, Win11 21H2+, classic
 "Show more options" menu, raises MaxVersionTested to 22000); `Both` emits
 the two registrations against the same CLSID.
@@ -828,9 +828,9 @@ folder ("MakeAppx.exe not found …" with no actionable path forward).
 - Get-MsixToolsRoot -AutoInstall triggers Install-MsixSdkTools on miss.
 - Get-MsixToolsRoot -Refresh drops the session cache.
 
-## v0.9.0 — TMEditX-style auto-fixers, MFR, VC runtime bundling, compare
+## v0.9.0 — heuristic auto-fixers, MFR, VC runtime bundling, compare
 
-Modelled on the feature surface of TMEditX (Tim Mangan's commercial MSIX edit
+Modelled on the feature surface of leading commercial MSIX edit
 tool). Everything here is opt-in and PowerShell-native.
 
 - MFR (Modern File Redirection) typed builder — TMurgent fork's MFRFixup.dll:
@@ -846,7 +846,7 @@ tool). Everything here is opt-in and PowerShell-native.
     vcruntime140 / ucrtbase, locates them in a VS Redist source folder
     (architecture-aware), copies them in.
 
-- TMEditX-style heuristic auto-fixers (each opt-in):
+- heuristic heuristic auto-fixers (each opt-in):
     Add-MsixCapability / Get-MsixKnownCapabilities — standard + rescap.
     Get-MsixUninstallerCandidates / Remove-MsixUninstallerArtifacts —
         strip uninst*/setup* leftovers.
@@ -861,7 +861,7 @@ tool). Everything here is opt-in and PowerShell-native.
         into Get-MsixStaticAnalysis so Invoke-MsixInvestigation surfaces
         them automatically.
 
-- Invoke-MsixAutoFix — TMEditX-style staged orchestrator. Drives a curated
+- Invoke-MsixAutoFix — heuristic staged orchestrator. Drives a curated
     set of fixers (RemoveUninstallers, BumpVersion, AddCapabilities,
     InjectPsf, BundleVcRuntimes, AddSplashImage) and signs ONCE at the end.
     -DryRun reports stages without mutating.

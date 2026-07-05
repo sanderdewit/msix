@@ -1,5 +1,5 @@
 ﻿# =============================================================================
-# Runtime deployment test loop (Rimo3-style: deploy -> launch -> probe -> verdict)
+# Runtime deployment test loop (deploy -> launch -> probe -> verdict)
 # -----------------------------------------------------------------------------
 # Test-MsixDeployment installs a signed package into a clean Hyper-V VM via
 # PowerShell Direct (no VM networking needed), launches it through the shell,

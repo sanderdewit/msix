@@ -875,7 +875,7 @@ function Update-MsixPackageVersion {
 
     .PARAMETER KeepLastZero
         If $true, leaves the rightmost component at 0 after the bump
-        (matches TMEditX's KeepPackageVersionFieldLastAsZero).
+        (keeps the last version field zero (a common packaging-tool convention)).
 
     .PARAMETER NewVersion
         Explicit version string overriding -Component. Use this for

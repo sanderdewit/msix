@@ -464,7 +464,7 @@ function Get-MsixStaticAnalysis {
                 }
         } catch { Write-MsixLog -Level Debug -Message "Static updater scan skipped: $_" }
 
-        # Merge in TMEditX-style heuristic findings (uninstaller artefacts,
+        # Merge in heuristic heuristic findings (uninstaller artefacts,
         # Run keys, alias suggestions, missing VC runtimes). Defined in
         # MSIX.Heuristics.ps1 — same module scope, so just call it.
         if (Get-Command Get-MsixHeuristicFinding -ErrorAction SilentlyContinue) {

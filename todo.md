@@ -130,9 +130,9 @@
       match (writes to install dir, HKLM writes, Run keys, DLL load failures).
 - [x] Shared `_MsixMutateManifest` private helper for unpack/edit/repack/sign.
 
-## v0.9.0 — TMEditX-style auto-fixers (curated)
+## v0.9.0 — heuristic auto-fixers (curated)
 
-Modelled on the feature surface of TMEditX (Tim Mangan's commercial editor),
+Modelled on the feature surface of leading commercial MSIX editors,
 turned into PowerShell-native, opt-in cmdlets.
 
 - [x] **MFR** (Modern File Redirection — TMurgent fork's `MFRFixup.dll`):
@@ -145,7 +145,7 @@ turned into PowerShell-native, opt-in cmdlets.
 - [x] **VC++ runtime detection + bundling** — `Get-MsixVcRuntimeReferences`
       scans PE imports, `Add-MsixVcRuntimeBundle` copies the right-arch
       DLLs in from a VS Redist source folder.
-- [x] **TMEditX-style heuristic auto-fixers** (each opt-in):
+- [x] **heuristic heuristic auto-fixers** (each opt-in):
   - [x] `Add-MsixCapability` / `Get-MsixKnownCapabilities` —
         standard + rescap.
   - [x] `Get-MsixUninstallerCandidates` / `Remove-MsixUninstallerArtifacts`.
@@ -155,10 +155,10 @@ turned into PowerShell-native, opt-in cmdlets.
   - [x] `Add-MsixSplashScreen` — patch a splash image into the PSF
         startScript so users see feedback during slow first-run logic.
   - [x] `Update-MsixPackageVersion` — bump the 4-part Identity Version
-        (`KeepLastZero` matches TMEditX's behaviour).
+        (`KeepLastZero` matches commercial MSIX editors's behaviour).
   - [x] `Get-MsixHeuristicFindings` — read-only roll-up of all the
         above; merged into `Get-MsixStaticAnalysis`.
-- [x] `Invoke-MsixAutoFix` — TMEditX-style staged orchestrator.
+- [x] `Invoke-MsixAutoFix` — heuristic staged orchestrator.
       Runs RemoveUninstallers / BumpVersion / AddCapabilities / InjectPsf /
       BundleVcRuntimes / AddSplashImage with a single signing pass at the end.
       `-DryRun` reports stages without mutating anything.
@@ -175,7 +175,7 @@ turned into PowerShell-native, opt-in cmdlets.
 - [x] Trace Fixup output parser (DebugView log files) integrated into
       `Get-MsixCompatibilityReport` via `-TraceLogPath`.
 - [x] `msixmgr` auto-installer + `Initialize-MsixToolchain` upgrade.
-- [x] PSADT-style standard scripts (CreateShortcut / CopyIconToAppData /
+- [x] deployment-script templates (CreateShortcut / CopyIconToAppData /
       CleanupOldUserData / RegisterFileAssociation / CustomerSettingsBootstrap).
 
 ## v0.7.0
@@ -303,7 +303,7 @@ turned into PowerShell-native, opt-in cmdlets.
 - [x] `docs/limitations.md`, `docs/know-your-installer.md` — done in v0.7
 - [ ] `docs/fixup-MFR.md` — Modern File Redirection (added in v0.9, doc still TBD)
 - [ ] `docs/auto-fix-stages.md` — explain `Invoke-MsixAutoFix` stages
-      and TMEditX → module name mapping.
+      and commercial-tool → module name mapping.
 - [ ] Decision tree: "my app does X, which fixup do I need?"
 - [ ] Example accelerators with explanations.
 - [ ] Migration guide from v1 → v0.9.
@@ -351,7 +351,7 @@ turned into PowerShell-native, opt-in cmdlets.
          `Remove-MsixDesktopShortcuts`.
 - v0.10: Manifest-only fixers (8 cmdlets), `_MsixMutateManifest` foundation,
          namespace registry, `Get-MsixHeuristicFindings` manifest proposals.
-- v0.9: TMEditX feature parity (curated subset).
+- v0.9: commercial-editor feature parity (curated subset).
 - v0.8: Pester tests, Trace Fixup parser, msixmgr auto-update, PSADT scripts.
 - v0.7: TMurgent PSF binaries, sign-once pipeline, dry-run output path,
         Procmon auto-update.

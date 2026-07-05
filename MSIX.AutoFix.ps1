@@ -1,7 +1,7 @@
 ﻿# =============================================================================
 # MSIX auto-fix orchestrators (split from MSIX.Heuristics.ps1 in issue #38)
 # -----------------------------------------------------------------------------
-# Invoke-MsixAutoFix chains a TMEditX-style curated set of mutators.
+# Invoke-MsixAutoFix chains a heuristic curated set of mutators.
 # Invoke-MsixAutoFixFromAnalysis plans the same set from an analyzer
 # report (Get-MsixStaticAnalysis / Get-MsixCompatibilityReport).
 # Mutators live in MSIX.PackageMutators.ps1; scanners in MSIX.Scanners.ps1.
@@ -12,11 +12,11 @@
 function Invoke-MsixAutoFix {
     <#
     .SYNOPSIS
-        Runs a curated set of TMEditX-style auto-fixes against a package in a
+        Runs a curated set of heuristic auto-fixes against a package in a
         deterministic order, signing only at the very end.
 
     .DESCRIPTION
-        Stages (modelled on TMEditX's AutoFixStage enum):
+        Stages (applied in a staged, deterministic order):
 
           PrePsf
             - RemoveUninstallers      strip uninstall*.exe and friends
@@ -739,7 +739,7 @@ function Invoke-MsixAutoFixFromAnalysis {
         }
     }
 
-    # Stage 2g — COM shellex context menu via desktop4 + desktop5 (TMEditX pattern)
+    # Stage 2g — COM shellex context menu via desktop4 + desktop5 (field-verified pattern)
     if ($byCat.ContainsKey('ShellExt') -and -not $AddAppIsolation) {
         $shellExtFinding = @($Report.Findings | Where-Object Category -eq 'ShellExt') | Select-Object -First 1
         $autoFixable     = @($shellExtFinding.ShellEntries | Where-Object { $_.Clsid -and $_.VfsDllPath })

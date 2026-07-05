@@ -4,7 +4,7 @@ Enterprise-grade MSIX packaging automation for mission-critical environments.
 Covers the full conversion lifecycle: static + runtime investigation, PSF
 injection, manifest editing, signing (local / Azure Trusted Signing / Key
 Vault), CI/CD pipeline orchestration, sandbox debugging, App Attach, Win32
-App Isolation, PSADT-style standard scripts, and a comprehensive Pester test
+App Isolation, deployment-script templates, and a comprehensive Pester test
 suite.
 
 > **Security note** — this module is designed for use in high-assurance
@@ -241,7 +241,7 @@ Invoke-MsixSigning -PackagePath app.msix -Signer AzureSignTool `
 
 ## Standard scripts (PSADT)
 
-Generate, sign, and inject PSADT-style PowerShell scripts as PSF
+Generate, sign, and inject deployment-toolkit-style PowerShell scripts as PSF
 `startScript` / `endScript` entries. Customer-specific values are baked in at
 generation time.
 
@@ -467,7 +467,7 @@ Test-MsixAppAttachImage -ImagePath app.vhdx
 ```powershell
 # Legacy IContextMenu COM shell extension (com + desktop4/desktop5, Win10 1809+ / build 17763+).
 # Emits the com:SurrogateServer registration AND the desktop4:FileExplorerContextMenus
-# verb in one call — the TMEditX-verified pattern Explorer actually activates.
+# verb in one call — the field-verified pattern Explorer actually activates.
 Add-MsixLegacyContextMenu -PackagePath app.msix `
     -ShellExtDll 'VFS\ProgramFilesX64\App\ShellExt.dll' `
     -Clsid       'XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX' `
@@ -481,7 +481,7 @@ Add-MsixFileExplorerContextMenu -PackagePath app.msix `
     -FileTypes '.txt', '.log'
 
 # Alternative classic-handler schema (-Schema desktop9|Both): the MS-documented /
-# Advanced Installer shape (windows.fileExplorerClassicContextMenuHandler).
+# commercial-tool shape (windows.fileExplorerClassicContextMenuHandler).
 # Win11 21H2+ only; appears in the CLASSIC menu ("Show more options").
 Add-MsixLegacyContextMenu -PackagePath app.msix -Schema Both `
     -ShellExtDll 'VFS\ProgramFilesX64\App\ShellExt.dll' `

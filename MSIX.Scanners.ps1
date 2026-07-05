@@ -1163,6 +1163,22 @@ function Get-MsixHeuristicFinding {
         }
     } catch { Write-MsixLog -Level Debug -Message "Service heuristic skipped: $_" }
 
+    # Bundled-but-undeclared certificates (windows.certificates fix, issue #120).
+    try {
+        foreach ($cert in (Get-MsixPackageCertificateCandidate -PackagePath $PackagePath -WorkspacePath $shared |
+                Where-Object { $_.CanAutoFix })) {
+            $out.Add([pscustomobject]@{
+                Severity       = 'Info'
+                Category       = 'ManifestFix:PackageCertificate'
+                Symptom        = "Package ships certificate '$($cert.FileName)' but never installs it (the capture's certutil/installer step does not run under MSIX)."
+                Recommendation = "Add-MsixPackageCertificate -PackagePath '$PackagePath' -CertificatePath '$(_MsixEscapeSingleQuote $cert.RelativePath)' -StoreName <Root|CA|TrustedPeople|TrustedPublisher>  (or pass -DeclarePackageCertificates to Invoke-MsixAutoFixFromAnalysis)"
+                Evidence       = $cert.RelativePath
+                AppId          = $null
+                CertificateEntries = @($cert)
+            })
+        }
+    } catch { Write-MsixLog -Level Debug -Message "Package-certificate heuristic skipped: $_" }
+
     # Plugin / extension-point directories. Default fix path is
     # selective FileSystemWriteVirtualization (Win10 19041+); operators on
     # older fleets can opt into PSF FileRedirection via -LegacyPluginFix on
@@ -1543,7 +1559,79 @@ Set-Alias Get-MsixUpdaterCandidates        Get-MsixUpdaterCandidate
 Set-Alias Get-MsixRunKeyEntries            Get-MsixRunKeyEntry
 Set-Alias Get-MsixShellContextMenuEntries  Get-MsixShellContextMenuEntry
 Set-Alias Get-MsixServiceEntries           Get-MsixServiceEntry
+Set-Alias Get-MsixPackageCertificateCandidates Get-MsixPackageCertificateCandidate
 Set-Alias Get-MsixShellHandlerEntries      Get-MsixShellHandlerEntry
 Set-Alias Get-MsixComServerEntries         Get-MsixComServerEntry
 Set-Alias Get-MsixAliasCandidates          Get-MsixAliasCandidate
 Set-Alias Get-MsixHeuristicFindings        Get-MsixHeuristicFinding
+
+#region Package certificate candidates (issue #120) --------------------------
+
+function Get-MsixPackageCertificateCandidate {
+    <#
+    .SYNOPSIS
+        Finds certificate files (.cer/.crt) shipped in the package payload that
+        are not yet declared via the windows.certificates extension.
+
+    .DESCRIPTION
+        Vendor captures often carry an internal-CA or self-signed certificate
+        the app expects in a machine store - the installer used to certutil it
+        in, which an MSIX cannot do. The MSIX-native fix is the
+        windows.certificates package extension (Add-MsixPackageCertificate),
+        which installs the cert into a per-package store on deploy and removes
+        it on uninstall.
+
+    .PARAMETER PackagePath
+        The .msix file to inspect.
+
+    .PARAMETER WorkspacePath
+        Optional already-unpacked workspace to reuse (analysis pipelines).
+
+    .OUTPUTS
+        [pscustomobject[]] with RelativePath, FileName, SizeBytes,
+        AlreadyDeclared, CanAutoFix.
+    .EXAMPLE
+        # Certificates the package ships but never installs
+        Get-MsixPackageCertificateCandidate -PackagePath app.msix
+
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [string]$WorkspacePath
+    )
+
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'pkgcerts'
+    # Normalize to the long-form path: an 8.3 short segment (SANDER~1) in the
+    # workspace path makes the relative-path Substring offset wrong against
+    # the long-form FullName values Get-ChildItem returns.
+    $workspace = (Get-Item -LiteralPath $ws.Path).FullName
+    try {
+        $declared = @()
+        $manifestPath = Join-Path -Path $workspace -ChildPath 'AppxManifest.xml'
+        if (Test-Path -LiteralPath $manifestPath) {
+            [xml]$manifest = Get-MsixManifest -Path $manifestPath
+            $declared = @($manifest.SelectNodes("//*[local-name()='Certificate']") |
+                ForEach-Object { $_.GetAttribute('Content') } | Where-Object { $_ })
+        }
+
+        $results = foreach ($file in (Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Extension -in '.cer', '.crt' })) {
+            $rel = $file.FullName.Substring($workspace.Length + 1)
+            $isDeclared = $declared -contains $rel
+            [pscustomobject]@{
+                RelativePath    = $rel
+                FileName        = $file.Name
+                SizeBytes       = $file.Length
+                AlreadyDeclared = $isDeclared
+                CanAutoFix      = -not $isDeclared
+            }
+        }
+        return @($results)
+    } finally {
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+#endregion

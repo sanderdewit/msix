@@ -230,6 +230,86 @@ Describe 'Manifest feature mutators (real packages, 0.71.4)' -Tag 'Integration' 
         }
     }
 
+    Context 'Niche extension points (issue #120)' {
+        It 'Add-MsixAppExtensionHost + Add-MsixAppExtension declare the contract pair' {
+            $fx1 = New-MsixTestFixture -OutputPath (Join-Path $script:Dir 'axh-base.msix')
+            $out1 = Join-Path $script:Dir 'axh.msix'
+            Add-MsixAppExtensionHost -PackagePath $fx1.PackagePath -Name 'com.lab.plugin' -OutputPath $out1 -SkipSigning
+            [xml]$m1 = Get-MsixManifest -Path $out1
+            $m1.SelectSingleNode("//*[local-name()='AppExtensionHost']/*[local-name()='Name']").InnerText | Should -Be 'com.lab.plugin'
+
+            $fx2 = New-MsixTestFixture -OutputPath (Join-Path $script:Dir 'ax-base.msix')
+            $out2 = Join-Path $script:Dir 'ax.msix'
+            Add-MsixAppExtension -PackagePath $fx2.PackagePath -Name 'com.lab.plugin' -Id 'md-tools' `
+                -DisplayName 'MD tools' -OutputPath $out2 -SkipSigning
+            [xml]$m2 = Get-MsixManifest -Path $out2
+            $ax = $m2.SelectSingleNode("//*[local-name()='AppExtension']")
+            $ax.GetAttribute('Name') | Should -Be 'com.lab.plugin'
+            $ax.GetAttribute('Id')   | Should -Be 'md-tools'
+        }
+
+        It 'Add-MsixAutoPlayHandler declares Content and Device launch actions' {
+            $fx  = New-MsixTestFixture -OutputPath (Join-Path $script:Dir 'ap-base.msix')
+            $out = Join-Path $script:Dir 'ap.msix'
+            Add-MsixAutoPlayHandler -PackagePath $fx.PackagePath -Kind Content -Verb show `
+                -ActionDisplayName 'Import photos' -ContentEvent ShowPicturesOnArrival `
+                -OutputPath $out -SkipSigning
+            Add-MsixAutoPlayHandler -PackagePath $out -Kind Device -Verb import `
+                -ActionDisplayName 'Import' -DeviceEvent 'WPD\ImageSource' -SkipSigning
+            [xml]$m = Get-MsixManifest -Path $out
+            $m.SelectSingleNode("//*[local-name()='AutoPlayContent']/*[local-name()='LaunchAction']").GetAttribute('ContentEvent') | Should -Be 'ShowPicturesOnArrival'
+            $m.SelectSingleNode("//*[local-name()='AutoPlayDevice']/*[local-name()='LaunchAction']").GetAttribute('DeviceEvent')   | Should -Be 'WPD\ImageSource'
+        }
+
+        It 'Add-MsixShareTarget declares file types + data formats' {
+            $fx  = New-MsixTestFixture -OutputPath (Join-Path $script:Dir 'st-base.msix')
+            $out = Join-Path $script:Dir 'st.msix'
+            Add-MsixShareTarget -PackagePath $fx.PackagePath -FileTypes '.png' -DataFormats Bitmap `
+                -OutputPath $out -SkipSigning
+            [xml]$m = Get-MsixManifest -Path $out
+            $st = $m.SelectSingleNode("//*[local-name()='ShareTarget']")
+            $st.SelectSingleNode("*[local-name()='SupportedFileTypes']/*[local-name()='FileType']").InnerText | Should -Be '.png'
+            $st.SelectSingleNode("*[local-name()='DataFormat']").InnerText | Should -Be 'Bitmap'
+        }
+
+        It 'Add-MsixFullTrustProcess declares the companion + runFullTrust' {
+            $fx  = New-MsixTestFixture -OutputPath (Join-Path $script:Dir 'ftp-base.msix')
+            $out = Join-Path $script:Dir 'ftp.msix'
+            Add-MsixFullTrustProcess -PackagePath $fx.PackagePath `
+                -Executable 'VFS\ProgramFilesX64\App\app.exe' `
+                -ParameterGroups @(@{ GroupId = 'sync'; Parameters = '/sync' }) `
+                -OutputPath $out -SkipSigning
+            [xml]$m = Get-MsixManifest -Path $out
+            $ext = $m.SelectSingleNode("//*[local-name()='Extension' and @Category='windows.fullTrustProcess']")
+            $ext | Should -Not -BeNullOrEmpty
+            $ext.SelectSingleNode("*[local-name()='FullTrustProcess']/*[local-name()='ParameterGroup']").GetAttribute('GroupId') | Should -Be 'sync'
+        }
+
+        It 'Add-MsixPackageCertificate bundles + declares; the scanner sees it as declared' {
+            $fx  = New-MsixTestFixture -OutputPath (Join-Path $script:Dir 'pc-base.msix')
+            $out = Join-Path $script:Dir 'pc.msix'
+            $signer = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Feat120' -CertStoreLocation Cert:\CurrentUser\My
+            $cer = Join-Path $script:Dir 'feat120.cer'
+            try {
+                Export-Certificate -Cert $signer -FilePath $cer | Out-Null
+            } finally {
+                Get-ChildItem Cert:\CurrentUser\My | Where-Object Thumbprint -eq $signer.Thumbprint |
+                    Remove-Item -Force -ErrorAction SilentlyContinue
+            }
+            Add-MsixPackageCertificate -PackagePath $fx.PackagePath -CertificatePath $cer `
+                -StoreName TrustedPeople -OutputPath $out -SkipSigning
+
+            [xml]$m = Get-MsixManifest -Path $out
+            $c = $m.SelectSingleNode("//*[local-name()='Certificate']")
+            $c.GetAttribute('StoreName') | Should -Be 'TrustedPeople'
+            $c.GetAttribute('Content')   | Should -Be 'Certificates\feat120.cer'
+
+            $cands = @(Get-MsixPackageCertificateCandidate -PackagePath $out)
+            @($cands | Where-Object AlreadyDeclared).Count | Should -Be 1
+            @($cands | Where-Object CanAutoFix).Count      | Should -Be 0
+        }
+    }
+
     Context 'New-MsixModificationPackage (issue #118)' {
         It 'creates a MakeAppx-valid modification package with MainPackageDependency' {
             $fx  = New-MsixTestFixture -OutputPath (Join-Path $script:Dir 'main.msix')

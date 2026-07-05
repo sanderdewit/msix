@@ -160,6 +160,15 @@
         [string]$TimestampUrl = 'http://timestamp.digicert.com'
     )
 
+    # Fail-closed contract (issue #77): an EXPLICIT -Signer always wins over
+    # the parameter-set inference. Without this, -Signer SignerSignEx combined
+    # with -Pfx/-PfxPassword bound to the SignToolPfx set and silently entered
+    # the SignTool path (including its command-line password exposure) instead
+    # of throwing the reserved-backend error.
+    if ($PSBoundParameters.ContainsKey('Signer') -and $Signer -eq 'SignerSignEx') {
+        throw "The SignerSignEx backend is not yet implemented (reserved; see issue #17). Use -Signer SignTool (PFX), TrustedSigning, or AzureSignTool."
+    }
+
     # ParameterSetName drives the backend; fall back to the explicit -Signer
     # when caller used the default SignTool set.
     $effectiveSigner = switch ($PSCmdlet.ParameterSetName) {

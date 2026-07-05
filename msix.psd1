@@ -8,7 +8,10 @@
 
     FunctionsToExport = @(
         'Add-MsixAlias',
+        'Add-MsixAppExtension',
+        'Add-MsixAppExtensionHost',
         'Add-MsixAppIsolation',
+        'Add-MsixAutoPlayHandler',
         'Add-MsixCapability',
         'Add-MsixComServerExtension',
         'Add-MsixDiagnosticTrace',
@@ -17,14 +20,17 @@
         'Add-MsixFileTypeAssociation',
         'Add-MsixFirewallRule',
         'Add-MsixFontExtension',
+        'Add-MsixFullTrustProcess',
         'Add-MsixLegacyContextMenu',
         'Add-MsixLoaderSearchPathOverride',
         'Add-MsixManifestNamespace',
+        'Add-MsixPackageCertificate',
         'Add-MsixPackageDependency',
         'Add-MsixProtocolHandler',
         'Add-MsixPsfV2',
         'Remove-MsixPsf',
         'Add-MsixService',
+        'Add-MsixShareTarget',
         'Add-MsixShellHandlerExtension',
         'Add-MsixShellVerbExtension',
         'Add-MsixSplashScreen',
@@ -73,6 +79,7 @@
         'Get-MsixMgrVersion',
         'Get-MsixNestedPackageCandidate',
         'Get-MsixOrphanedAppData',
+        'Get-MsixPackageCertificateCandidate',
         'Get-MsixPackageStorageSummary',
         'Get-MsixPlaybook',
         'Get-MsixPluginExtensionPoint',
@@ -206,6 +213,7 @@
         'Get-MsixPluginExtensionPoints',
         'Get-MsixProcMonFailures',
         'Get-MsixRunKeyEntries',
+        'Get-MsixPackageCertificateCandidates',
         'Get-MsixServiceEntries',
         'Get-MsixShellContextMenuEntries',
         'Get-MsixShellHandlerEntries',
@@ -271,6 +279,22 @@
   Add-MsixService / Add-MsixShellHandlerExtension / VCLibs-as-dependency
   (-VcRuntimeAsPackageDependency) and opt-in isolation (-AddAppIsolation
   with Remove-MsixPsf preparation).
+
+### Niche extension points (#120)
+- Add-MsixAppExtensionHost / Add-MsixAppExtension (uap3 plugin contract pair),
+  Add-MsixAutoPlayHandler (AutoPlay content/device), Add-MsixShareTarget
+  (Share sheet), Add-MsixFullTrustProcess (UWP + Win32 companion),
+  Add-MsixPackageCertificate (windows.certificates - replaces the capture
+  certutil step; per-package store, removed on uninstall).
+- New scanner Get-MsixPackageCertificateCandidate: shipped-but-undeclared
+  .cer/.crt surface as ManifestFix:PackageCertificate findings; autofix
+  declares them via opt-in -DeclarePackageCertificates
+  (+ -PackageCertificateStore, default TrustedPeople).
+
+### Signing fail-closed (#77)
+- Invoke-MsixSigning -Signer SignerSignEx now throws the reserved-backend
+  error even when -Pfx/-PfxPassword are supplied (the SignToolPfx parameter
+  set no longer silently overrides an explicit -Signer).
 
 ### Fixes
 - Set-MsixBrandMetadata warns on pri-localized (ms-resource:) fields whose

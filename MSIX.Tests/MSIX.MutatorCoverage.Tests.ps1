@@ -264,14 +264,16 @@ Describe 'Configuration setters from the coverage allowlist' -Tag 'MutatorCovera
     Context 'Set-MsixToolsRoot' {
         It 'accepts a valid root (validates MakeAppx presence) and rejects an empty directory' {
             # Setting requires MakeAppx under <root>\Tools — validation is part
-            # of the contract, so assert both sides against the real root.
+            # of the contract, so assert both sides.
             $orig = Get-MsixToolsRoot
-            if (-not $orig -or -not (Test-Path -LiteralPath $orig)) {
-                Set-ItResult -Skipped -Because 'no valid tools root on this machine'
-                return
+            $origValid = $orig -and (Test-Path -LiteralPath (Join-Path -Path $orig -ChildPath 'Tools\MakeAppx.exe'))
+            if ($origValid) {
+                # Positive side only where real tooling exists (not on the
+                # tool-less CI Pester job — the Integration job covers hosts
+                # with tooling).
+                Set-MsixToolsRoot -Path $orig
+                (Get-MsixToolsRoot) | Should -Be $orig
             }
-            Set-MsixToolsRoot -Path $orig
-            (Get-MsixToolsRoot) | Should -Be $orig
 
             $tmp = Join-Path ([IO.Path]::GetTempPath()) "msix-toolsroot-$([guid]::NewGuid().ToString('N').Substring(0,8))"
             New-Item -ItemType Directory -Path $tmp -Force | Out-Null

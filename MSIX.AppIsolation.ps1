@@ -1,19 +1,23 @@
 ﻿# =============================================================================
-# Win32 App Isolation
+# App isolation (AppContainer / Win32 App Isolation)
 # -----------------------------------------------------------------------------
-# Adds the rescap capabilities + iso namespace that turn a regular MSIX-packaged
-# Win32 app into an "isolated" one. The isolation feature provides an OS-level
-# sandbox with broker-mediated access to filesystem, devices, and protected APIs.
+# Drops a packaged Win32 app into an AppContainer: the isolation switch is the
+# partial-trust entry point (EntryPoint="Windows.PartialTrustApplication") +
+# TrustLevel="appContainer" with runFullTrust REMOVED. Two modes:
+#   AppContainer (default) — GA packagedClassicApp (Win10 2004 / 19041+),
+#                            ungranted access is DENIED.
+#   AppSilo               — preview Win32 App Isolation silo (Win11 24H2 /
+#                            26100+): uap18 attrs + isolatedWin32-* broker
+#                            capabilities, access is PROMPTED (consent).
 #
 # Reference:
+#   https://learn.microsoft.com/windows/msix/msix-container
 #   https://learn.microsoft.com/windows/win32/secauthz/app-isolation-overview
 #   https://learn.microsoft.com/windows/win32/secauthz/app-isolation-supported-capabilities
 #
 # Important: this is OPT-IN. Most MSIX packages should NOT enable isolation —
 # many legacy apps will break because they rely on broad filesystem/registry
-# access. Use this only after validating the app under isolation manually.
-#
-# Minimum runtime: Windows 11 24H2 (build 26100) or later.
+# access. Validate with Test-MsixIsolation / Get-MsixIsolationAdvice.
 # =============================================================================
 
 # Documented isolated-app capabilities.
@@ -59,11 +63,15 @@ function Get-MsixIsolationCapability {
     <#
     .SYNOPSIS
         Returns the set of well-known Win32-app-isolation capabilities the module
-        is aware of. Use this list to decide what to pass into Add-MsixAppIsolation.
+        is aware of. These apply to Add-MsixAppIsolation -Mode AppSilo ONLY.
 
     .DESCRIPTION
         Returns one object per capability with the following properties:
-          Name        — the string to pass to Add-MsixAppIsolation -Capabilities.
+          Name        — the string to pass to Add-MsixAppIsolation -Mode AppSilo
+                        -Capabilities. (In the default -Mode AppContainer,
+                        -Capabilities takes STANDARD package capability names
+                        instead — see Get-MsixKnownCapability — and
+                        isolatedWin32-* names are ignored with a warning.)
           ElementType — 'rescap:Capability' (isolatedWin32-*) or 'DeviceCapability'
                         (microphone, webcam). Add-MsixAppIsolation picks the correct
                         XML element automatically.
@@ -71,6 +79,10 @@ function Get-MsixIsolationCapability {
 
     .OUTPUTS
         [pscustomobject] with Name, ElementType, Description.
+        .EXAMPLE
+        # List the AppSilo capability vocabulary
+        Get-MsixIsolationCapability | Format-Table Name, Description
+
     #>
     foreach ($entry in $script:KnownIsolationCapabilities.GetEnumerator()) {
         [pscustomobject]@{
@@ -461,6 +473,10 @@ function Remove-MsixAppIsolation {
 
     .PARAMETER PfxPassword
         Signing certificate.
+        .EXAMPLE
+        # Roll isolation back to a normal full-trust packaged app
+        Remove-MsixAppIsolation -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw
+
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(

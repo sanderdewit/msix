@@ -469,6 +469,11 @@ function Get-MsixManifestApplications {
         Thin wrapper retained for backward compatibility. New code should call
         Get-MsixManifestApplication -All directly. The plural noun violates
         PSUseSingularNouns; the suppression is documented inline.
+        .EXAMPLE
+        # Enumerate the applications declared in a manifest
+        [xml]$m = Get-MsixManifest -Path app.msix
+        Get-MsixManifestApplications -Manifest $m | ForEach-Object { $_.GetAttribute('Id') }
+
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '',
         Justification = 'Plural retained as deprecated wrapper for backward compatibility; new code uses Get-MsixManifestApplication -All.')]

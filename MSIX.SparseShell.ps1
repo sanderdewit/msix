@@ -76,6 +76,10 @@ function Import-MsixSparseShellExtension {
     .OUTPUTS
         [pscustomobject] with NestedPackagePath, BasePath, ExtensionsMerged,
         FilesCopied, PathsFixed, Output.
+        .EXAMPLE
+        # Merge a nested sparse package's shell extension into the outer package
+        Import-MsixSparseShellExtension -PackagePath app.msix -SkipSigning
+
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(

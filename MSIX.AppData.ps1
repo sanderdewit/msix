@@ -95,6 +95,10 @@ function Get-MsixOrphanedAppData {
 
     .OUTPUTS
         Folder objects with .Path, .SizeMB, .LastWriteTime
+        .EXAMPLE
+        # Find leftover per-package AppData from uninstalled packages
+        Get-MsixOrphanedAppData
+
     #>
     [CmdletBinding()]
     param(
@@ -210,6 +214,10 @@ function Invoke-MsixContainerCommand {
 
     .PARAMETER AppId
         Override Application Id. Defaults to the first one in the manifest.
+        .EXAMPLE
+        # Run a command inside an installed package's container
+        Invoke-MsixContainerCommand -PackageFamilyName 'App_abc123' -Command { Get-ChildItem $env:LOCALAPPDATA }
+
     #>
     [CmdletBinding()]
     param(
@@ -244,6 +252,10 @@ function Get-MsixPackageStorageSummary {
     .SYNOPSIS
         Summarises disk usage of an installed package: install root, virtualised
         AppData (Local/Roaming/Temp), and AppContainer state.
+        .EXAMPLE
+        # Disk usage per installed package
+        Get-MsixPackageStorageSummary | Sort-Object SizeMB -Descending
+
     #>
     [CmdletBinding()]
     param(

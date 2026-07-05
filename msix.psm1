@@ -55,6 +55,7 @@ try {
 . "$PSScriptRoot\MSIX.TraceDelta.ps1"
 . "$PSScriptRoot\MSIX.RemediationPlan.ps1"
 . "$PSScriptRoot\MSIX.AutoFixLoop.ps1"
+. "$PSScriptRoot\MSIX.Distribution.ps1"
 #endregion
 
 

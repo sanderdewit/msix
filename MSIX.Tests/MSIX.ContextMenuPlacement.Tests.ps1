@@ -99,19 +99,30 @@ Describe 'Shell-extension context menu placement (TMEditX-verified pattern)' -Ta
         $src | Should -Not -Match "CreateElement\('com4:SurrogateServer'"
     }
 
-    It 'ContextMenu.ps1 emits desktop4:Extension + desktop5:ItemType/Verb (NOT desktop9)' {
+    It 'ContextMenu.ps1 emits desktop4:Extension + desktop5:ItemType/Verb as the default schema' {
         $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.ContextMenu.ps1')) -Raw
-        # The new working pattern uses desktop4 outer, desktop5 inner verbs.
+        # The default working pattern uses desktop4 outer, desktop5 inner verbs.
         $src | Should -Match "CreateElement\('desktop4:Extension'"
         $src | Should -Match "CreateElement\('desktop4:FileExplorerContextMenus'"
         $src | Should -Match "CreateElement\('desktop5:ItemType'"
         $src | Should -Match "CreateElement\('desktop5:Verb'"
-        # No CreateElement calls should reference the old desktop9 nodes.
-        # (Docstring/comments may still mention the schema for historical
-        # context — we only forbid actual element construction.)
-        $src | Should -Not -Match "CreateElement\('desktop9:Extension'"
-        $src | Should -Not -Match "CreateElement\('desktop9:ExtensionHandler'"
-        $src | Should -Not -Match "CreateElement\('desktop9:FileExplorerClassicContextMenuHandler'"
+    }
+
+    It 'desktop9 construction is gated behind the opt-in -Schema switch (issue #108)' {
+        # Since #108, desktop9 (windows.fileExplorerClassicContextMenuHandler,
+        # the MS-documented / Advanced Installer shape, Win11 21H2+) is a
+        # legitimate OPT-IN via -Schema desktop9|Both. The default stays
+        # desktop4. Guard both facts: the elements exist, and their emission
+        # is conditional on the schema flag, not unconditional.
+        $src = Get-Content -LiteralPath (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.ContextMenu.ps1')) -Raw
+        $src | Should -Match "CreateElement\('desktop9:Extension'"
+        $src | Should -Match "CreateElement\('desktop9:FileExplorerClassicContextMenuHandler'"
+        $src | Should -Match "CreateElement\('desktop9:ExtensionHandler'"
+        $src | Should -Match '\[ValidateSet\(''desktop4'',\s*''desktop9'',\s*''Both''\)\]'
+        $src | Should -Match 'if \(\$emitD9'
+        (Get-Command Add-MsixLegacyContextMenu -Module MSIX).Parameters['Schema'].Attributes |
+            Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] } |
+            ForEach-Object { $_.Mandatory | Should -BeFalse }
     }
 
     It 'CLSID is lowercased in both Add-MsixLegacyContextMenu and Add-MsixFileExplorerContextMenu' {

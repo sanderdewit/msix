@@ -126,6 +126,10 @@ function Find-MsixPlaybook {
 
     .OUTPUTS
         [pscustomobject[]] matched playbooks. Empty array when none match.
+        .EXAMPLE
+        # Which playbook matches this package?
+        Find-MsixPlaybook -PackagePath app.msix
+
     #>
     [CmdletBinding()]
     [OutputType([object[]])]

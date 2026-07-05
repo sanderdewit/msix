@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.71.3'
+    ModuleVersion     = '0.71.4'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, PSADT-style standard scripts, TMEditX-style heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -20,14 +20,18 @@
         'Add-MsixLegacyContextMenu',
         'Add-MsixLoaderSearchPathOverride',
         'Add-MsixManifestNamespace',
+        'Add-MsixPackageDependency',
         'Add-MsixProtocolHandler',
         'Add-MsixPsfV2',
         'Remove-MsixPsf',
+        'Add-MsixService',
+        'Add-MsixShellHandlerExtension',
         'Add-MsixShellVerbExtension',
         'Add-MsixSplashScreen',
         'Add-MsixStandardScript',
         'Add-MsixStartMenuFolder',
         'Add-MsixStartupTask',
+        'Add-MsixToastActivator',
         'Add-MsixVcRuntimeBundle',
         'Assert-MsixProcessSuccess',
         'Compare-MsixPackage',
@@ -78,7 +82,9 @@
         'Get-MsixRequiredAppRuntimeChannel',
         'Get-MsixRunKeyEntry',
         'Get-MsixSdkToolsVersion',
+        'Get-MsixServiceEntry',
         'Get-MsixShellContextMenuEntry',
+        'Get-MsixShellHandlerEntry',
         'Get-MsixStandardScript',
         'Get-MsixStaticAnalysis',
         'Get-MsixToolsRoot',
@@ -116,8 +122,10 @@
         'Merge-MsixFinding',
         'Mount-MsixAppAttachImage',
         'New-MsixAppAttachImage',
+        'New-MsixAppInstallerFile',
         'New-MsixFinding',
         'New-MsixManifestDocument',
+        'New-MsixModificationPackage',
         'New-MsixRemediationPlan',
         'New-MsixMfrLocalRule',
         'New-MsixMfrTraditionalRule',
@@ -156,6 +164,7 @@
         'Set-MsixManifestIdentity',
         'Set-MsixManifestMaxVersionTested',
         'Set-MsixManifestPublisher',
+        'Set-MsixMutablePackageDirectory',
         'Set-MsixRegistryWriteVirtualization',
         'Set-MsixScriptSignature',
         'Set-MsixToolsRoot',
@@ -197,7 +206,9 @@
         'Get-MsixPluginExtensionPoints',
         'Get-MsixProcMonFailures',
         'Get-MsixRunKeyEntries',
+        'Get-MsixServiceEntries',
         'Get-MsixShellContextMenuEntries',
+        'Get-MsixShellHandlerEntries',
         'Get-MsixStandardScripts',
         'Get-MsixTraceFailures',
         'Get-MsixUninstallerCandidates',
@@ -226,46 +237,46 @@
                             'TMEditX','Enterprise','CICD','Pester','PSADT')
             ProjectUri  = 'https://github.com/microsoft/MSIX-PackageSupportFramework'
             ReleaseNotes = @'
-## v0.71.3
+## v0.71.4
 
-### App isolation toolkit
-- Remove-MsixPsf (new): inverse of Add-MsixPsfV2 — restores the real
-  executable from config.json and strips the PSF payload, warning about every
-  behaviour that disappears. PSF and AppContainer isolation are mutually
-  exclusive; run this before Add-MsixAppIsolation.
-- Add-MsixAppIsolation -RemoveComServer (new): windows.comServer is invalid
-  with a partial-trust entry point; the switch strips the COM server + its
-  Explorer context-menu verbs so the package can isolate.
-- Test-MsixIsolation (new): static WouldIsolate verdict with reasons, and a
-  runtime process-token check (-ProcessId / -PackageFamilyName) for the
-  definitive S-1-15-2 AppContainer SID. Prompts are not proof; the token is.
-- Get-MsixIsolationAdvice (new): maps ProcMon ACCESS-DENIED rows to concrete
-  capability / consent suggestions per isolation mode.
+### New manifest mutators (review issues #108-#119)
+- Add-MsixService: packaged Windows services (desktop6 windows.service),
+  auto-adds packagedServices/localSystemServices, SCM dependencies.
+- Add-MsixShellHandlerExtension: preview/property/thumbnail shell handlers
+  (desktop2 on an FTA) + registry-free COM class in one call.
+- Add-MsixToastActivator: windows.toastNotificationActivation + ExeServer
+  class so toast clicks re-activate the packaged app.
+- Add-MsixPackageDependency: framework dependencies (VCLibs,
+  WindowsAppRuntime, ...) with auto-filled Microsoft publishers; MinVersion
+  raised, never lowered.
+- Set-MsixMutablePackageDirectory: desktop6 mutable install-dir projection
+  (+ modifiableApp capability).
+- Add-MsixFileTypeAssociation enriched: -Logo, -InfoTip, EditFlags
+  (-OpenIsSafe/-AlwaysUnsafe), -Verbs (SupportedVerbs).
 
-### Review fixes (#97-#102)
-- Invoke-MsixPipeline AppIsolation stage now applies the real isolation model
-  (it still used the obsolete capability-only shape — packages did not
-  isolate). Config keys: Mode / Capabilities / AppId / RemoveComServer.
-- Get-Help repaired for 62 of 166 exported functions (malformed .PARAMETER
-  tags and '.msix'-leading description lines made PowerShell reject entire
-  help blocks). A help contract test now guards this.
-- Docs: EXAMPLES isolation recipe on the two-mode API; desktop9 references
-  corrected to the implemented com + desktop4/desktop5 pattern.
-- Contract sweeps: NoSign/WhatIf now discovered dynamically; approved-verb
-  guard added. Coverage-map debt burned to empty (19 behavioural tests).
+### Context menus
+- Add-MsixLegacyContextMenu -Schema desktop4|desktop9|Both: desktop9
+  (windows.fileExplorerClassicContextMenuHandler, the MS-documented /
+  Advanced Installer shape, Win11 21H2+) is back as an opt-in;
+  desktop4/desktop5 stays the default (Win10 1809+).
 
-### Bugs fixed (caught by the new coverage tests)
-- Add-MsixFontExtension placed windows.sharedFonts at Package level; schema
-  requires Application level (MakeAppx C00CE014).
-- Add-MsixStartMenuFolder wrote a schema-invalid bare VisualGroup attribute;
-  the element must be uap3:VisualElements per MS Learn.
-- Add-MsixSplashScreen always threw (Split-Path -LiteralPath + -Parent is an
-  unresolvable parameter-set combination).
-- Add-MsixPsfV2 rejected empty -Fixups, blocking script-only PSF injection.
+### Distribution (new)
+- New-MsixAppInstallerFile: .appinstaller generation with full update policy.
+- New-MsixModificationPackage: vendor-package customization via
+  uap4:MainPackageDependency from a content folder.
 
-### Rename
-- Invoke-MsixSelfSignAndDebug -> Invoke-MsixSelfSign (alias kept). It only
-  signs — and does not rewrite the Publisher (use Update-MsixSigner for that).
+### Static analysis / autofix integration
+- New scanners Get-MsixServiceEntry + Get-MsixShellHandlerEntry; isolation
+  blockers (PSF, windows.comServer) surface as findings; autofix plans
+  Add-MsixService / Add-MsixShellHandlerExtension / VCLibs-as-dependency
+  (-VcRuntimeAsPackageDependency) and opt-in isolation (-AddAppIsolation
+  with Remove-MsixPsf preparation).
+
+### Fixes
+- Set-MsixBrandMetadata warns on pri-localized (ms-resource:) fields whose
+  displayed value comes from resources.pri.
+- Isolation docs corrected for the two-mode model; every exported function
+  now carries a Get-Help example.
 
 Full history: CHANGELOG.md.
 '@

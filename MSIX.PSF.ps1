@@ -456,6 +456,11 @@ function New-MsixPsfConfig {
         Each is merged into the matching application entry by AppId.
     .OUTPUTS
         [string] JSON
+        .EXAMPLE
+        # Build a PSF config.json for a manifest + fixups
+        [xml]$m = Get-MsixManifest -Path app.msix
+        $json = New-MsixPsfConfig -Manifest $m -Fixups @($frf)
+
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param(

@@ -23,35 +23,9 @@ AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 Describe 'Help contract: comment-based help parses for every exported function' -Tag 'Meta' {
 
     BeforeAll {
-        $script:KnownNoExample = @(
-            'Add-MsixDiagnosticTrace'
-            'Add-MsixEvidence'
-            'ConvertTo-MsixFinding'
-            'ConvertTo-MsixLegacyFinding'
-            'Find-MsixPlaybook'
-            'Get-MsixCompatibilityReport'
-            'Get-MsixFindingConfidence'
-            'Get-MsixHeuristicFinding'
-            'Get-MsixIsolationCapability'
-            'Get-MsixManifestApplications'
-            'Get-MsixOrphanedAppData'
-            'Get-MsixPackageStorageSummary'
-            'Get-MsixProcMonFailure'
-            'Get-MsixStaticAnalysis'
-            'Import-MsixRemediationPlan'
-            'Import-MsixSparseShellExtension'
-            'Invoke-MsixContainerCommand'
-            'Invoke-MsixProcMonCapture'
-            'Merge-MsixFinding'
-            'New-MsixFinding'
-            'New-MsixPsfConfig'
-            'New-MsixRemediationPlan'
-            'Remove-MsixAppIsolation'
-            'Resolve-MsixProcMonPath'
-            'Test-MsixAppAttachImage'
-            'Test-MsixRemediationPlan'
-            'Update-MsixPackageVersion'
-        )
+        # Burned down to EMPTY in issue #111. Any name added here is new debt
+        # and needs a justification in the PR.
+        $script:KnownNoExample = @()
 
         $script:Functions = @(Get-Command -Module MSIX -CommandType Function)
         $script:HelpMap = @{}

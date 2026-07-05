@@ -94,6 +94,70 @@ Describe 'Invoke-MsixAutoFixFromAnalysis planner' -Tag 'AutoFix' {
             -StartupTaskAppId 'App' -StartupTaskName 'Demo'
         $r.Plan.Stage | Should -Contain 'StartupTask'
     }
+
+    It 'Plans packaged service declarations when service entries are auto-fixable' {
+        $stub = [pscustomobject]@{
+            PackagePath = 'C:\nope.msix'
+            Findings    = @(
+                [pscustomobject]@{
+                    Severity = 'Warning'; Category = 'ManifestFix:PackagedService'; Symptom = 'x'; Recommendation = 'y'; Evidence = 'z'
+                    ServiceEntries = @([pscustomobject]@{
+                        Name = 'Svc'; VfsExecutable = 'VFS\ProgramFilesX64\App\svc.exe'
+                        StartupType = 'auto'; StartAccount = 'localService'; Dependencies = @(); CanAutoFix = $true
+                    })
+                }
+            )
+            SuggestedFixups = @()
+        }
+        $r = Invoke-MsixAutoFixFromAnalysis -Report $stub -DryRun
+        $r.Plan.Stage | Should -Contain 'AddPackagedServices'
+    }
+
+    It 'Plans shell handler extensions when registry handlers resolve to package DLLs' {
+        $stub = [pscustomobject]@{
+            PackagePath = 'C:\nope.msix'
+            Findings    = @(
+                [pscustomobject]@{
+                    Severity = 'Warning'; Category = 'ManifestFix:ShellHandlerExtension'; Symptom = 'x'; Recommendation = 'y'; Evidence = 'z'
+                    ShellHandlerEntries = @([pscustomobject]@{
+                        Kind = 'Preview'; FileType = '.lab'; FtaName = 'labpreview'
+                        Clsid = '{11112222-3333-4444-5555-666677778888}'
+                        VfsDllPath = 'VFS\ProgramFilesX64\App\Preview.dll'; CanAutoFix = $true
+                    })
+                }
+            )
+            SuggestedFixups = @()
+        }
+        $r = Invoke-MsixAutoFixFromAnalysis -Report $stub -DryRun
+        $r.Plan.Stage | Should -Contain 'AddShellHandlerExtensions'
+    }
+
+    It 'Plans a VC runtime package dependency when requested' {
+        $stub = [pscustomobject]@{
+            PackagePath = 'C:\nope.msix'
+            Findings    = @(
+                [pscustomobject]@{ Category = 'VcRuntime'; Severity = 'Warning'; Symptom = '.'; Recommendation = '.'; Evidence = 'vcruntime140.dll'; AppId = $null }
+            )
+            SuggestedFixups = @()
+        }
+        $r = Invoke-MsixAutoFixFromAnalysis -Report $stub -DryRun -VcRuntimeAsPackageDependency -VcRuntimeMinVersion '14.0.33321.0'
+        $r.Plan.Stage | Should -Contain 'AddVcRuntimePackageDependency'
+        $r.Plan.Stage | Should -Not -Contain 'BundleVcRuntimes'
+    }
+
+    It 'Plans isolation prep explicitly and skips PSF injection' {
+        $stub = [pscustomobject]@{
+            PackagePath = 'C:\nope.msix'
+            Findings    = @(
+                [pscustomobject]@{ Category = 'IsolationBlockedByPsf'; Severity = 'Warning'; Symptom = '.'; Recommendation = '.'; Evidence = 'PsfLauncher64.exe'; AppId = 'App' }
+            )
+            SuggestedFixups = @( New-MsixPsfFileRedirectionConfig -Base 'logs' -Patterns '.*\.log' )
+        }
+        $r = Invoke-MsixAutoFixFromAnalysis -Report $stub -DryRun -AddAppIsolation
+        $r.Plan.Stage | Should -Contain 'RemovePsfForIsolation'
+        $r.Plan.Stage | Should -Contain 'AddAppIsolation'
+        $r.Plan.Stage | Should -Not -Contain 'InjectPsf'
+    }
 }
 
 Describe 'Invoke-MsixAutoFixFromAnalysis: StripLegacyShellRegistry stage' -Tag 'AutoFix' {

@@ -989,10 +989,39 @@ function Add-MsixFileTypeAssociation {
     .PARAMETER DisplayName
         Friendly name in the Open With… dialog.
 
+    .PARAMETER Logo
+        Package-relative path to the per-type icon (e.g. Assets\doc.png).
+        Without it, associated files show the app tile icon. The image must
+        already exist inside the package.
+
+    .PARAMETER InfoTip
+        Hover tooltip for files of this type.
+
+    .PARAMETER OpenIsSafe
+        Sets EditFlags OpenIsSafe="true" (the type is safe to open
+        automatically, e.g. from a browser download prompt).
+
+    .PARAMETER AlwaysUnsafe
+        Sets EditFlags AlwaysUnsafe="true" (never open without prompting).
+        Mutually exclusive with -OpenIsSafe.
+
+    .PARAMETER Verbs
+        Extra context-menu verbs beyond open. Array of hashtables:
+        @{ Id = 'edit'; Parameters = '--edit "%1"'; DisplayName = 'Edit' }.
+        Emitted as uap2:SupportedVerbs / uap3:Verb.
+
     .EXAMPLE
         Add-MsixFileTypeAssociation -PackagePath app.msix -AppId App `
             -Name contosodoc -FileTypes '.cdoc','.cdocx' -DisplayName 'Contoso Document' `
             -Pfx cert.pfx -PfxPassword 'P@ss'
+
+    .EXAMPLE
+        # Rich FTA: icon, tooltip, safe-open, plus an Edit verb (issue #119)
+        Add-MsixFileTypeAssociation -PackagePath app.msix -AppId App `
+            -Name contosodoc -FileTypes '.cdoc' -DisplayName 'Contoso Document' `
+            -Logo 'Assets\cdoc.png' -InfoTip 'Contoso document file' -OpenIsSafe `
+            -Verbs @(@{ Id = 'edit'; Parameters = '--edit "%1"'; DisplayName = 'Edit' }) `
+            -SkipSigning
     #>
     [CmdletBinding(SupportsShouldProcess)]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
@@ -1024,6 +1053,11 @@ function Add-MsixFileTypeAssociation {
         })]
         [string[]]$FileTypes,
         [string]$DisplayName,
+        [string]$Logo,
+        [string]$InfoTip,
+        [switch]$OpenIsSafe,
+        [switch]$AlwaysUnsafe,
+        [hashtable[]]$Verbs,
         [string]$OutputPath,
         [Alias('NoSign')]
         [switch]$SkipSigning,
@@ -1031,6 +1065,11 @@ function Add-MsixFileTypeAssociation {
         [SecureString]$PfxPassword,
         [string]$UnsignedOutputPath
     )
+
+    if ($OpenIsSafe -and $AlwaysUnsafe) { throw '-OpenIsSafe and -AlwaysUnsafe are mutually exclusive.' }
+    foreach ($v in @($Verbs | Where-Object { $null -ne $_ })) {
+        if (-not $v.Id) { throw "Each -Verbs entry needs an Id key (got: $($v.Keys -join ', '))." }
+    }
 
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Add FTA $Name")
 
@@ -1051,10 +1090,29 @@ function Add-MsixFileTypeAssociation {
 
         $fta = $M.CreateElement('uap:FileTypeAssociation', $uap)
         $fta.SetAttribute('Name', $Name.ToLower())
+
+        # Schema-mandated child order: DisplayName, Logo, InfoTip, EditFlags,
+        # SupportedFileTypes, SupportedVerbs (issue #119).
         if ($DisplayName) {
             $dn = $M.CreateElement('uap:DisplayName', $uap)
             $dn.InnerText = $DisplayName
             $null = $fta.AppendChild($dn)
+        }
+        if ($Logo) {
+            $logoNode = $M.CreateElement('uap:Logo', $uap)
+            $logoNode.InnerText = $Logo.Replace('/', '\')
+            $null = $fta.AppendChild($logoNode)
+        }
+        if ($InfoTip) {
+            $tip = $M.CreateElement('uap:InfoTip', $uap)
+            $tip.InnerText = $InfoTip
+            $null = $fta.AppendChild($tip)
+        }
+        if ($OpenIsSafe -or $AlwaysUnsafe) {
+            $flags = $M.CreateElement('uap:EditFlags', $uap)
+            if ($OpenIsSafe)   { $flags.SetAttribute('OpenIsSafe',   'true') }
+            if ($AlwaysUnsafe) { $flags.SetAttribute('AlwaysUnsafe', 'true') }
+            $null = $fta.AppendChild($flags)
         }
 
         $supported = $M.CreateElement('uap:SupportedFileTypes', $uap)
@@ -1065,6 +1123,24 @@ function Add-MsixFileTypeAssociation {
             $null = $supported.AppendChild($type)
         }
         $null = $fta.AppendChild($supported)
+
+        if ($Verbs) {
+            Add-MsixManifestNamespace -Manifest $M -Prefix 'uap2'
+            Add-MsixManifestNamespace -Manifest $M -Prefix 'uap3'
+            $uap2 = Get-MsixManifestNamespaceUri -Prefix 'uap2'
+            $uap3 = Get-MsixManifestNamespaceUri -Prefix 'uap3'
+            $verbsNode = $M.CreateElement('uap2:SupportedVerbs', $uap2)
+            foreach ($v in $Verbs) {
+                $verbNode = $M.CreateElement('uap3:Verb', $uap3)
+                $verbNode.SetAttribute('Id', [string]$v.Id)
+                if ($v.Parameters) { $verbNode.SetAttribute('Parameters', [string]$v.Parameters) }
+                $verbText = if ($v.DisplayName) { [string]$v.DisplayName } else { [string]$v.Id }
+                $verbNode.InnerText = $verbText
+                $null = $verbsNode.AppendChild($verbNode)
+            }
+            $null = $fta.AppendChild($verbsNode)
+        }
+
         $null = $ext.AppendChild($fta)
         $null = $appExt.AppendChild($ext)
         Write-MsixLog -Level Info -Message "FTA $Name registered for: $($FileTypes -join ', ')"
@@ -1324,6 +1400,14 @@ function Set-MsixBrandMetadata {
             if (-not $node) {
                 $node = $M.CreateElement($LocalName, $Ns)
                 $null = $Parent.AppendChild($node)
+            }
+            # A pri-localized value: Windows resolves the DISPLAYED string from
+            # resources.pri, so replacing only the manifest text is a silent
+            # no-op at runtime (issue #109). Overwrite anyway (the reference is
+            # gone afterwards, which un-localizes the field) but tell the
+            # operator why the change may not show until the pri stops winning.
+            if ($node.InnerText -match '^ms-resource:') {
+                Write-MsixLog -Level Warning -Message ("{0} was pri-localized ('{1}'). The displayed value comes from resources.pri; after this edit the literal manifest value is used for THIS field, but other pri-backed fields stay localized. If the displayed name does not change, rebuild resources.pri with makepri.exe." -f $LocalName, $node.InnerText)
             }
             $node.InnerText = $Value
         }
@@ -1672,3 +1756,766 @@ function Add-MsixComServerExtension {
 
 #endregion
 
+
+#region Packaged services (desktop6, issue #112) ----------------------------
+
+function Add-MsixService {
+    <#
+    .SYNOPSIS
+        Declares a packaged Windows service (desktop6 windows.service) so the
+        service installs/starts with the MSIX package.
+
+    .DESCRIPTION
+        Adds a desktop6:Extension Category="windows.service" with a
+        desktop6:Service child under the target Application, declares the
+        required restricted capabilities (packagedServices; plus
+        localSystemServices when -StartAccount localSystem), and raises
+        MaxVersionTested to 10.0.19041.0 (packaged services shipped in
+        Windows 10 2004).
+
+        This turns the "windows service detected - unsupported" finding from
+        the limitation scanner into a fixable declaration: agents, updaters
+        and licensing services can ship inside the package.
+
+    .PARAMETER PackagePath
+        The .msix file to modify.
+
+    .PARAMETER AppId
+        Application to attach the service to (default: first Application).
+
+    .PARAMETER Executable
+        Package-relative path to the service executable
+        (e.g. VFS\ProgramFilesX64\App\agent.exe).
+
+    .PARAMETER Name
+        Service name (SCM name).
+
+    .PARAMETER StartupType
+        auto | demand | manual (schema values: auto starts with Windows).
+        Default: auto.
+
+    .PARAMETER StartAccount
+        localService (default) | localSystem | networkService.
+        localSystem additionally requires the localSystemServices restricted
+        capability, which is added automatically (Store submissions need
+        approval for it; sideload/enterprise installs are fine).
+
+    .PARAMETER Arguments
+        Optional command-line arguments for the service.
+
+    .PARAMETER Dependencies
+        Optional service names this service depends on (SCM dependencies).
+
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the signing pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package here.
+
+    .EXAMPLE
+        # Package an agent service that starts with Windows as LocalService
+        Add-MsixService -PackagePath app.msix `
+            -Executable 'VFS\ProgramFilesX64\App\agent.exe' `
+            -Name 'ContosoAgent' -StartupType auto -StartAccount localService `
+            -Pfx cert.pfx -PfxPassword $pw
+
+    .EXAMPLE
+        # LocalSystem service with SCM dependencies (adds localSystemServices)
+        Add-MsixService -PackagePath app.msix `
+            -Executable 'VFS\ProgramFilesX64\App\licsvc.exe' `
+            -Name 'ContosoLicense' -StartAccount localSystem `
+            -Dependencies 'rpcss' -SkipSigning
+
+    .LINK
+        https://learn.microsoft.com/windows/msix/desktop/convert-a-windows-service
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
+    param(
+        [Parameter(Mandatory)] [string]$PackagePath,
+        [ValidatePattern('^[A-Za-z_][A-Za-z0-9_.-]*$')]
+        [string]$AppId,
+        [Parameter(Mandatory)] [string]$Executable,
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[A-Za-z0-9_.-]+$')]
+        [string]$Name,
+        [ValidateSet('auto', 'demand', 'manual')]
+        [string]$StartupType = 'auto',
+        [ValidateSet('localService', 'localSystem', 'networkService')]
+        [string]$StartAccount = 'localService',
+        [string]$Arguments,
+        [string[]]$Dependencies,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
+    )
+
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Add packaged service '$Name'")
+
+    _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+                        -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+                        -UnsignedOutputPath $UnsignedOutputPath `
+                        -WhatIfPreview:$isWhatIf `
+                        -Activity "Add packaged service '$Name'" -Mutate {
+        param([xml]$M)
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'desktop6'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'rescap'
+        Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 19041
+        $d6 = Get-MsixManifestNamespaceUri -Prefix 'desktop6'
+
+        $app    = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
+        $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
+
+        # Idempotency: same service Name already declared?
+        if ($M.SelectSingleNode("//*[local-name()='Service' and @Name='$Name']")) {
+            Write-MsixLog -Level Info -Message "Packaged service '$Name' already declared - skipping."
+            return
+        }
+
+        $ext = $M.CreateElement('desktop6:Extension', $d6)
+        $ext.SetAttribute('Category',   'windows.service')
+        $ext.SetAttribute('Executable', $Executable.Replace('/', '\'))
+        $ext.SetAttribute('EntryPoint', 'Windows.FullTrustApplication')
+
+        $svc = $M.CreateElement('desktop6:Service', $d6)
+        $svc.SetAttribute('Name',         $Name)
+        $svc.SetAttribute('StartupType',  $StartupType)
+        $svc.SetAttribute('StartAccount', $StartAccount)
+        if ($Arguments) { $svc.SetAttribute('Arguments', $Arguments) }
+
+        if ($Dependencies) {
+            $depsNode = $M.CreateElement('desktop6:Dependencies', $d6)
+            foreach ($dep in $Dependencies) {
+                $depNode = $M.CreateElement('desktop6:DependentService', $d6)
+                $depNode.SetAttribute('Name', $dep)
+                $null = $depsNode.AppendChild($depNode)
+            }
+            $null = $svc.AppendChild($depsNode)
+        }
+
+        $null = $ext.AppendChild($svc)
+        $null = $appExt.AppendChild($ext)
+
+        # Required restricted capabilities.
+        $capsNode = $M.Package.Capabilities
+        if (-not $capsNode) {
+            $capsNode = $M.CreateElement('Capabilities', $M.Package.NamespaceURI)
+            $null     = $M.Package.AppendChild($capsNode)
+        }
+        $rescapUri = Get-MsixManifestNamespaceUri -Prefix 'rescap'
+        $needed = @('packagedServices')
+        if ($StartAccount -eq 'localSystem') { $needed += 'localSystemServices' }
+        foreach ($cap in $needed) {
+            $exists = $capsNode.ChildNodes | Where-Object {
+                $_.LocalName -eq 'Capability' -and $_.GetAttribute('Name') -eq $cap }
+            if (-not $exists) {
+                $node = $M.CreateElement('rescap:Capability', $rescapUri)
+                $node.SetAttribute('Name', $cap)
+                $null = $capsNode.AppendChild($node)
+                Write-MsixLog -Level Info -Message "Capability added: $cap"
+            }
+        }
+        Write-MsixLog -Level Info -Message "Packaged service '$Name' declared (StartupType=$StartupType, StartAccount=$StartAccount)."
+    }
+}
+
+#endregion
+
+#region Package dependencies (issue #115) ------------------------------------
+
+# Well-known framework packages: correct Publisher strings so callers only
+# need the name. All Microsoft-published frameworks share the corporate CN.
+$script:KnownFrameworkPublishers = @{
+    'Microsoft.VCLibs.140.00'            = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+    'Microsoft.VCLibs.140.00.UWPDesktop' = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+    'Microsoft.WindowsAppRuntime.1.4'    = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+    'Microsoft.WindowsAppRuntime.1.5'    = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+    'Microsoft.WindowsAppRuntime.1.6'    = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+    'Microsoft.NET.Native.Framework.2.2' = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+    'Microsoft.NET.Native.Runtime.2.2'   = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+    'Microsoft.UI.Xaml.2.8'              = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+}
+
+function Add-MsixPackageDependency {
+    <#
+    .SYNOPSIS
+        Declares a <PackageDependency> (framework dependency) in the manifest -
+        e.g. VCLibs or the Windows App SDK runtime.
+
+    .DESCRIPTION
+        Adds (or updates) a PackageDependency element under
+        Package/Dependencies. For well-known Microsoft frameworks the
+        Publisher string is filled in automatically; for custom frameworks
+        pass -Publisher explicitly.
+
+        Idempotent: if the dependency already exists, MinVersion is raised
+        when the requested version is higher (never lowered).
+
+        Alternative to bundling: Add-MsixVcRuntimeBundle copies VC runtime
+        DLLs INTO the package; this cmdlet declares a dependency on the
+        VCLibs framework package instead (smaller package, but the framework
+        must be present/deployable on the target).
+
+    .PARAMETER PackagePath
+        The .msix file to modify.
+
+    .PARAMETER Name
+        Dependency package name (e.g. Microsoft.VCLibs.140.00.UWPDesktop).
+
+    .PARAMETER MinVersion
+        Minimum version, four parts (e.g. 14.0.33321.0).
+
+    .PARAMETER Publisher
+        Publisher DN of the dependency. Auto-filled for well-known Microsoft
+        frameworks; mandatory for anything unknown.
+
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the signing pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package here.
+
+    .EXAMPLE
+        # Depend on VCLibs Desktop instead of bundling the DLLs
+        Add-MsixPackageDependency -PackagePath app.msix `
+            -Name Microsoft.VCLibs.140.00.UWPDesktop -MinVersion 14.0.33321.0 -SkipSigning
+
+    .EXAMPLE
+        # Custom in-house framework
+        Add-MsixPackageDependency -PackagePath app.msix `
+            -Name Contoso.SharedRuntime -MinVersion 1.2.0.0 `
+            -Publisher 'CN=Contoso Ltd' -SkipSigning
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
+    param(
+        [Parameter(Mandatory)] [string]$PackagePath,
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9.-]{2,49}$')]
+        [string]$Name,
+        [Parameter(Mandatory)]
+        [ValidatePattern('^\d+\.\d+\.\d+\.\d+$')]
+        [string]$MinVersion,
+        [string]$Publisher,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
+    )
+
+    if (-not $Publisher) {
+        if ($script:KnownFrameworkPublishers.ContainsKey($Name)) {
+            $Publisher = $script:KnownFrameworkPublishers[$Name]
+        } else {
+            throw "Unknown framework '$Name' - pass -Publisher explicitly (well-known: $($script:KnownFrameworkPublishers.Keys -join ', '))."
+        }
+    }
+
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Add package dependency '$Name'")
+
+    _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+                        -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+                        -UnsignedOutputPath $UnsignedOutputPath `
+                        -WhatIfPreview:$isWhatIf `
+                        -Activity "Add package dependency '$Name'" -Mutate {
+        param([xml]$M)
+
+        $deps = $M.Package.SelectSingleNode('*[local-name()="Dependencies"]')
+        if (-not $deps) {
+            $deps = $M.CreateElement('Dependencies', $M.Package.NamespaceURI)
+            $null = $M.Package.AppendChild($deps)
+        }
+
+        $existing = $deps.SelectSingleNode("*[local-name()='PackageDependency' and @Name='$Name']")
+        if ($existing) {
+            $cur = $null
+            if ([version]::TryParse($existing.GetAttribute('MinVersion'), [ref]$cur) -and $cur -ge [version]$MinVersion) {
+                Write-MsixLog -Level Info -Message "PackageDependency '$Name' already at MinVersion $cur (>= $MinVersion) - skipping."
+                return
+            }
+            $existing.SetAttribute('MinVersion', $MinVersion)
+            Write-MsixLog -Level Info -Message "PackageDependency '$Name' MinVersion raised to $MinVersion."
+            return
+        }
+
+        $node = $M.CreateElement('PackageDependency', $M.Package.NamespaceURI)
+        $node.SetAttribute('Name',       $Name)
+        $node.SetAttribute('MinVersion', $MinVersion)
+        $node.SetAttribute('Publisher',  $Publisher)
+        $null = $deps.AppendChild($node)
+        Write-MsixLog -Level Info -Message "PackageDependency added: $Name >= $MinVersion."
+    }
+}
+
+#endregion
+
+#region Shell handler extensions (issue #113) --------------------------------
+
+function Add-MsixShellHandlerExtension {
+    <#
+    .SYNOPSIS
+        Declares a preview, thumbnail or property shell handler for file types
+        (registry-free COM + the desktop2 handler element on an FTA).
+
+    .DESCRIPTION
+        Registers the handler DLL as a com:SurrogateServer class and attaches
+        the matching desktop2 element to a file-type association:
+
+          Preview   -> desktop2:DesktopPreviewHandler   (preview pane)
+          Property  -> desktop2:DesktopPropertyHandler  (details/properties)
+          Thumbnail -> desktop2:ThumbnailHandler        (thumbnail images)
+
+        The handler element is added to an existing FileTypeAssociation with
+        the given -FtaName, or a minimal FTA (Name + SupportedFileTypes) is
+        created. Per the schema, ThumbnailHandler requires the application to
+        use the full-trust entry point.
+
+    .PARAMETER PackagePath
+        The .msix file to modify.
+
+    .PARAMETER AppId
+        Application to attach to (default: first Application).
+
+    .PARAMETER Kind
+        Preview | Property | Thumbnail.
+
+    .PARAMETER Clsid
+        GUID of the handler COM class (braces optional).
+
+    .PARAMETER Dll
+        Package-relative path to the handler DLL
+        (e.g. VFS\ProgramFilesX64\App\PreviewHandler.dll).
+
+    .PARAMETER FileTypes
+        Extensions the handler serves (e.g. '.contoso', '.log').
+
+    .PARAMETER FtaName
+        Name of the FileTypeAssociation to attach to / create
+        (lowercase letters, digits, dot, dash). Default: derived from Kind.
+
+    .PARAMETER DisplayName
+        Display name for the COM surrogate server. Default: FtaName.
+
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the signing pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package here.
+
+    .EXAMPLE
+        # Preview pane support for .contoso files
+        Add-MsixShellHandlerExtension -PackagePath app.msix -Kind Preview `
+            -Clsid '{D7E6F1A2-3B4C-4D5E-9F00-112233445566}' `
+            -Dll 'VFS\ProgramFilesX64\App\PreviewHandler.dll' `
+            -FileTypes '.contoso' -SkipSigning
+
+    .EXAMPLE
+        # Thumbnails for a custom image format
+        Add-MsixShellHandlerExtension -PackagePath app.msix -Kind Thumbnail `
+            -Clsid 'a1b2c3d4-e5f6-4789-abcd-ef0123456789' `
+            -Dll 'VFS\ProgramFilesX64\App\Thumbs.dll' `
+            -FileTypes '.cimg' -Pfx cert.pfx -PfxPassword $pw
+
+    .LINK
+        https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-desktop2-desktoppreviewhandler
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
+    param(
+        [Parameter(Mandatory)] [string]$PackagePath,
+        [ValidatePattern('^[A-Za-z_][A-Za-z0-9_.-]*$')]
+        [string]$AppId,
+        [Parameter(Mandatory)]
+        [ValidateSet('Preview', 'Property', 'Thumbnail')]
+        [string]$Kind,
+        [Parameter(Mandatory)]
+        [ValidatePattern('^(\{)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\})?$')]
+        [string]$Clsid,
+        [Parameter(Mandatory)] [string]$Dll,
+        [Parameter(Mandatory)]
+        [ValidatePattern('^\.[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}$')]
+        [string[]]$FileTypes,
+        [ValidatePattern('^[a-z0-9.-]+$')]
+        [string]$FtaName,
+        [string]$DisplayName,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
+    )
+
+    $ClsidBare = $Clsid.Trim().Trim('{', '}').ToLowerInvariant()
+    if (-not $FtaName)     { $FtaName = $Kind.ToLowerInvariant() + 'handler' }
+    if (-not $DisplayName) { $DisplayName = $FtaName }
+
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Add $Kind handler")
+
+    _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+                        -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+                        -UnsignedOutputPath $UnsignedOutputPath `
+                        -WhatIfPreview:$isWhatIf `
+                        -Activity "Add $Kind handler" -Mutate {
+        param([xml]$M)
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'com'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'uap'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'desktop2'
+        Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 15063
+
+        $comUri = Get-MsixManifestNamespaceUri -Prefix 'com'
+        $uapUri = Get-MsixManifestNamespaceUri -Prefix 'uap'
+        $d2Uri  = Get-MsixManifestNamespaceUri -Prefix 'desktop2'
+
+        $handlerElement = switch ($Kind) {
+            'Preview'   { 'desktop2:DesktopPreviewHandler' }
+            'Property'  { 'desktop2:DesktopPropertyHandler' }
+            'Thumbnail' { 'desktop2:ThumbnailHandler' }
+        }
+
+        $app    = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
+        $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
+
+        # ── COM surrogate for the handler class (idempotent) ─────────────
+        if (-not $M.SelectSingleNode("//*[local-name()='Class' and @Id='$ClsidBare']")) {
+            $comExt    = $M.CreateElement('com:Extension', $comUri)
+            $comExt.SetAttribute('Category', 'windows.comServer')
+            $comServer = $M.CreateElement('com:ComServer', $comUri)
+            $surrogate = $M.CreateElement('com:SurrogateServer', $comUri)
+            $surrogate.SetAttribute('DisplayName', $DisplayName)
+            $class = $M.CreateElement('com:Class', $comUri)
+            $class.SetAttribute('Id',             $ClsidBare)
+            $class.SetAttribute('Path',           $Dll.Replace('/', '\'))
+            $class.SetAttribute('ThreadingModel', 'STA')
+            $null = $surrogate.AppendChild($class)
+            $null = $comServer.AppendChild($surrogate)
+            $null = $comExt.AppendChild($comServer)
+            $null = $appExt.AppendChild($comExt)
+        }
+
+        # ── FTA carrying the handler element ─────────────────────────────
+        $fta = $appExt.SelectSingleNode("*[local-name()='Extension' and @Category='windows.fileTypeAssociation']/*[local-name()='FileTypeAssociation' and @Name='$FtaName']")
+        if (-not $fta) {
+            $ftaExt = $M.CreateElement('uap:Extension', $uapUri)
+            $ftaExt.SetAttribute('Category', 'windows.fileTypeAssociation')
+            $fta = $M.CreateElement('uap:FileTypeAssociation', $uapUri)
+            $fta.SetAttribute('Name', $FtaName)
+            $sft = $M.CreateElement('uap:SupportedFileTypes', $uapUri)
+            foreach ($ft in $FileTypes) {
+                $ftNode = $M.CreateElement('uap:FileType', $uapUri)
+                $ftNode.InnerText = $ft.ToLowerInvariant()
+                $null = $sft.AppendChild($ftNode)
+            }
+            $null = $fta.AppendChild($sft)
+            $null = $ftaExt.AppendChild($fta)
+            $null = $appExt.AppendChild($ftaExt)
+        }
+
+        if ($fta.SelectSingleNode("*[local-name()='$($handlerElement.Split(':')[1])']")) {
+            Write-MsixLog -Level Info -Message "$Kind handler already declared on FTA '$FtaName' - skipping."
+            return
+        }
+        $handler = $M.CreateElement($handlerElement, $d2Uri)
+        $handler.SetAttribute('Clsid', $ClsidBare)
+        $null = $fta.AppendChild($handler)
+        Write-MsixLog -Level Info -Message "$Kind handler $ClsidBare declared on FTA '$FtaName' ($($FileTypes -join ', '))."
+    }
+}
+
+#endregion
+
+#region Toast notification activator (issue #114) ----------------------------
+
+function Add-MsixToastActivator {
+    <#
+    .SYNOPSIS
+        Declares a toast-notification COM activator so clicking a toast
+        (re)activates the packaged Win32 app.
+
+    .DESCRIPTION
+        Adds desktop:Extension Category="windows.toastNotificationActivation"
+        with the ToastActivatorCLSID, plus the matching com:ComServer
+        ExeServer class registration. Without both, action clicks on toasts
+        raised by a packaged Win32 app go nowhere.
+
+    .PARAMETER PackagePath
+        The .msix file to modify.
+
+    .PARAMETER AppId
+        Application to attach to (default: first Application).
+
+    .PARAMETER Clsid
+        GUID of the activator COM class (braces optional). Must match the
+        CLSID the app passes to its notification library.
+
+    .PARAMETER Executable
+        Package-relative path to the exe hosting the activator (usually the
+        main app exe).
+
+    .PARAMETER Arguments
+        Optional arguments for the activation launch (e.g.
+        '-ToastActivated').
+
+    .PARAMETER DisplayName
+        Display name for the COM server. Default: 'Toast activator'.
+
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the signing pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package here.
+
+    .EXAMPLE
+        Add-MsixToastActivator -PackagePath app.msix `
+            -Clsid '{ff1a2b3c-4d5e-6f70-8899-aabbccddeeff}' `
+            -Executable 'VFS\ProgramFilesX64\App\app.exe' `
+            -Arguments '-ToastActivated' -SkipSigning
+
+    .LINK
+        https://learn.microsoft.com/windows/apps/design/shell/tiles-and-notifications/send-local-toast-desktop
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
+    param(
+        [Parameter(Mandatory)] [string]$PackagePath,
+        [ValidatePattern('^[A-Za-z_][A-Za-z0-9_.-]*$')]
+        [string]$AppId,
+        [Parameter(Mandatory)]
+        [ValidatePattern('^(\{)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\})?$')]
+        [string]$Clsid,
+        [Parameter(Mandatory)] [string]$Executable,
+        [string]$Arguments,
+        [string]$DisplayName = 'Toast activator',
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
+    )
+
+    $ClsidBare = $Clsid.Trim().Trim('{', '}').ToLowerInvariant()
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Add toast activator')
+
+    _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+                        -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+                        -UnsignedOutputPath $UnsignedOutputPath `
+                        -WhatIfPreview:$isWhatIf `
+                        -Activity 'Add toast activator' -Mutate {
+        param([xml]$M)
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'com'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'desktop'
+        Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 16299
+
+        $comUri  = Get-MsixManifestNamespaceUri -Prefix 'com'
+        $deskUri = Get-MsixManifestNamespaceUri -Prefix 'desktop'
+
+        if ($M.SelectSingleNode("//*[local-name()='Extension' and @Category='windows.toastNotificationActivation']")) {
+            Write-MsixLog -Level Info -Message 'Toast activator already declared - skipping.'
+            return
+        }
+
+        $app    = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
+        $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
+
+        # ── COM ExeServer hosting the activator ──────────────────────────
+        $comExt    = $M.CreateElement('com:Extension', $comUri)
+        $comExt.SetAttribute('Category', 'windows.comServer')
+        $comServer = $M.CreateElement('com:ComServer', $comUri)
+        $exeServer = $M.CreateElement('com:ExeServer', $comUri)
+        $exeServer.SetAttribute('Executable',  $Executable.Replace('/', '\'))
+        $exeServer.SetAttribute('DisplayName', $DisplayName)
+        if ($Arguments) { $exeServer.SetAttribute('Arguments', $Arguments) }
+        $class = $M.CreateElement('com:Class', $comUri)
+        $class.SetAttribute('Id', $ClsidBare)
+        $null = $exeServer.AppendChild($class)
+        $null = $comServer.AppendChild($exeServer)
+        $null = $comExt.AppendChild($comServer)
+        $null = $appExt.AppendChild($comExt)
+
+        # ── Toast activation extension ────────────────────────────────────
+        $toastExt = $M.CreateElement('desktop:Extension', $deskUri)
+        $toastExt.SetAttribute('Category', 'windows.toastNotificationActivation')
+        $toast = $M.CreateElement('desktop:ToastNotificationActivation', $deskUri)
+        $toast.SetAttribute('ToastActivatorCLSID', $ClsidBare)
+        $null = $toastExt.AppendChild($toast)
+        $null = $appExt.AppendChild($toastExt)
+        Write-MsixLog -Level Info -Message "Toast activator $ClsidBare declared (Executable=$Executable)."
+    }
+}
+
+#endregion
+
+#region Mutable package directories (issue #116) -----------------------------
+
+function Set-MsixMutablePackageDirectory {
+    <#
+    .SYNOPSIS
+        Declares desktop6:MutablePackageDirectories - a writable mirror of the
+        install directory under %ProgramFiles%\ModifiableWindowsApps.
+
+    .DESCRIPTION
+        The OS-native alternative to write-virtualization/PSF redirection for
+        plugin- and mod-heavy apps: Windows projects the package's install
+        directory to %ProgramFiles%\ModifiableWindowsApps\<Target> and keeps
+        it writable. Requires the restricted 'modifiableApp' capability
+        (added automatically).
+
+        NOTE: this feature is gated - designed for desktop games/apps and
+        requires the target directory name to be approved for Store
+        distribution; enterprise sideload works when the capability is
+        accepted at deploy time. Where that gate is a problem, stay with
+        Set-MsixFileSystemWriteVirtualization or PSF FileRedirection (see
+        TEST-PLAN Scenario 4).
+
+    .PARAMETER PackagePath
+        The .msix file to modify.
+
+    .PARAMETER Directory
+        Folder name under %ProgramFiles%\ModifiableWindowsApps that receives
+        the writable projection (typically the product name).
+
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the signing pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package here.
+
+    .EXAMPLE
+        Set-MsixMutablePackageDirectory -PackagePath game.msix `
+            -Directory 'ContosoRacer' -Pfx cert.pfx -PfxPassword $pw
+
+    .LINK
+        https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-desktop6-mutablepackagedirectories
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
+    param(
+        [Parameter(Mandatory)] [string]$PackagePath,
+        [Parameter(Mandatory)]
+        [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$')]
+        [string]$Directory,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
+    )
+
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Set mutable package directory '$Directory'")
+
+    _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
+                        -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+                        -UnsignedOutputPath $UnsignedOutputPath `
+                        -WhatIfPreview:$isWhatIf `
+                        -Activity "Mutable package directory '$Directory'" -Mutate {
+        param([xml]$M)
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'desktop6'
+        Add-MsixManifestNamespace -Manifest $M -Prefix 'rescap'
+        Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 18362
+        $d6 = Get-MsixManifestNamespaceUri -Prefix 'desktop6'
+
+        # Per the schema (element-desktop6-mutablepackagedirectories):
+        # Package/Extensions > desktop6:Extension
+        # Category="windows.mutablePackageDirectories" > MutablePackageDirectories
+        # > MutablePackageDirectory Target="..." (Target UNPREFIXED).
+        $pkgExt = _MsixGetOrCreatePackageExtensions -Manifest $M
+        $dirs = $M.SelectSingleNode("//*[local-name()='MutablePackageDirectories']")
+        if (-not $dirs) {
+            $ext = $M.CreateElement('desktop6:Extension', $d6)
+            $ext.SetAttribute('Category', 'windows.mutablePackageDirectories')
+            $dirs = $M.CreateElement('desktop6:MutablePackageDirectories', $d6)
+            $null = $ext.AppendChild($dirs)
+            $null = $pkgExt.AppendChild($ext)
+        }
+        $already = @($dirs.ChildNodes) | Where-Object {
+            $_.LocalName -eq 'MutablePackageDirectory' -and $_.GetAttribute('Target') -eq $Directory
+        }
+        if ($already) {
+            Write-MsixLog -Level Info -Message "MutablePackageDirectory '$Directory' already declared - skipping."
+        } else {
+            $dir = $M.CreateElement('desktop6:MutablePackageDirectory', $d6)
+            $dir.SetAttribute('Target', $Directory)
+            $null = $dirs.AppendChild($dir)
+            Write-MsixLog -Level Info -Message "MutablePackageDirectory '$Directory' declared (projects to %ProgramFiles%\ModifiableWindowsApps\$Directory)."
+        }
+
+        $capsNode = $M.Package.Capabilities
+        if (-not $capsNode) {
+            $capsNode = $M.CreateElement('Capabilities', $M.Package.NamespaceURI)
+            $null     = $M.Package.AppendChild($capsNode)
+        }
+        $exists = $capsNode.ChildNodes | Where-Object {
+            $_.LocalName -eq 'Capability' -and $_.GetAttribute('Name') -eq 'modifiableApp' }
+        if (-not $exists) {
+            $rescapUri = Get-MsixManifestNamespaceUri -Prefix 'rescap'
+            $node = $M.CreateElement('rescap:Capability', $rescapUri)
+            $node.SetAttribute('Name', 'modifiableApp')
+            $null = $capsNode.AppendChild($node)
+            Write-MsixLog -Level Info -Message 'Capability added: modifiableApp'
+        }
+    }
+}
+
+#endregion

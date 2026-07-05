@@ -94,6 +94,10 @@ function Get-MsixFindingConfidence {
 
     .OUTPUTS
         [double] in [0.0, 1.0]
+        .EXAMPLE
+        # Score a finding set
+        $findings | Get-MsixFindingConfidence
+
     #>
     [CmdletBinding()]
     [OutputType([double])]
@@ -160,6 +164,10 @@ function New-MsixFinding {
 
     .OUTPUTS
         [pscustomobject] PSTypeName 'MsixFinding'.
+        .EXAMPLE
+        # Construct a finding by hand (e.g. from a custom scanner)
+        New-MsixFinding -Area Registry -Title 'Run key found' -Severity Warning
+
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -232,6 +240,10 @@ function Add-MsixEvidence {
     .OUTPUTS
         The same finding object (for fluent chaining: New-MsixFinding ...
         | Add-MsixEvidence ...).
+        .EXAMPLE
+        # Attach a captured log as evidence to a finding
+        $finding | Add-MsixEvidence -Kind Log -Path .\procmon.csv
+
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -305,6 +317,10 @@ function ConvertTo-MsixFinding {
 
     .OUTPUTS
         [pscustomobject] PSTypeName 'MsixFinding'.
+        .EXAMPLE
+        # Normalize raw scanner output into finding objects
+        $raw | ConvertTo-MsixFinding -Area Shell
+
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -373,6 +389,10 @@ function Merge-MsixFinding {
 
     .OUTPUTS
         [object[]] de-duplicated MsixFinding array.
+        .EXAMPLE
+        # Deduplicate/merge findings from multiple scanners
+        $all = Merge-MsixFinding -Findings ($scan1 + $scan2)
+
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -440,6 +460,10 @@ function ConvertTo-MsixLegacyFinding {
         object, so this is mostly a passthrough; the explicit conversion
         exists so callers can request the narrowed shape without relying
         on PowerShell's quiet property-tolerance.
+        .EXAMPLE
+        # Downgrade rich findings to the legacy shape for older consumers
+        $findings | ConvertTo-MsixLegacyFinding
+
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]

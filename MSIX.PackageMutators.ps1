@@ -885,6 +885,10 @@ function Update-MsixPackageVersion {
         If signing fails, preserve the unsigned scratch package at this path
         for inspection. The user's -PackagePath is left byte-equal to before
         the call in this scenario.
+        .EXAMPLE
+        # Bump the package version (e.g. for a re-release)
+        Update-MsixPackageVersion -PackagePath app.msix -Version 2.1.0.0 -SkipSigning
+
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '',
         Justification = 'ShouldProcess is invoked inside _MsixMutatePackage; PSSA cannot trace it through the scriptblock dispatch (issue #40).')]

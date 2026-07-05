@@ -728,11 +728,17 @@ function Get-MsixServiceEntry {
 
                         $exe = _MsixExtractExecutableFromCommandLine -CommandLine $imagePath
                         $vfsExe = _MsixRegPathToVfsRelative -RegPath $exe -WorkspacePath $workspace
+                        # SCM Start values: 0=boot, 1=system (kernel drivers),
+                        # 2=auto, 3=demand/manual, 4=DISABLED. Only 2 and 3 map
+                        # to a packaged-service StartupType; anything else must
+                        # never be auto-fixed - re-declaring a disabled service
+                        # would silently re-enable it, and boot/system drivers
+                        # cannot be packaged at all.
                         $startRaw = _MsixOfflineGetValue -Parent $hive -SubKey $svcPath -Name 'Start'
                         $startupType = switch ([string]$startRaw) {
                             '2' { 'auto'; break }
                             '3' { 'demand'; break }
-                            default { 'manual' }
+                            default { $null }
                         }
 
                         $objectName = _MsixOfflineGetValue -Parent $hive -SubKey $svcPath -Name 'ObjectName'
@@ -752,9 +758,10 @@ function Get-MsixServiceEntry {
                             Executable    = $exe
                             VfsExecutable = $vfsExe
                             StartupType   = $startupType
+                            StartRaw      = [string]$startRaw
                             StartAccount  = $startAccount
                             Dependencies  = $deps
-                            CanAutoFix    = [bool]($vfsExe -and $startAccount)
+                            CanAutoFix    = [bool]($vfsExe -and $startAccount -and $startupType)
                         })
                     }
                 } finally {
@@ -839,8 +846,11 @@ function Get-MsixShellHandlerEntry {
                             $vfsDll = if ($dll) { _MsixRegPathToVfsRelative -RegPath $dll -WorkspacePath $workspace } else { $null }
                             $results.Add([pscustomobject]@{
                                 Kind       = $h.Kind
-                                FileType   = $ext
-                                FtaName    = (($ext.TrimStart('.')) + $h.Kind.ToLowerInvariant())
+                                FileType   = $ext.ToLowerInvariant()
+                                # Lowercased end-to-end: Add-MsixShellHandlerExtension's
+                                # FtaName pattern is ^[a-z0-9.-]+$, so an uppercase
+                                # extension key (.TXT) must not leak through here.
+                                FtaName    = (($ext.TrimStart('.')) + $h.Kind).ToLowerInvariant()
                                 Clsid      = $clsid
                                 DllPath    = $dll
                                 VfsDllPath = $vfsDll
@@ -851,6 +861,39 @@ function Get-MsixShellHandlerEntry {
                 }
             } finally {
                 _MsixOfflineCloseKey -Key $classesKey
+            }
+
+            # Property handlers have a SECOND (and canonical) registration
+            # point outside HKCR: SOFTWARE\Microsoft\Windows\CurrentVersion\
+            # PropertySystem\PropertyHandlers\<.ext> with the CLSID as the
+            # default value. shellex\PropertyHandler (scanned above) is the
+            # legacy/alternate spot; most real handlers only register here.
+            $propRoot = 'REGISTRY\MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\PropertySystem\PropertyHandlers'
+            $propKey = _MsixOfflineOpenKey -Parent $hive -SubKey $propRoot
+            if ($propKey -ne [IntPtr]::Zero) {
+                try {
+                    foreach ($ext in (_MsixOfflineEnumSubKeys -Key $propKey)) {
+                        if ($ext -notmatch '^\.') { continue }
+                        $clsid = _MsixOfflineGetValue -Parent $hive -SubKey "$propRoot\$ext" -Name ''
+                        if (-not $clsid) { continue }
+                        if ($clsid -notmatch '^\{') { $clsid = "{$clsid}" }
+                        if ($clsid -notmatch $clsidGuidRegex) { continue }
+
+                        $dll = _MsixGetClsidInProcServerPath -Hive $hive -Clsid $clsid
+                        $vfsDll = if ($dll) { _MsixRegPathToVfsRelative -RegPath $dll -WorkspacePath $workspace } else { $null }
+                        $results.Add([pscustomobject]@{
+                            Kind       = 'Property'
+                            FileType   = $ext.ToLowerInvariant()
+                            FtaName    = (($ext.TrimStart('.')) + 'property').ToLowerInvariant()
+                            Clsid      = $clsid
+                            DllPath    = $dll
+                            VfsDllPath = $vfsDll
+                            CanAutoFix = [bool]($vfsDll)
+                        })
+                    }
+                } finally {
+                    _MsixOfflineCloseKey -Key $propKey
+                }
             }
         } finally {
             _MsixCloseOfflineHive -Hive $hive

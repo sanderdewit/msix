@@ -1084,3 +1084,119 @@ function Add-MsixPackageCertificate {
 }
 
 #endregion
+
+#region resources.pri regeneration (issue #124) ------------------------------
+
+function Update-MsixResourcePri {
+    <#
+    .SYNOPSIS
+        Regenerates resources.pri from the package payload with makepri.exe so
+        manifest string edits (DisplayName etc.) actually take effect on
+        pri-localized packages.
+
+    .DESCRIPTION
+        Windows resolves ms-resource: references from resources.pri, not from
+        the manifest text - editing the manifest alone is a silent no-op on
+        localized packages (issue #109 warns about this; this cmdlet fixes it).
+
+        Inside the unpacked package this runs the SDK's makepri.exe:
+          1. createconfig  (default qualifier: -DefaultLanguage, en-US)
+          2. new /pr <payload> /mn AppxManifest.xml -> fresh resources.pri
+        The temporary priconfig.xml is removed before repacking; the package
+        is repacked + signed atomically. makepri.exe is Authenticode-verified
+        like the rest of the toolchain.
+
+        NOTE: regeneration indexes the CURRENT payload (strings, images,
+        resources.resw if present). For a typical repackaged Win32 app the
+        result is a minimal pri that lets literal manifest values win - which
+        is exactly what you want after Set-MsixBrandMetadata.
+
+    .PARAMETER PackagePath
+        The .msix file to regenerate the pri for.
+
+    .PARAMETER DefaultLanguage
+        Default language qualifier for makepri createconfig. Default en-US.
+
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the signing pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package here.
+
+    .EXAMPLE
+        # After rebranding a pri-localized package, make the literals stick:
+        Set-MsixBrandMetadata -PackagePath app.msix -DisplayName 'Contoso' -SkipSigning
+        Update-MsixResourcePri -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw
+
+    .EXAMPLE
+        # Or in one call:
+        Set-MsixBrandMetadata -PackagePath app.msix -DisplayName 'Contoso' `
+            -RegeneratePri -Pfx cert.pfx -PfxPassword $pw
+
+    .LINK
+        https://learn.microsoft.com/windows/uwp/app-resources/makepri-exe-command-options
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '',
+        Justification = 'ShouldProcess is invoked inside _MsixMutatePackage; PSSA cannot trace it through the scriptblock dispatch (issue #40).')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '',
+        Justification = 'Parameters are captured by the -Mutator scriptblock passed to _MsixMutatePackage.')]
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] [string]$PackagePath,
+        [ValidatePattern('^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$')]
+        [string]$DefaultLanguage = 'en-US',
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
+    )
+
+    $null = _MsixMutatePackage -PackagePath $PackagePath -Operation 'pri' `
+        -OutputPath $OutputPath -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+        -UnsignedOutputPath $UnsignedOutputPath `
+        -NoChangeMessage 'resources.pri unchanged.' `
+        -Mutator {
+            param($workspace)
+
+            $toolsRoot = Get-MsixToolsRoot
+            $makepri = @(
+                (Join-Path -Path $toolsRoot -ChildPath 'Tools\makepri.exe'),
+                (Join-Path -Path $toolsRoot -ChildPath 'makepri.exe')
+            ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+            if (-not $makepri) {
+                throw "makepri.exe not found under '$toolsRoot'. Run Install-MsixSdkTool / Initialize-MsixToolchain first."
+            }
+
+            $cfg = Join-Path -Path $workspace -ChildPath 'priconfig.xml'
+            $pri = Join-Path -Path $workspace -ChildPath 'resources.pri'
+            try {
+                $r = Invoke-MsixProcess -FilePath $makepri -ArgumentList @(
+                    'createconfig', '/cf', $cfg, '/dq', "lang-$DefaultLanguage", '/o')
+                Assert-MsixProcessSuccess -Result $r -Operation 'makepri createconfig'
+
+                $r = Invoke-MsixProcess -FilePath $makepri -ArgumentList @(
+                    'new', '/pr', $workspace, '/cf', $cfg,
+                    '/mn', (Join-Path -Path $workspace -ChildPath 'AppxManifest.xml'),
+                    '/of', $pri, '/o')
+                Assert-MsixProcessSuccess -Result $r -Operation 'makepri new'
+            } finally {
+                if (Test-Path -LiteralPath $cfg) { [IO.File]::Delete($cfg) }
+            }
+
+            Write-MsixLog -Level Info -Message "resources.pri regenerated (default language $DefaultLanguage)."
+            @{ ResourcePri = 'resources.pri'; DefaultLanguage = $DefaultLanguage }
+        }
+}
+
+#endregion

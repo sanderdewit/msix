@@ -1,14 +1,17 @@
 ﻿BeforeAll {
     Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
+    . (Join-Path -Path $PSScriptRoot -ChildPath 'Build-MsixTestFixture.ps1')
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
-# Coverage for #17 — the SignerSignEx backend is RESERVED (API surface only).
-# The real mssign32!SignerSignEx2 P/Invoke implementation is intentionally not
-# shipped until it can be validated on Windows against a real code-signing
-# certificate, so the actual-signing test is skipped (documented below).
+# =============================================================================
+# SignerSignEx backend (#17 / #126): in-process certificate handling so local
+# PFX signing never puts the password (or PFX path) on a process command line.
+# The explicit -Signer must win over the SignToolPfx parameter-set inference
+# (fail-closed contract, #77).
+# =============================================================================
 
-Describe 'SignerSignEx reserved backend (#17)' -Tag 'Signing' {
+Describe 'SignerSignEx backend (#17 / #126 / #77)' -Tag 'Signing' {
 
     It 'is an accepted value of -Signer' {
         $signerParam = (Get-Command Invoke-MsixSigning).Parameters['Signer']
@@ -17,45 +20,96 @@ Describe 'SignerSignEx reserved backend (#17)' -Tag 'Signing' {
         $validate.ValidValues | Should -Contain 'SignerSignEx'
     }
 
-    It 'throws a clear not-yet-implemented error and never invokes signtool' {
-        $spawned = $false
-        Mock -ModuleName MSIX Get-MsixToolsRoot { 'C:\fake-tools' }
-        Mock -ModuleName MSIX Invoke-MsixProcess { $script:spawned = $true; [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
-        # PackagePath just needs to exist far enough to reach the backend switch.
-        $pkg = Join-Path -Path $TestDrive -ChildPath 'p.msix'
+    It 'requires a PFX (its purpose is safe local PFX signing)' {
+        $pkg = Join-Path -Path $TestDrive -ChildPath 'nopfx.msix'
         Set-Content -LiteralPath $pkg -Value 'stub' -Encoding ascii
-
         { Invoke-MsixSigning -PackagePath $pkg -Signer SignerSignEx } |
-            Should -Throw -ExpectedMessage '*not yet implemented*'
-
-        Should -Invoke -ModuleName MSIX Invoke-MsixProcess -Times 0
+            Should -Throw -ExpectedMessage '*requires -Pfx*'
     }
 
-    It 'fails closed even when PFX parameters push it into the SignToolPfx set (issue #77)' {
-        # -Pfx/-PfxPassword bind the SignToolPfx parameter set, whose set-name
-        # inference used to override the explicit -Signer SignerSignEx and
-        # silently enter the SignTool path (command-line password exposure).
-        Mock -ModuleName MSIX Get-MsixToolsRoot { 'C:\fake-tools' }
-        Mock -ModuleName MSIX Invoke-MsixProcess { [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' } }
-        $pkg = Join-Path -Path $TestDrive -ChildPath 'p77.msix'
+    It 'passes only the thumbprint to signtool — never the PFX path or password (#17)' {
+        # Real self-signed PFX so the in-process X509Certificate2 load succeeds;
+        # signtool itself is mocked so we can inspect the argument list.
+        $work = Join-Path -Path $TestDrive -ChildPath 'ss'
+        New-Item -ItemType Directory -Path $work -Force | Out-Null
+        $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=SignerSignExTest' `
+                    -CertStoreLocation Cert:\CurrentUser\My
+        $thumb = $cert.Thumbprint
+        $pfx = Join-Path $work 'c.pfx'
+        $pw  = [System.Security.SecureString]::new(); 'p'.ToCharArray() | ForEach-Object { $pw.AppendChar($_) }; $pw.MakeReadOnly()
+        Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pw | Out-Null
+        Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumb" -Force -ErrorAction SilentlyContinue
+
+        Mock -ModuleName MSIX Get-MsixToolsRoot { $work }
+        Mock -ModuleName MSIX Invoke-MsixProcess { [pscustomobject]@{ ExitCode = 0; StdOut = 'ok'; StdErr = '' } }
+
+        $pkg = Join-Path $work 'p.msix'
         Set-Content -LiteralPath $pkg -Value 'stub' -Encoding ascii
-        $pfx = Join-Path -Path $TestDrive -ChildPath 'p77.pfx'
-        Set-Content -LiteralPath $pfx -Value 'stub' -Encoding ascii
-        $pw  = [System.Security.SecureString]::new()
-        $pw.AppendChar('x'); $pw.MakeReadOnly()
+        try {
+            Invoke-MsixSigning -PackagePath $pkg -Signer SignerSignEx -Pfx $pfx -PfxPassword $pw
+        } finally {
+            # Belt-and-suspenders: ensure the temp store entry is gone.
+            Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumb" -Force -ErrorAction SilentlyContinue
+        }
 
-        { Invoke-MsixSigning -PackagePath $pkg -Signer SignerSignEx -Pfx $pfx -PfxPassword $pw } |
-            Should -Throw -ExpectedMessage '*not yet implemented*'
-
-        Should -Invoke -ModuleName MSIX Invoke-MsixProcess -Times 0
+        Should -Invoke -ModuleName MSIX Invoke-MsixProcess -Times 1 -ParameterFilter {
+            # thumbprint present via /sha1; PFX path and password absent.
+            ($ArgumentList -contains '/sha1') -and
+            ($ArgumentList -contains $thumb) -and
+            (-not ($ArgumentList -contains $pfx)) -and
+            (-not ($ArgumentList -contains '/f')) -and
+            (-not ($ArgumentList -contains '/p'))
+        }
     }
 
-    It 'real SignerSignEx2 signing path' -Skip {
-        # SKIPPED BY DESIGN (#17): exercising the actual mssign32!SignerSignEx2
-        # P/Invoke requires Windows + a real code-signing certificate and a way
-        # to verify the produced Authenticode signature. This cannot run in the
-        # cross-platform unit suite. Implement and un-skip when the backend is
-        # built and validated on a Windows host with a test cert.
-        $true | Should -BeTrue
+    It 'explicit -Signer SignerSignEx wins over the SignToolPfx parameter set (#77)' {
+        # -Pfx/-PfxPassword bind the SignToolPfx set; the explicit signer must
+        # still route to SignerSignEx (thumbprint path), not the SignTool /p path.
+        $work = Join-Path -Path $TestDrive -ChildPath 'win'
+        New-Item -ItemType Directory -Path $work -Force | Out-Null
+        $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=SignerSignExWin' `
+                    -CertStoreLocation Cert:\CurrentUser\My
+        $thumb = $cert.Thumbprint
+        $pfx = Join-Path $work 'c.pfx'
+        $pw  = [System.Security.SecureString]::new(); 'p'.ToCharArray() | ForEach-Object { $pw.AppendChar($_) }; $pw.MakeReadOnly()
+        Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pw | Out-Null
+        Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumb" -Force -ErrorAction SilentlyContinue
+
+        Mock -ModuleName MSIX Get-MsixToolsRoot { $work }
+        Mock -ModuleName MSIX Invoke-MsixProcess { [pscustomobject]@{ ExitCode = 0; StdOut = 'ok'; StdErr = '' } }
+        $pkg = Join-Path $work 'p.msix'
+        Set-Content -LiteralPath $pkg -Value 'stub' -Encoding ascii
+        try {
+            Invoke-MsixSigning -PackagePath $pkg -Signer SignerSignEx -Pfx $pfx -PfxPassword $pw
+        } finally {
+            Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumb" -Force -ErrorAction SilentlyContinue
+        }
+        Should -Invoke -ModuleName MSIX Invoke-MsixProcess -Times 1 -ParameterFilter {
+            ($ArgumentList -contains '/sha1') -and (-not ($ArgumentList -contains '/p'))
+        }
+    }
+
+    It 'removes the temporary store certificate after signing' {
+        $work = Join-Path -Path $TestDrive -ChildPath 'cleanup'
+        New-Item -ItemType Directory -Path $work -Force | Out-Null
+        $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=SignerSignExCleanup' `
+                    -CertStoreLocation Cert:\CurrentUser\My
+        $thumb = $cert.Thumbprint
+        $pfx = Join-Path $work 'c.pfx'
+        $pw  = [System.Security.SecureString]::new(); 'p'.ToCharArray() | ForEach-Object { $pw.AppendChar($_) }; $pw.MakeReadOnly()
+        Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $pw | Out-Null
+        Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumb" -Force -ErrorAction SilentlyContinue
+
+        Mock -ModuleName MSIX Get-MsixToolsRoot { $work }
+        Mock -ModuleName MSIX Invoke-MsixProcess { [pscustomobject]@{ ExitCode = 0; StdOut = 'ok'; StdErr = '' } }
+        $pkg = Join-Path $work 'p.msix'
+        Set-Content -LiteralPath $pkg -Value 'stub' -Encoding ascii
+        try {
+            Invoke-MsixSigning -PackagePath $pkg -Signer SignerSignEx -Pfx $pfx -PfxPassword $pw
+            # We imported it (it was not present before) so it must be gone now.
+            @(Get-ChildItem "Cert:\CurrentUser\My\$thumb" -ErrorAction SilentlyContinue).Count | Should -Be 0
+        } finally {
+            Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumb" -Force -ErrorAction SilentlyContinue
+        }
     }
 }

@@ -5,6 +5,54 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.72.0 - 2026-07-05 — Bundles, resource-PRI regeneration, runtime deployment testing, in-process signing
+
+The first feature release beyond post-processing: multi-arch bundles,
+localization repair, a Rimo3-style runtime verification loop, and safe local
+signing.
+
+### .msixbundle handling (#125)
+
+- **`New-MsixBundle`** / **`Expand-MsixBundle`** / **`Get-MsixBundleInfo`** —
+  MakeAppx bundle/unbundle wrappers + inner-package inventory (name, version,
+  architecture, resource language).
+- **`Invoke-MsixBundleOperation`** — the bridge that gives *every* existing
+  mutator bundle support without per-cmdlet changes: unbundle → run a
+  scriptblock per inner package (optionally filtered by `-Architecture`, with
+  resource packages passed through) → rebundle → sign, atomically (the original
+  bundle is only replaced after a successful repack+sign).
+
+### resources.pri regeneration (#124)
+
+- **`Update-MsixResourcePri`** — regenerates `resources.pri` via makepri
+  (Authenticode-verified), repacks and signs. Fixes the root cause behind the
+  #109 warning: brand/identity edits on `ms-resource:`-localized packages that
+  previously had no runtime effect.
+- **`Set-MsixBrandMetadata -RegeneratePri`** — replaces the `ms-resource:`
+  reference with the literal value *and* rebuilds the PRI so the displayed
+  string actually changes.
+
+### Runtime deployment testing (Rimo3-style loop)
+
+- **`Test-MsixDeployment`** — installs a signed package into a clean Hyper-V VM
+  via PowerShell Direct (no VM networking), launches it through
+  `shell:AppsFolder`, and probes liveness (process alive after settle, no WER
+  crash, no AppXDeployment errors, optional `-RequireWindow`). Returns a verdict
+  object shaped like the other `Test-Msix*` results (bottom-line boolean +
+  reasons + event-log artifacts) with optional checkpoint restore. On failure
+  the artifacts feed straight into the existing analyze → autofix loop. VM
+  interaction is behind a mockable seam; orchestration is unit-tested.
+
+### In-process signing (#17 / #126)
+
+- **`Invoke-MsixSigning -Signer SignerSignEx`** now implemented — the safe
+  local-PFX path. The password decrypts only in-process to load the certificate
+  into an ephemeral `CurrentUser\My` entry; signtool selects it by thumbprint
+  (public), so neither the PFX password nor its path ever appears on a process
+  command line (the SignTool `/f /p` weakness). The temporary store entry is
+  removed afterward. Explicit `-Signer` now always wins over the SignToolPfx
+  parameter-set inference (extends the #77 fail-closed contract).
+
 ## v0.71.4 - 2026-07-05 — Manifest feature coverage: services, shell handlers, dependencies, distribution
 
 The v2 review's missing-feature list implemented (issues #108-#119, all but

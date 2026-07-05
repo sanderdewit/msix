@@ -213,13 +213,17 @@ Add-MsixPsfV2 -PackagePath app.msix -Fixups @($mfr) -Pfx cert.pfx -PfxPassword $
 
 ## Signing backends
 
-Three backends, all accepting `[SecureString]` for any secret:
+Four backends, all accepting `[SecureString]` for any secret:
 
 ```powershell
 $pw = Read-Host -AsSecureString
 
 # Local signtool + PFX (emits Write-Warning about cmdline exposure)
 Invoke-MsixSigning -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw
+
+# Safe local PFX (SignerSignEx): the password loads the cert in-process and
+# signtool signs by thumbprint — the password/PFX path never hit the cmdline.
+Invoke-MsixSigning -PackagePath app.msix -Signer SignerSignEx -Pfx cert.pfx -PfxPassword $pw
 
 # Azure Trusted Signing (recommended for production)
 Invoke-MsixSigning -PackagePath app.msix -Signer TrustedSigning `
@@ -383,6 +387,32 @@ Scanners feed these into `Invoke-MsixInvestigation` findings and
 a `.appinstaller` with the full auto-update policy; `New-MsixModificationPackage`
 builds a `uap4:MainPackageDependency` customization package that layers
 settings/plugins onto a vendor MSIX without touching it.
+
+**Multi-arch bundles:** `New-MsixBundle` / `Expand-MsixBundle` /
+`Get-MsixBundleInfo` wrap MakeAppx bundle operations, and
+`Invoke-MsixBundleOperation` applies any mutator to each inner package
+(unbundle → mutate → rebundle → sign) so the whole toolkit works on
+`.msixbundle` inputs, not just single `.msix` files.
+
+**Localization repair:** `Update-MsixResourcePri` regenerates `resources.pri`
+via makepri, and `Set-MsixBrandMetadata -RegeneratePri` makes brand edits on
+`ms-resource:`-localized packages actually take effect at runtime.
+
+## Runtime deployment testing
+
+Static analysis says whether a package *should* work; `Test-MsixDeployment`
+proves whether it *does*. It installs a signed package into a clean Hyper-V VM
+over PowerShell Direct (no VM networking), launches it via `shell:AppsFolder`,
+and probes liveness — returning a verdict object shaped like the other
+`Test-Msix*` results, with the event-log artifacts wired to feed the
+analyze → autofix loop.
+
+```powershell
+$cred = Get-Credential
+Test-MsixDeployment -PackagePath app.msix -VMName 'Win11-24H2' `
+    -Credential $cred -CertPath app.cer -Checkpoint 'clean'
+# -> Passed / Reasons / ProcessAlive / CrashDetected / EventLogArtifacts
+```
 
 ---
 

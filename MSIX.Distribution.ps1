@@ -314,3 +314,253 @@ function New-MsixModificationPackage {
         if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
+
+#region .msixbundle handling (issue #125) ------------------------------------
+
+function Expand-MsixBundle {
+    <#
+    .SYNOPSIS
+        Unbundles a .msixbundle into its inner .msix packages.
+
+    .PARAMETER BundlePath
+        The .msixbundle file.
+
+    .PARAMETER OutputFolder
+        Folder to unbundle into. Created if missing. Default: a new workspace.
+
+    .EXAMPLE
+        Expand-MsixBundle -BundlePath app.msixbundle -OutputFolder C:\work\inner
+
+    .OUTPUTS
+        [pscustomobject] with OutputFolder and Packages (FileInfo[] of the
+        inner .msix files, excluding the bundle metadata).
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)] [string]$BundlePath,
+        [string]$OutputFolder
+    )
+
+    if (-not (Test-Path -LiteralPath $BundlePath -PathType Leaf)) { throw "Bundle not found: $BundlePath" }
+    if (-not $OutputFolder) {
+        $OutputFolder = New-MsixWorkspace -PackageName ([IO.Path]::GetFileNameWithoutExtension($BundlePath) + '-unbundle')
+    }
+    if (-not $PSCmdlet.ShouldProcess($BundlePath, "Unbundle to $OutputFolder")) { return }
+
+    $toolsRoot = Get-MsixToolsRoot
+    $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unbundle', '/p', $BundlePath, '/d', $OutputFolder, '/o')
+    Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unbundle'
+
+    $inner = @(Get-ChildItem -LiteralPath $OutputFolder -File |
+        Where-Object { $_.Extension -in '.msix', '.appx' })
+    Write-MsixLog -Level Info -Message "Unbundled $($inner.Count) inner package(s) from $([IO.Path]::GetFileName($BundlePath))."
+
+    [pscustomobject]@{
+        OutputFolder = $OutputFolder
+        Packages     = $inner
+    }
+}
+
+
+function New-MsixBundle {
+    <#
+    .SYNOPSIS
+        Bundles a folder of .msix packages into a signed .msixbundle.
+
+    .PARAMETER SourceFolder
+        Folder containing the .msix files to bundle (same Identity Name and
+        Version across packages; architectures/languages may differ).
+
+    .PARAMETER OutputPath
+        The .msixbundle to write.
+
+    .PARAMETER BundleVersion
+        Optional explicit bundle version (defaults to MakeAppx's derivation
+        from the current timestamp when omitted).
+
+    .PARAMETER SkipSigning
+        Skip the signing pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .EXAMPLE
+        New-MsixBundle -SourceFolder C:\work\inner -OutputPath app.msixbundle `
+            -Pfx cert.pfx -PfxPassword $pw
+
+    .OUTPUTS
+        [pscustomobject] with BundlePath and PackageCount.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)] [string]$SourceFolder,
+        [Parameter(Mandatory)] [string]$OutputPath,
+        [ValidatePattern('^\d+\.\d+\.\d+\.\d+$')]
+        [string]$BundleVersion,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword
+    )
+
+    if (-not (Test-Path -LiteralPath $SourceFolder -PathType Container)) { throw "SourceFolder not found: $SourceFolder" }
+    $inner = @(Get-ChildItem -LiteralPath $SourceFolder -File | Where-Object { $_.Extension -in '.msix', '.appx' })
+    if (-not $inner) { throw "No .msix/.appx packages found in $SourceFolder." }
+    if (-not $PSCmdlet.ShouldProcess($OutputPath, "Bundle $($inner.Count) package(s)")) { return }
+
+    $toolsRoot = Get-MsixToolsRoot
+    $bundleArgs = @('bundle', '/d', $SourceFolder, '/p', $OutputPath, '/o')
+    if ($BundleVersion) { $bundleArgs += @('/bv', $BundleVersion) }
+    $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList $bundleArgs
+    Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx bundle'
+
+    if (-not $SkipSigning) {
+        if ($Pfx) { Invoke-MsixSigning -PackagePath $OutputPath -Pfx $Pfx -PfxPassword $PfxPassword }
+        else      { Invoke-MsixSigning -PackagePath $OutputPath }
+    }
+    Write-MsixLog -Level Info -Message "Bundle created: $OutputPath ($($inner.Count) inner package(s))."
+
+    [pscustomobject]@{
+        BundlePath   = $OutputPath
+        PackageCount = $inner.Count
+    }
+}
+
+
+function Invoke-MsixBundleOperation {
+    <#
+    .SYNOPSIS
+        Runs any package mutation against every inner .msix of a .msixbundle,
+        then rebundles and signs once - bundle support for ALL mutators
+        without per-cmdlet changes.
+
+    .DESCRIPTION
+        Unbundles, invokes -Operation once per inner package (the scriptblock
+        receives the inner .msix path; call any module mutator with
+        -SkipSigning inside), removes the stale bundle metadata, rebundles
+        with the SAME bundle version (inner package contents changed but
+        identities did not), and signs the result.
+
+        The bundle signature and every inner package signature are
+        invalidated by mutation, so the operation signs the inner packages
+        and the bundle in the final pass unless -SkipSigning.
+
+    .PARAMETER BundlePath
+        The .msixbundle to operate on.
+
+    .PARAMETER Operation
+        Scriptblock receiving each inner package path. Use -SkipSigning on
+        mutators inside; signing happens once at the end.
+
+    .PARAMETER Architecture
+        Restrict the operation to inner packages of this architecture
+        (read from each inner manifest's Identity). Others pass through
+        unchanged. Default: all.
+
+    .PARAMETER OutputPath
+        Write the rebuilt bundle here instead of overwriting -BundlePath.
+
+    .PARAMETER SkipSigning
+        Skip signing of inner packages and the bundle. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .EXAMPLE
+        # Add a capability to every inner package of a bundle
+        Invoke-MsixBundleOperation -BundlePath app.msixbundle -Operation {
+            param($pkg)
+            Add-MsixCapability -PackagePath $pkg -Names runFullTrust -SkipSigning
+        } -Pfx cert.pfx -PfxPassword $pw
+
+    .EXAMPLE
+        # Isolate only the x64 flavour
+        Invoke-MsixBundleOperation -BundlePath app.msixbundle -Architecture x64 -Operation {
+            param($pkg)
+            Add-MsixAppIsolation -PackagePath $pkg -SkipSigning
+        } -SkipSigning
+
+    .OUTPUTS
+        [pscustomobject] with BundlePath, PackagesMutated, PackagesTotal.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)] [string]$BundlePath,
+        [Parameter(Mandatory)] [scriptblock]$Operation,
+        [ValidateSet('x64', 'x86', 'arm64', 'neutral')]
+        [string]$Architecture,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword
+    )
+
+    if (-not $PSCmdlet.ShouldProcess($BundlePath, 'Mutate bundle contents')) { return }
+
+    $target = if ($OutputPath) { $OutputPath } else { $BundlePath }
+    $work = $null
+    try {
+        $expanded = Expand-MsixBundle -BundlePath $BundlePath
+        $work = $expanded.OutputFolder
+
+        # Read the current bundle version so the rebuilt bundle keeps it.
+        $bundleVersion = $null
+        $bmPath = Join-Path -Path $work -ChildPath 'AppxMetadata\AppxBundleManifest.xml'
+        if (Test-Path -LiteralPath $bmPath) {
+            [xml]$bm = Get-MsixManifest -Path $bmPath
+            $bundleVersion = $bm.Bundle.Identity.Version
+            # MakeAppx bundle refuses a folder still carrying old metadata.
+            $meta = Join-Path -Path $work -ChildPath 'AppxMetadata'
+            if (Test-Path -LiteralPath $meta) { [IO.Directory]::Delete($meta, $true) }
+        }
+
+        $mutated = 0
+        foreach ($pkg in $expanded.Packages) {
+            $skip = $false
+            if ($Architecture) {
+                [xml]$inner = Get-MsixManifest -Path $pkg.FullName
+                $arch = $inner.Package.Identity.GetAttribute('ProcessorArchitecture')
+                if (-not $arch) { $arch = 'neutral' }
+                $skip = ($arch -ne $Architecture)
+            }
+            if ($skip) { continue }
+            Write-MsixLog -Level Info -Message "Bundle operation -> $($pkg.Name)"
+            & $Operation $pkg.FullName
+            if (-not $SkipSigning) {
+                if ($Pfx) { Invoke-MsixSigning -PackagePath $pkg.FullName -Pfx $Pfx -PfxPassword $PfxPassword }
+                else      { Invoke-MsixSigning -PackagePath $pkg.FullName }
+            }
+            $mutated++
+        }
+
+        $bundleArgs = @{
+            SourceFolder = $work
+            OutputPath   = $target
+            SkipSigning  = $SkipSigning
+        }
+        if ($bundleVersion) { $bundleArgs['BundleVersion'] = $bundleVersion }
+        if ($Pfx)           { $bundleArgs['Pfx'] = $Pfx; $bundleArgs['PfxPassword'] = $PfxPassword }
+        $null = New-MsixBundle @bundleArgs
+
+        Write-MsixLog -Level Info -Message "Bundle operation complete: $mutated/$($expanded.Packages.Count) inner package(s) mutated."
+        [pscustomobject]@{
+            BundlePath      = $target
+            PackagesMutated = $mutated
+            PackagesTotal   = $expanded.Packages.Count
+        }
+    } finally {
+        if ($work -and (Test-Path -LiteralPath $work)) { [IO.Directory]::Delete($work, $true) }
+    }
+}
+
+#endregion

@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.71.4'
+    ModuleVersion     = '0.72.0'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, PSADT-style standard scripts, TMEditX-style heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -50,11 +50,13 @@
         'ConvertTo-MsixSarif',
         'ConvertTo-MsixReportHtml',
         'Copy-MsixHostAppDataIntoPackage',
+        'Expand-MsixBundle',
         'Export-MsixRemediationPlan',
         'Dismount-MsixAppAttachImage',
         'Find-MsixPlaybook',
         'Get-MsixAliasCandidate',
         'Get-MsixAppRuntimeVersion',
+        'Get-MsixBundleInfo',
         'Get-MsixCapabilityHint',
         'Get-MsixCompatibilityReport',
         'Get-MsixComServerEntry',
@@ -113,6 +115,7 @@
         'Install-MsixSdkTool',
         'Invoke-MsixAccelerator',
         'Invoke-MsixAutoFix',
+        'Invoke-MsixBundleOperation',
         'Invoke-MsixAutoFixFromAnalysis',
         'Invoke-MsixAutoFixLoop',
         'Invoke-MsixCommand',
@@ -129,6 +132,7 @@
         'Merge-MsixFinding',
         'Mount-MsixAppAttachImage',
         'New-MsixAppAttachImage',
+        'New-MsixBundle',
         'New-MsixAppInstallerFile',
         'New-MsixFinding',
         'New-MsixManifestDocument',
@@ -179,6 +183,7 @@
         'Start-MsixSandbox',
         'Test-MsixAgainstLimitation',
         'Test-MsixAppAttachImage',
+        'Test-MsixDeployment',
         'Test-MsixManifest',
         'Test-MsixPsfConfig',
         'Test-MsixRemediationPlan',
@@ -187,6 +192,7 @@
         'Update-MsixDebugView',
         'Update-MsixMgr',
         'Update-MsixPackageVersion',
+        'Update-MsixResourcePri',
         'Update-MsixProcMon',
         'Update-MsixPsfBinary',
         'Update-MsixSdkTool',
@@ -245,62 +251,36 @@
                             'TMEditX','Enterprise','CICD','Pester','PSADT')
             ProjectUri  = 'https://github.com/microsoft/MSIX-PackageSupportFramework'
             ReleaseNotes = @'
-## v0.71.4
+## v0.72.0
 
-### New manifest mutators (review issues #108-#119)
-- Add-MsixService: packaged Windows services (desktop6 windows.service),
-  auto-adds packagedServices/localSystemServices, SCM dependencies.
-- Add-MsixShellHandlerExtension: preview/property/thumbnail shell handlers
-  (desktop2 on an FTA) + registry-free COM class in one call.
-- Add-MsixToastActivator: windows.toastNotificationActivation + ExeServer
-  class so toast clicks re-activate the packaged app.
-- Add-MsixPackageDependency: framework dependencies (VCLibs,
-  WindowsAppRuntime, ...) with auto-filled Microsoft publishers; MinVersion
-  raised, never lowered.
-- Set-MsixMutablePackageDirectory: desktop6 mutable install-dir projection
-  (+ modifiableApp capability).
-- Add-MsixFileTypeAssociation enriched: -Logo, -InfoTip, EditFlags
-  (-OpenIsSafe/-AlwaysUnsafe), -Verbs (SupportedVerbs).
+### .msixbundle handling (#125)
+- New-MsixBundle / Expand-MsixBundle / Get-MsixBundleInfo (MakeAppx wrappers +
+  inner-package inventory).
+- Invoke-MsixBundleOperation: unbundle -> run any mutator per inner package
+  (optionally -Architecture filtered) -> rebundle -> sign, atomically. Gives
+  every existing mutator bundle support without per-cmdlet changes.
 
-### Context menus
-- Add-MsixLegacyContextMenu -Schema desktop4|desktop9|Both: desktop9
-  (windows.fileExplorerClassicContextMenuHandler, the MS-documented /
-  Advanced Installer shape, Win11 21H2+) is back as an opt-in;
-  desktop4/desktop5 stays the default (Win10 1809+).
+### resources.pri regeneration (#124)
+- Update-MsixResourcePri: regenerates resources.pri via makepri
+  (Authenticode-verified), repacks + signs.
+- Set-MsixBrandMetadata -RegeneratePri: replaces the ms-resource: reference
+  with the literal AND rebuilds PRI so the displayed value actually changes
+  (root-cause fix for the #109 warning).
 
-### Distribution (new)
-- New-MsixAppInstallerFile: .appinstaller generation with full update policy.
-- New-MsixModificationPackage: vendor-package customization via
-  uap4:MainPackageDependency from a content folder.
+### Runtime deployment testing
+- Test-MsixDeployment: deploy a signed package into a clean Hyper-V VM via
+  PowerShell Direct, launch via shell:AppsFolder, probe liveness (process
+  alive, no WER crash, no AppXDeployment errors, optional -RequireWindow),
+  optional checkpoint restore. Verdict object (Passed + Reasons + event-log
+  artifacts) that feeds the analyze -> autofix loop. VM seam is mockable;
+  orchestration unit-tested.
 
-### Static analysis / autofix integration
-- New scanners Get-MsixServiceEntry + Get-MsixShellHandlerEntry; isolation
-  blockers (PSF, windows.comServer) surface as findings; autofix plans
-  Add-MsixService / Add-MsixShellHandlerExtension / VCLibs-as-dependency
-  (-VcRuntimeAsPackageDependency) and opt-in isolation (-AddAppIsolation
-  with Remove-MsixPsf preparation).
-
-### Niche extension points (#120)
-- Add-MsixAppExtensionHost / Add-MsixAppExtension (uap3 plugin contract pair),
-  Add-MsixAutoPlayHandler (AutoPlay content/device), Add-MsixShareTarget
-  (Share sheet), Add-MsixFullTrustProcess (UWP + Win32 companion),
-  Add-MsixPackageCertificate (windows.certificates - replaces the capture
-  certutil step; per-package store, removed on uninstall).
-- New scanner Get-MsixPackageCertificateCandidate: shipped-but-undeclared
-  .cer/.crt surface as ManifestFix:PackageCertificate findings; autofix
-  declares them via opt-in -DeclarePackageCertificates
-  (+ -PackageCertificateStore, default TrustedPeople).
-
-### Signing fail-closed (#77)
-- Invoke-MsixSigning -Signer SignerSignEx now throws the reserved-backend
-  error even when -Pfx/-PfxPassword are supplied (the SignToolPfx parameter
-  set no longer silently overrides an explicit -Signer).
-
-### Fixes
-- Set-MsixBrandMetadata warns on pri-localized (ms-resource:) fields whose
-  displayed value comes from resources.pri.
-- Isolation docs corrected for the two-mode model; every exported function
-  now carries a Get-Help example.
+### In-process signing (#17 / #126)
+- Invoke-MsixSigning -Signer SignerSignEx implemented: the password loads the
+  cert in-process into an ephemeral CurrentUser\My entry and signtool signs by
+  thumbprint (public) - the PFX password/path never hit a command line. Temp
+  store entry removed afterward. Explicit -Signer always wins over the
+  SignToolPfx parameter-set inference (#77 contract extended).
 
 Full history: CHANGELOG.md.
 '@

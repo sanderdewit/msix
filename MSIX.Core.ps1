@@ -36,7 +36,7 @@ function _MsixSetVerifiedToolsRoot {
     if ($env:MSIX_SKIP_TOOL_VERIFICATION) {
         Write-MsixLog -Level Warning -Message "Tool Authenticode verification BYPASSED (MSIX_SKIP_TOOL_VERIFICATION is set). SDK tools under '$Root' are trusted without a signature check. Unset this variable to restore fail-closed verification."
     } elseif (Get-Command -Name _MsixVerifyAuthenticode -ErrorAction SilentlyContinue) {
-        foreach ($tool in @('signtool.exe', 'MakeAppx.exe')) {
+        foreach ($tool in @('signtool.exe', 'MakeAppx.exe', 'makepri.exe')) {
             $candidate = @(
                 (Join-Path -Path $Root -ChildPath "Tools\$tool"),
                 (Join-Path -Path $Root -ChildPath $tool)

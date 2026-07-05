@@ -40,6 +40,8 @@
                                            AppSilo: isolatedWin32-* / device capabilities
                                            (default isolatedWin32-promptForAccess)
             AppId             [string]     Restrict to one Application (default: all)
+            RemoveComServer   [bool]       Strip windows.comServer + context-menu
+                                           verbs instead of refusing to isolate
             NOTE: applies the same model as Add-MsixAppIsolation — partial-trust
             entry point, TrustLevel=appContainer, runFullTrust removed.
 
@@ -160,7 +162,8 @@
             }
             $isoAppId = ''
             if ($Config.AppIsolation.AppId) { $isoAppId = [string]$Config.AppIsolation.AppId }
-            _MsixApplyAppIsolation -Manifest $manifest -Mode $isoMode -Capabilities $isoCaps -AppId $isoAppId
+            $isoStripCom = [bool]$Config.AppIsolation.RemoveComServer
+            _MsixApplyAppIsolation -Manifest $manifest -Mode $isoMode -Capabilities $isoCaps -AppId $isoAppId -RemoveComServer:$isoStripCom
             $manifestDirty = $true
         }
 

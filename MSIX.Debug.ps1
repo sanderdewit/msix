@@ -974,7 +974,7 @@ function Start-MsixSandbox {
             $needsSelfSign = (Test-MsixSignature -PackagePath $msix).NeedsSelfSign
             if ($needsSelfSign) {
                 Write-MsixLog -Level Info -Message 'Package signature missing/invalid; generating self-signed cert and re-signing.'
-                $signed = Invoke-MsixSelfSignAndDebug -PackagePath $msix
+                $signed = Invoke-MsixSelfSign -PackagePath $msix
                 $effectiveCertPath = $signed.CertPath
             } else {
                 Write-MsixLog -Level Info -Message 'Package signature is valid; skipping self-sign.'

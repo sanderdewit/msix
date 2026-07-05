@@ -163,7 +163,7 @@ $tdfXml
     if ($Sign) {
         $signed = & (Get-Module MSIX) {
             param($pkg)
-            Invoke-MsixSelfSignAndDebug -PackagePath $pkg -Force
+            Invoke-MsixSelfSign -PackagePath $pkg -Force
         } $OutputPath
         if ($signed) { $certPath = $signed.CertPath }
     }

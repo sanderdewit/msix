@@ -390,7 +390,7 @@ Update-MsixSigner `
     -OutputPath  'C:\drop\App-lab.msix'
 
 # Launch a Windows Sandbox session with the package preloaded + DebugView running
-Invoke-MsixSelfSignAndDebug -PackagePath 'C:\drop\App-lab.msix'
+Invoke-MsixSelfSign -PackagePath 'C:\drop\App-lab.msix'
 ```
 
 ---

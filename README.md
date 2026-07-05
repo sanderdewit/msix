@@ -310,16 +310,34 @@ Add-MsixAppIsolation -PackagePath app.msix -Mode AppSilo -Pfx cert.pfx -PfxPassw
 Remove-MsixAppIsolation -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw   # restores full trust
 ```
 
-**Two things that can't be isolated** (the cmdlet warns/throws):
+**Two things that can't be isolated** (the cmdlet warns/throws) — with escape
+hatches:
 - **PSF packages** (`PsfLauncher*.exe` entry point) — PSF injects fixup DLLs into
-  the target process, which AppContainer blocks.
+  the target process, which AppContainer blocks. Run **`Remove-MsixPsf`** first:
+  it restores the real executable from config.json and strips the PSF payload
+  (warning about every behaviour that disappears with it).
 - **`windows.comServer` extensions** (e.g. a COM shell context-menu like NppShell)
-  — that extension is invalid with a partial-trust entry point; strip it first.
+  — invalid with a partial-trust entry point. Pass **`-RemoveComServer`** to strip
+  the COM server and its Explorer context-menu verbs (that functionality is lost).
+
+**Verify and tune with the isolation toolkit:**
+
+```powershell
+# Would this package isolate? (static manifest verdict with reasons)
+Test-MsixIsolation -PackagePath app-isolated.msix
+
+# Is the RUNNING app actually in an AppContainer? (token check: S-1-15-2 SID)
+Test-MsixIsolation -PackageFamilyName 'MyApp_abc123def'    # or -ProcessId <pid>
+
+# Which capabilities does the app need? Trace it, then map the denials:
+$pml = Invoke-MsixProcMonCapture -ScriptBlock { <# drive the app #> }
+Get-MsixProcMonFailure -PmlPath $pml | Get-MsixIsolationAdvice -Mode AppSilo
+```
 
 > **Validate first.** Many legacy apps break under isolation because they expect
-> broad filesystem/registry access. Confirm isolation actually engaged: the
-> process should show an **`S-1-15-2` AppContainer SID** / Low integrity (e.g. in
-> Process Explorer). The **AppSilo** layer is a **preview** feature; if its
+> broad filesystem/registry access. Prompts alone are NOT proof of isolation
+> (ASR rules also prompt) — only the **`S-1-15-2` AppContainer SID** is
+> (`Test-MsixIsolation`). The **AppSilo** layer is a **preview** feature; if its
 > brokering doesn't engage on a given build the app still runs in the
 > AppContainer (access denied rather than prompted). See `TEST-PLAN.md` Scenario 6.
 

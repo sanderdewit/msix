@@ -371,7 +371,7 @@ Update-MsixSigner -PackagePath 'C:\lab\App.msix' `
     -Pfx $cert.PfxPath -PfxPassword $cert.Password `
     -OutputPath 'C:\lab\App-selfsigned.msix'
 
-Invoke-MsixSelfSignAndDebug -PackagePath 'C:\lab\App-selfsigned.msix'
+Invoke-MsixSelfSign -PackagePath 'C:\lab\App-selfsigned.msix'
 ```
 
 ### Expected

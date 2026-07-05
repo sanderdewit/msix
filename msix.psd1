@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.71.1'
+    ModuleVersion     = '0.71.3'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, PSADT-style standard scripts, TMEditX-style heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -22,6 +22,7 @@
         'Add-MsixManifestNamespace',
         'Add-MsixProtocolHandler',
         'Add-MsixPsfV2',
+        'Remove-MsixPsf',
         'Add-MsixShellVerbExtension',
         'Add-MsixSplashScreen',
         'Add-MsixStandardScript',
@@ -56,6 +57,8 @@
         'Get-MsixHeuristicFinding',
         'Get-MsixInfo',
         'Get-MsixIsolationCapability',
+        'Get-MsixIsolationAdvice',
+        'Test-MsixIsolation',
         'Get-MsixKnownCapability',
         'Get-MsixLimitation',
         'Get-MsixManifest',
@@ -108,7 +111,7 @@
         'Invoke-MsixProcess',
         'Invoke-MsixRemediationPlan',
         'Invoke-MsixProcMonCapture',
-        'Invoke-MsixSelfSignAndDebug',
+        'Invoke-MsixSelfSign',
         'Invoke-MsixSigning',
         'Merge-MsixFinding',
         'Mount-MsixAppAttachImage',
@@ -177,6 +180,7 @@
 
     AliasesToExport   = @(
         'add-MsixPsf',
+        'Invoke-MsixSelfSignAndDebug',
         'ConvertFrom-MsixTraceToFindings',
         'Get-MsixAliasCandidates',
         'Get-MsixCapabilityHints',
@@ -222,40 +226,46 @@
                             'TMEditX','Enterprise','CICD','Pester','PSADT')
             ProjectUri  = 'https://github.com/microsoft/MSIX-PackageSupportFramework'
             ReleaseNotes = @'
-## v0.71.1
+## v0.71.3
 
-### App isolation that actually isolates (partial-trust / AppContainer)
-v0.71.0 emitted the uap18 appSilo attributes but kept
-EntryPoint="Windows.FullTrustApplication" + runFullTrust, which keeps the process
-full-trust — so v0.71.0 "isolated" packages still ran full-trust (Medium
-integrity, no S-1-15-2 AppContainer SID). Verified on a real 25H2 host.
+### App isolation toolkit
+- Remove-MsixPsf (new): inverse of Add-MsixPsfV2 — restores the real
+  executable from config.json and strips the PSF payload, warning about every
+  behaviour that disappears. PSF and AppContainer isolation are mutually
+  exclusive; run this before Add-MsixAppIsolation.
+- Add-MsixAppIsolation -RemoveComServer (new): windows.comServer is invalid
+  with a partial-trust entry point; the switch strips the COM server + its
+  Explorer context-menu verbs so the package can isolate.
+- Test-MsixIsolation (new): static WouldIsolate verdict with reasons, and a
+  runtime process-token check (-ProcessId / -PackageFamilyName) for the
+  definitive S-1-15-2 AppContainer SID. Prompts are not proof; the token is.
+- Get-MsixIsolationAdvice (new): maps ProcMon ACCESS-DENIED rows to concrete
+  capability / consent suggestions per isolation mode.
 
-Fix: the AppContainer boundary is TrustLevel="appContainer", reached via
-EntryPoint="Windows.PartialTrustApplication" with runFullTrust REMOVED (per the
-MSIX AppContainer guidance). Add-MsixAppIsolation now does that, and a minimal
-probe built this way provably isolates (S-1-15-2 AppContainer SID; C:\ denied).
+### Review fixes (#97-#102)
+- Invoke-MsixPipeline AppIsolation stage now applies the real isolation model
+  (it still used the obsolete capability-only shape — packages did not
+  isolate). Config keys: Mode / Capabilities / AppId / RemoveComServer.
+- Get-Help repaired for 62 of 166 exported functions (malformed .PARAMETER
+  tags and '.msix'-leading description lines made PowerShell reject entire
+  help blocks). A help contract test now guards this.
+- Docs: EXAMPLES isolation recipe on the two-mode API; desktop9 references
+  corrected to the implemented com + desktop4/desktop5 pattern.
+- Contract sweeps: NoSign/WhatIf now discovered dynamically; approved-verb
+  guard added. Coverage-map debt burned to empty (19 behavioural tests).
 
-Add-MsixAppIsolation -Mode {AppContainer|AppSilo}, default AppContainer:
-- AppContainer (GA, Win10 2004+): uap10:TrustLevel=appContainer +
-  uap10:RuntimeBehavior=packagedClassicApp. Ungranted access denied.
-  -Capabilities are standard package capabilities (default: none).
-- AppSilo (preview, Win11 24H2): uap18:RuntimeBehavior=appSilo +
-  uap18:EntryPoint=Isolated.App + isolatedWin32-* broker caps; raises MinVersion
-  to 10.0.26100.0. -Capabilities are isolatedWin32-*/device caps (default:
-  isolatedWin32-promptForAccess).
+### Bugs fixed (caught by the new coverage tests)
+- Add-MsixFontExtension placed windows.sharedFonts at Package level; schema
+  requires Application level (MakeAppx C00CE014).
+- Add-MsixStartMenuFolder wrote a schema-invalid bare VisualGroup attribute;
+  the element must be uap3:VisualElements per MS Learn.
+- Add-MsixSplashScreen always threw (Split-Path -LiteralPath + -Parent is an
+  unresolvable parameter-set combination).
+- Add-MsixPsfV2 rejected empty -Fixups, blocking script-only PSF injection.
 
-runFullTrust is now ALWAYS removed; the obsolete -RemoveRunFullTrust /
--KeepRunFullTrust switches are gone.
-
-Blockers detected: PsfLauncher*.exe entry point (PSF — warns) and
-windows.comServer extensions (invalid with partial trust — throws; strip the COM
-server + its context menu first).
-
-Remove-MsixAppIsolation restores Windows.FullTrustApplication + runFullTrust and
-strips the uap10/uap18 attributes and isolatedWin32-* capabilities.
-
-Docs: README + TEST-PLAN Scenario 6 rewritten for the partial-trust model; the
-incorrect "Insider-only" claim corrected (the feature ships on GA 24H2/25H2).
+### Rename
+- Invoke-MsixSelfSignAndDebug -> Invoke-MsixSelfSign (alias kept). It only
+  signs — and does not rewrite the Publisher (use Update-MsixSigner for that).
 
 Full history: CHANGELOG.md.
 '@

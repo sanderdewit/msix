@@ -5,6 +5,78 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.71.3 - 2026-07-05 — Isolation toolkit, module-review fixes, Get-Help repaired
+
+Everything from the full module review (issues #97-#106) plus four product
+bugs the new coverage tests caught.
+
+### App isolation toolkit (#103-#106)
+
+- **`Remove-MsixPsf`** (new) — the inverse of `Add-MsixPsfV2`: restores each
+  Application's real executable from config.json and strips the PSF payload
+  (launcher, runtime, fixup DLLs, config, script wrappers), warning about every
+  behaviour that disappears (redirection, env vars, scripts, argument /
+  working-directory overrides). Primary use: PSF and AppContainer isolation are
+  mutually exclusive, so strip PSF before `Add-MsixAppIsolation` (whose PSF
+  warning now points here).
+- **`Add-MsixAppIsolation -RemoveComServer`** (new switch, also a pipeline
+  config key) — a `windows.comServer` extension is invalid with a partial-trust
+  entry point; instead of only throwing, the switch strips the COM server and
+  its Explorer context-menu verbs so the package can isolate (losing that menu).
+- **`Test-MsixIsolation`** (new) — static mode gives a per-application
+  `WouldIsolate` verdict with reasons (entry point, trust level, runFullTrust,
+  PSF/comServer blockers, AppSilo MinVersion); runtime mode reads the process
+  token (`-ProcessId` / `-PackageFamilyName`) and reports the definitive
+  `S-1-15-2` AppContainer SID + integrity level — prompts alone are not proof
+  (ASR rules also prompt).
+- **`Get-MsixIsolationAdvice`** (new) — feeds ProcMon ACCESS-DENIED rows
+  (`Get-MsixProcMonFailure | Get-MsixIsolationAdvice`) into concrete
+  suggestions: user-profile denials -> prompt broker / userProfileMinimal,
+  network -> internetClient (per mode), ProgramData -> publisher directory,
+  HKLM writes -> "needs a code change; no capability grants that".
+
+### Review fixes (#97-#102)
+
+- **#97** `Invoke-MsixPipeline`'s AppIsolation stage still used the obsolete
+  capability-only shape (packages did NOT isolate). It now delegates to the
+  same core as `Add-MsixAppIsolation` (`_MsixApplyAppIsolation`) with
+  `Mode` / `Capabilities` / `AppId` / `RemoveComServer` config keys.
+- **#98** `Get-Help` was broken for 62 of 166 exported functions: combined
+  `.PARAMETER A / B` tags and description lines starting with `.msix` (parsed
+  as unknown help directives) make PowerShell reject the whole help block.
+  All fixed; a new help contract test keeps it that way.
+- **#99/#100** EXAMPLES.md isolation recipe rewritten for the two-mode API;
+  README + TEST-PLAN Scenario 1 corrected from desktop9 to the implemented
+  com + desktop4/desktop5 context-menu pattern.
+- **#101** NoSign contract sweep is now dynamic over every `-SkipSigning`
+  cmdlet (the static list had missed the isolation cmdlets) and also asserts
+  `-WhatIf`; approved-verb + Verb-MsixNoun guards added to the module contract.
+- **#102** Coverage-map debt burned to EMPTY: 19 behavioural tests added; the
+  4 network toolchain updaters moved to a documented permanent exclusion.
+
+### Bugs found by the new coverage tests (all fixed)
+
+- `Add-MsixFontExtension` emitted `windows.sharedFonts` under
+  Package/Extensions; the schema requires Application/Extensions (MakeAppx
+  C00CE014) — the cmdlet could never produce an installable package.
+- `Add-MsixStartMenuFolder` wrote a bare `VisualGroup` attribute, which
+  MakeAppx rejects. Per MS Learn the element must become `uap3:VisualElements`
+  (unprefixed `VisualGroup` attribute); also warns that a Start-menu folder
+  only materialises with >= 2 apps sharing the group.
+- `Add-MsixSplashScreen` used `Split-Path -LiteralPath ... -Parent` — an
+  unresolvable parameter-set combination, so the cmdlet always threw.
+- `Add-MsixPsfV2` / `New-MsixPsfConfig` rejected an empty `-Fixups` array,
+  making script-only PSF injection (`Add-MsixStandardScript`) impossible.
+- `_MsixGetOrCreateApplicationExtensions` broke on its documented
+  empty-AppId ("first application") path.
+
+### Rename
+
+- `Invoke-MsixSelfSignAndDebug` -> **`Invoke-MsixSelfSign`** (it only signs; it
+  never attached a debugger). The old name remains as an exported alias. Note:
+  it does NOT rewrite the manifest Publisher — it generates a cert matching the
+  existing one; use `Update-MsixSigner` to change the publisher.
+
 ## v0.71.1 - 2026-06-09 — App isolation that actually isolates (partial-trust / AppContainer)
 
 The v0.71.0 isolation work emitted the `uap18` appSilo attributes but kept

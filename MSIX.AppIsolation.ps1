@@ -159,6 +159,13 @@ function Add-MsixAppIsolation {
         Restrict the isolation attributes to the Application with this Id.
         Default: every <Application> in the package.
 
+    .PARAMETER RemoveComServer
+        A windows.comServer extension is invalid with a partial-trust entry
+        point, so a package that declares one (e.g. a COM shell context-menu
+        like NppShell) cannot be isolated and this cmdlet throws. With this
+        switch the COM server AND its Explorer context-menu verbs are stripped
+        instead — that functionality is LOST, but the app can then isolate.
+
     .PARAMETER OutputPath
         Write the modified package here instead of overwriting -PackagePath.
 
@@ -170,6 +177,7 @@ function Add-MsixAppIsolation {
 
     .PARAMETER PfxPassword
         Signing certificate.
+
     .EXAMPLE
         # GA AppContainer (strict): the app runs in an AppContainer, ungranted
         # access is denied.
@@ -195,6 +203,7 @@ function Add-MsixAppIsolation {
         [string]$Mode = 'AppContainer',
         [string[]]$Capabilities,
         [string]$AppId,
+        [switch]$RemoveComServer,
         [string]$OutputPath,
         [Alias('NoSign')]
         [switch]$SkipSigning,
@@ -214,7 +223,7 @@ function Add-MsixAppIsolation {
         -WhatIfPreview:$isWhatIf `
         -Activity "Add App Isolation ($Mode)" -Mutate {
         param([xml]$manifest)
-        _MsixApplyAppIsolation -Manifest $manifest -Mode $Mode -Capabilities $Capabilities -AppId $AppId
+        _MsixApplyAppIsolation -Manifest $manifest -Mode $Mode -Capabilities $Capabilities -AppId $AppId -RemoveComServer:$RemoveComServer
     }
 }
 
@@ -229,7 +238,8 @@ function _MsixApplyAppIsolation {
         [ValidateSet('AppContainer', 'AppSilo')]
         [string]$Mode = 'AppContainer',
         [string[]]$Capabilities = @(),
-        [string]$AppId
+        [string]$AppId,
+        [switch]$RemoveComServer
     )
         $manifest = $Manifest
 
@@ -285,9 +295,32 @@ function _MsixApplyAppIsolation {
         # entry point — MakeAppx rejects it ("The 'windows.comServer' Extension
         # can't be declared with Partial Trust EntryPoint", 0x80080204). A COM
         # shell extension (e.g. NppShell) therefore blocks isolation outright.
-        # Fail fast with guidance instead of letting the repack die cryptically.
-        if ($manifest.SelectSingleNode("//*[local-name()='Extension' and @Category='windows.comServer']")) {
-            throw "Cannot isolate this package: it declares a 'windows.comServer' extension, which is incompatible with the partial-trust (AppContainer) entry point that isolation requires. Remove the COM server and its shell context-menu (the com:Extension 'windows.comServer' and the desktop4 'windows.fileExplorerContextMenus' extension) before isolating."
+        # -RemoveComServer strips it (plus the context-menu verbs that need it);
+        # otherwise fail fast with guidance instead of a cryptic repack error.
+        $comServers = @($manifest.SelectNodes("//*[local-name()='Extension' and @Category='windows.comServer']"))
+        if ($comServers.Count -gt 0) {
+            if (-not $RemoveComServer) {
+                throw "Cannot isolate this package: it declares a 'windows.comServer' extension, which is incompatible with the partial-trust (AppContainer) entry point that isolation requires. Re-run with -RemoveComServer to strip the COM server and its shell context-menu (losing that functionality), or remove them manually first."
+            }
+            foreach ($node in $comServers) {
+                $null = $node.ParentNode.RemoveChild($node)
+            }
+            Write-MsixLog -Level Warning -Message "Removed $($comServers.Count) windows.comServer extension(s) (-RemoveComServer): COM activation from this package is gone."
+
+            # The desktop4/desktop9 context-menu verbs reference the removed
+            # COM classes; without their server they are dead weight (and the
+            # classic handler category is itself full-trust-only). Strip them.
+            $menuCats = 'windows.fileExplorerContextMenus', 'windows.fileExplorerClassicContextMenuHandler'
+            foreach ($cat in $menuCats) {
+                foreach ($node in @($manifest.SelectNodes("//*[local-name()='Extension' and @Category='$cat']"))) {
+                    $null = $node.ParentNode.RemoveChild($node)
+                    Write-MsixLog -Level Warning -Message "Removed '$cat' extension (-RemoveComServer): its COM server no longer exists. The Explorer context menu is gone."
+                }
+            }
+            # Prune Extensions containers left empty by the removals.
+            foreach ($ext in @($manifest.SelectNodes("//*[local-name()='Extensions']"))) {
+                if (-not $ext.HasChildNodes) { $null = $ext.ParentNode.RemoveChild($ext) }
+            }
         }
 
         foreach ($app in $apps) {
@@ -295,7 +328,7 @@ function _MsixApplyAppIsolation {
             # blocked in an AppContainer).
             $exe = $app.GetAttribute('Executable')
             if ($exe -match 'PsfLauncher\d*\.exe$') {
-                Write-MsixLog -Level Warning -Message "Application '$($app.GetAttribute('Id'))' launches via the Package Support Framework (Executable '$exe'). PSF and AppContainer isolation are mutually exclusive: PSF injects fixup DLLs into the target process, which AppContainer blocks. This package will NOT run isolated. Re-package without PSF (point Executable at the real .exe; drop PsfLauncher*/PsfRuntime*/FileRedirectionFixup*/config.json) first."
+                Write-MsixLog -Level Warning -Message "Application '$($app.GetAttribute('Id'))' launches via the Package Support Framework (Executable '$exe'). PSF and AppContainer isolation are mutually exclusive: PSF injects fixup DLLs into the target process, which AppContainer blocks. This package will NOT run isolated. Run Remove-MsixPsf first to strip the framework and restore the real executable."
             }
 
             # The partial-trust entry point is what lets the app drop to
@@ -508,6 +541,420 @@ function Remove-MsixAppIsolation {
                 $rft.SetAttribute('Name', 'runFullTrust')
                 $null = $capsNode.AppendChild($rft)
                 Write-MsixLog -Level Info -Message 'Re-added runFullTrust (required by Windows.FullTrustApplication).'
+            }
+        }
+    }
+}
+
+
+function Test-MsixIsolation {
+    <#
+    .SYNOPSIS
+        Verifies whether a package WOULD isolate (static manifest check) or a
+        running process actually IS isolated (AppContainer token check).
+
+    .DESCRIPTION
+        Two modes:
+
+        Package (static): parses the manifest and reports EntryPoint, trust
+        level, runtime behavior, detected isolation Mode (None / AppContainer /
+        AppSilo), runFullTrust presence, blockers (PSF launcher entry point,
+        windows.comServer extension) and a bottom-line WouldIsolate verdict
+        with reasons. This catches the classic trap: a manifest that LOOKS
+        isolated (uap18 attributes present) but keeps the full-trust entry
+        point + runFullTrust and therefore never isolates.
+
+        Process (runtime): reads the process token and reports IsAppContainer
+        (the definitive S-1-15-2-* AppContainer SID check), the SID, the
+        integrity level and the executable path — so a same-named desktop
+        install can't be mistaken for the packaged app. Prompts alone are NOT
+        proof of isolation (ASR rules also prompt); the token is.
+
+    .PARAMETER PackagePath
+        Static mode: the .msix file to analyse (read-only).
+
+    .PARAMETER ProcessId
+        Runtime mode: a process id to inspect.
+
+    .PARAMETER PackageFamilyName
+        Runtime mode: inspect every running process whose executable lives in
+        this installed package's InstallLocation.
+
+    .EXAMPLE
+        # Before install: will this package isolate?
+        Test-MsixIsolation -PackagePath .\app-isolated.msix
+
+    .EXAMPLE
+        # After launch: is the packaged app REALLY in an AppContainer?
+        Test-MsixIsolation -PackageFamilyName 'NotepadPP_abcdef123'
+
+    .EXAMPLE
+        # Spot-check a single process
+        Test-MsixIsolation -ProcessId 4242
+
+    .OUTPUTS
+        Static: [pscustomobject] with Mode, EntryPoint, TrustLevel,
+        RuntimeBehavior, HasRunFullTrust, Blockers, WouldIsolate, Reasons.
+        Runtime: [pscustomobject] per process with IsAppContainer,
+        AppContainerSid, IntegrityLevel, ExecutablePath, Isolated.
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'Package')]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory, ParameterSetName = 'Package')]
+        [string]$PackagePath,
+        [Parameter(Mandatory, ParameterSetName = 'Process')]
+        [int]$ProcessId,
+        [Parameter(Mandatory, ParameterSetName = 'Family')]
+        [string]$PackageFamilyName
+    )
+
+    if ($PSCmdlet.ParameterSetName -eq 'Package') {
+        [xml]$manifest = Get-MsixManifest -Path $PackagePath
+
+        $uap10Uri = Get-MsixManifestNamespaceUri -Prefix 'uap10'
+        $uap18Uri = Get-MsixManifestNamespaceUri -Prefix 'uap18'
+
+        $capsNode = $manifest.Package.Capabilities
+        $hasRft = $false
+        if ($capsNode) {
+            $hasRft = [bool]($capsNode.ChildNodes | Where-Object {
+                $_.LocalName -eq 'Capability' -and $_.GetAttribute('Name') -eq 'runFullTrust' })
+        }
+        $hasComServer = $null -ne $manifest.SelectSingleNode("//*[local-name()='Extension' and @Category='windows.comServer']")
+
+        foreach ($app in @($manifest.Package.Applications.Application)) {
+            $entry   = $app.GetAttribute('EntryPoint')
+            $tl10    = $app.GetAttribute('TrustLevel', $uap10Uri)
+            $rb10    = $app.GetAttribute('RuntimeBehavior', $uap10Uri)
+            $tl18    = $app.GetAttribute('TrustLevel', $uap18Uri)
+            $rb18    = $app.GetAttribute('RuntimeBehavior', $uap18Uri)
+            $exe     = $app.GetAttribute('Executable')
+
+            $mode = 'None'
+            if ($rb18 -eq 'appSilo') { $mode = 'AppSilo' }
+            elseif ($rb10 -eq 'packagedClassicApp' -and $tl10 -eq 'appContainer') { $mode = 'AppContainer' }
+
+            $trustLevel = $tl18
+            if (-not $trustLevel) { $trustLevel = $tl10 }
+            $runtimeBehavior = $rb18
+            if (-not $runtimeBehavior) { $runtimeBehavior = $rb10 }
+
+            $blockers = [System.Collections.Generic.List[string]]::new()
+            if ($exe -match 'PsfLauncher\d*\.exe$') { $null = $blockers.Add('PSF launcher entry point (fixup injection is blocked in an AppContainer)') }
+            if ($hasComServer) { $null = $blockers.Add('windows.comServer extension (invalid with a partial-trust entry point)') }
+
+            $reasons = [System.Collections.Generic.List[string]]::new()
+            if ($mode -eq 'None')  { $null = $reasons.Add('no AppContainer/AppSilo runtime behavior declared') }
+            if ($entry -ne 'Windows.PartialTrustApplication') { $null = $reasons.Add("EntryPoint is '$entry' — must be 'Windows.PartialTrustApplication' to drop into an AppContainer") }
+            if ($hasRft) { $null = $reasons.Add('runFullTrust capability present — keeps the process full-trust') }
+            foreach ($b in $blockers) { $null = $reasons.Add($b) }
+
+            $minVersionOk = $true
+            if ($mode -eq 'AppSilo') {
+                $tdf = @($manifest.Package.Dependencies.TargetDeviceFamily) |
+                    Where-Object { $_.GetAttribute('Name') -eq 'Windows.Desktop' } | Select-Object -First 1
+                $minVersionOk = $false
+                if ($tdf) {
+                    $v = $null
+                    if ([version]::TryParse($tdf.GetAttribute('MinVersion'), [ref]$v)) { $minVersionOk = ($v -ge [version]'10.0.26100.0') }
+                }
+                if (-not $minVersionOk) { $null = $reasons.Add('AppSilo requires Windows.Desktop MinVersion 10.0.26100.0') }
+            }
+
+            [pscustomobject]@{
+                PSTypeName       = 'MSIX.IsolationStatus'
+                ApplicationId    = $app.GetAttribute('Id')
+                Executable       = $exe
+                Mode             = $mode
+                EntryPoint       = $entry
+                TrustLevel       = $trustLevel
+                RuntimeBehavior  = $runtimeBehavior
+                HasRunFullTrust  = $hasRft
+                Blockers         = @($blockers)
+                WouldIsolate     = ($reasons.Count -eq 0)
+                Reasons          = @($reasons)
+            }
+        }
+        return
+    }
+
+    # ── Runtime: process-token inspection ────────────────────────────────
+    _MsixEnsureTokenInspector
+
+    $procs = @()
+    if ($PSCmdlet.ParameterSetName -eq 'Process') {
+        $procs = @(Get-Process -Id $ProcessId -ErrorAction Stop)
+    } else {
+        $pkg = Get-AppxPackage | Where-Object { $_.PackageFamilyName -eq $PackageFamilyName } | Select-Object -First 1
+        if (-not $pkg) { throw "Installed package with family name '$PackageFamilyName' not found for the current user." }
+        $loc = $pkg.InstallLocation
+        $procs = @(Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith($loc, [System.StringComparison]::OrdinalIgnoreCase) })
+        if (-not $procs) {
+            Write-MsixLog -Level Warning -Message "No running processes found under '$loc'. Launch the packaged app first (and note: a same-named desktop install does not count)."
+            return
+        }
+    }
+
+    foreach ($p in $procs) {
+        $info = [MsixTokenInspector]::Inspect($p.Id)
+        $integrity = switch ($info.IntegrityRid) {
+            { $_ -lt 0x1000 }  { 'Untrusted'; break }
+            { $_ -lt 0x2000 }  { 'Low'; break }
+            { $_ -lt 0x3000 }  { 'Medium'; break }
+            { $_ -lt 0x4000 }  { 'High'; break }
+            default            { 'System' }
+        }
+        [pscustomobject]@{
+            PSTypeName      = 'MSIX.IsolationRuntimeStatus'
+            ProcessId       = $p.Id
+            ProcessName     = $p.ProcessName
+            ExecutablePath  = $p.Path
+            IsPackagedPath  = ($p.Path -like '*\WindowsApps\*')
+            IsAppContainer  = $info.IsAppContainer
+            AppContainerSid = $info.AppContainerSid
+            IntegrityLevel  = $integrity
+            Isolated        = $info.IsAppContainer
+        }
+    }
+}
+
+
+function _MsixEnsureTokenInspector {
+    # Compiles the P/Invoke token inspector once per session. Reading ANOTHER
+    # process's token requires QueryLimitedInformation access; the definitive
+    # isolation signal is TokenIsAppContainer + the S-1-15-2-* AppContainer SID.
+    if ('MsixTokenInspector' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public class MsixTokenInfo
+{
+    public bool IsAppContainer;
+    public string AppContainerSid;
+    public uint IntegrityRid;
+}
+
+public static class MsixTokenInspector
+{
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool GetTokenInformation(IntPtr token, int infoClass, IntPtr info, int len, out int retLen);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    static extern bool ConvertSidToStringSid(IntPtr sid, out string sidString);
+    [DllImport("advapi32.dll")]
+    static extern IntPtr GetSidSubAuthority(IntPtr sid, uint index);
+    [DllImport("advapi32.dll")]
+    static extern IntPtr GetSidSubAuthorityCount(IntPtr sid);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool CloseHandle(IntPtr handle);
+
+    const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    const uint TOKEN_QUERY = 0x0008;
+    const int TokenIntegrityLevel = 25;
+    const int TokenIsAppContainer = 29;
+    const int TokenAppContainerSid = 31;
+
+    public static MsixTokenInfo Inspect(int pid)
+    {
+        MsixTokenInfo result = new MsixTokenInfo();
+        IntPtr process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (process == IntPtr.Zero)
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "OpenProcess failed for PID " + pid);
+        IntPtr token = IntPtr.Zero;
+        try
+        {
+            if (!OpenProcessToken(process, TOKEN_QUERY, out token))
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "OpenProcessToken failed for PID " + pid);
+
+            int retLen;
+            IntPtr buf = Marshal.AllocHGlobal(4);
+            try
+            {
+                if (GetTokenInformation(token, TokenIsAppContainer, buf, 4, out retLen))
+                    result.IsAppContainer = Marshal.ReadInt32(buf) != 0;
+            }
+            finally { Marshal.FreeHGlobal(buf); }
+
+            if (result.IsAppContainer)
+            {
+                GetTokenInformation(token, TokenAppContainerSid, IntPtr.Zero, 0, out retLen);
+                if (retLen > 0)
+                {
+                    IntPtr acBuf = Marshal.AllocHGlobal(retLen);
+                    try
+                    {
+                        if (GetTokenInformation(token, TokenAppContainerSid, acBuf, retLen, out retLen))
+                        {
+                            IntPtr sid = Marshal.ReadIntPtr(acBuf);   // TOKEN_APPCONTAINER_INFORMATION.TokenAppContainer
+                            string sidString;
+                            if (sid != IntPtr.Zero && ConvertSidToStringSid(sid, out sidString))
+                                result.AppContainerSid = sidString;
+                        }
+                    }
+                    finally { Marshal.FreeHGlobal(acBuf); }
+                }
+            }
+
+            GetTokenInformation(token, TokenIntegrityLevel, IntPtr.Zero, 0, out retLen);
+            if (retLen > 0)
+            {
+                IntPtr ilBuf = Marshal.AllocHGlobal(retLen);
+                try
+                {
+                    if (GetTokenInformation(token, TokenIntegrityLevel, ilBuf, retLen, out retLen))
+                    {
+                        IntPtr sid = Marshal.ReadIntPtr(ilBuf);       // TOKEN_MANDATORY_LABEL.Label.Sid
+                        if (sid != IntPtr.Zero)
+                        {
+                            byte count = Marshal.ReadByte(GetSidSubAuthorityCount(sid));
+                            result.IntegrityRid = (uint)Marshal.ReadInt32(GetSidSubAuthority(sid, (uint)(count - 1)));
+                        }
+                    }
+                }
+                finally { Marshal.FreeHGlobal(ilBuf); }
+            }
+        }
+        finally
+        {
+            if (token != IntPtr.Zero) CloseHandle(token);
+            CloseHandle(process);
+        }
+        return result;
+    }
+}
+'@
+}
+
+
+function Get-MsixIsolationAdvice {
+    <#
+    .SYNOPSIS
+        Turns access-denied rows from a ProcMon trace of an isolated app into
+        concrete capability / consent suggestions for Add-MsixAppIsolation.
+
+    .DESCRIPTION
+        Run the app under isolation, capture with Invoke-MsixProcMonCapture,
+        pull the failures with Get-MsixProcMonFailure, and feed them here.
+        Each ACCESS DENIED row is mapped to a suggestion:
+
+          - user-profile paths     -> AppSilo: isolatedWin32-promptForAccess /
+                                      isolatedWin32-userProfileMinimal;
+                                      AppContainer: use the file dialog (implicit
+                                      consent) — no standard capability grants
+                                      broad profile access.
+          - ProgramData\<publisher> -> isolatedWin32-accessToPublisherDirectory.
+          - TCP/UDP operations      -> internetClient (AppContainer) /
+                                      isolatedWin32-internetClient (AppSilo).
+          - HKLM writes             -> no capability exists; the app needs a
+                                      code change or cannot be isolated.
+
+        Suggestions are aggregated (one per capability) with example paths and
+        hit counts, ordered by hits.
+
+    .PARAMETER Failures
+        Failure rows (from Get-MsixProcMonFailure) or any objects with
+        Path / Operation / Result properties. Accepts pipeline input.
+
+    .PARAMETER CsvPath
+        Alternative input: a ProcMon CSV export to read directly.
+
+    .PARAMETER Mode
+        Which isolation mode you are targeting; picks the capability
+        vocabulary for the suggestions. Default: AppSilo.
+
+    .EXAMPLE
+        $pml  = Invoke-MsixProcMonCapture -ScriptBlock { Start-Process notepad++ -Wait }
+        Get-MsixProcMonFailure -PmlPath $pml | Get-MsixIsolationAdvice -Mode AppSilo
+
+    .EXAMPLE
+        Get-MsixIsolationAdvice -CsvPath .\trace.csv -Mode AppContainer
+
+    .OUTPUTS
+        [pscustomobject] per suggestion: SuggestedCapability, Mode, Hits,
+        ExamplePaths, Rationale.
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'Objects')]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(ParameterSetName = 'Objects', ValueFromPipeline)]
+        [object[]]$Failures,
+        [Parameter(Mandatory, ParameterSetName = 'Csv')]
+        [string]$CsvPath,
+        [ValidateSet('AppContainer', 'AppSilo')]
+        [string]$Mode = 'AppSilo'
+    )
+
+    BEGIN {
+        $all = [System.Collections.Generic.List[object]]::new()
+    }
+    PROCESS {
+        foreach ($f in @($Failures)) { if ($null -ne $f) { $null = $all.Add($f) } }
+    }
+    END {
+        if ($PSCmdlet.ParameterSetName -eq 'Csv') {
+            if (-not (Test-Path -LiteralPath $CsvPath)) { throw "CSV not found: $CsvPath" }
+            foreach ($row in (Import-Csv -Path $CsvPath)) { $null = $all.Add($row) }
+        }
+
+        $denied = @($all | Where-Object { $_.Result -match 'ACCESS DENIED|ACCESS_DENIED' })
+        if (-not $denied) {
+            Write-MsixLog -Level Info -Message 'No ACCESS DENIED rows found — nothing blocked; no additional capabilities suggested.'
+            return
+        }
+
+        $profileRx  = '\\Users\\[^\\]+\\(Documents|Desktop|Pictures|Music|Videos|Downloads)'
+        $progDataRx = '\\ProgramData\\'
+        $hklmRx     = '^HKLM'
+        $netRx      = '^(TCP|UDP)'
+
+        $buckets = @{}
+        function script:_MsixAdviceAdd {
+            param([hashtable]$Buckets, [string]$Key, [string]$Capability, [string]$Rationale, [object]$Row)
+            if (-not $Buckets.ContainsKey($Key)) {
+                $Buckets[$Key] = @{ Capability = $Capability; Rationale = $Rationale; Hits = 0; Paths = [System.Collections.Generic.List[string]]::new() }
+            }
+            $Buckets[$Key].Hits++
+            $p = [string]$Row.Path
+            if ($p -and $Buckets[$Key].Paths.Count -lt 5 -and -not $Buckets[$Key].Paths.Contains($p)) { $null = $Buckets[$Key].Paths.Add($p) }
+        }
+
+        foreach ($row in $denied) {
+            $path = [string]$row.Path
+            $op   = [string]$row.Operation
+
+            if ($op -match $netRx) {
+                $cap = if ($Mode -eq 'AppSilo') { 'isolatedWin32-internetClient' } else { 'internetClient' }
+                _MsixAdviceAdd -Buckets $buckets -Key 'net' -Capability $cap -Rationale 'Network operations were denied.' -Row $row
+            }
+            elseif ($path -match $hklmRx -and $op -match 'RegSetValue|RegCreateKey') {
+                _MsixAdviceAdd -Buckets $buckets -Key 'hklm' -Capability '(none — HKLM writes)' -Rationale 'The app writes to HKLM. No isolation capability grants that; the app needs a code change (per-user settings) or cannot be isolated.' -Row $row
+            }
+            elseif ($path -match $progDataRx) {
+                _MsixAdviceAdd -Buckets $buckets -Key 'progdata' -Capability 'isolatedWin32-accessToPublisherDirectory' -Rationale 'ProgramData access: works if the directory name ends with your publisher ID (AppSilo publisher-directory consent).' -Row $row
+            }
+            elseif ($path -match $profileRx) {
+                $cap = if ($Mode -eq 'AppSilo') { 'isolatedWin32-promptForAccess' } else { '(implicit consent — use the file dialog)' }
+                $why = if ($Mode -eq 'AppSilo') { 'User-profile file access denied; the broker prompts on first access (alternative: isolatedWin32-userProfileMinimal for silent minimal access).' } else { 'User-profile access is denied in AppContainer mode; only user-driven flows (file dialog / FTA / drag-drop) grant it. Consider -Mode AppSilo for brokered prompts.' }
+                _MsixAdviceAdd -Buckets $buckets -Key 'profile' -Capability $cap -Rationale $why -Row $row
+            }
+            else {
+                _MsixAdviceAdd -Buckets $buckets -Key 'other' -Capability '(review individually)' -Rationale 'Denied paths outside the known consent patterns — check whether the app can take a code change, or validate under -Mode AppSilo with isolatedWin32-promptForAccess.' -Row $row
+            }
+        }
+
+        $buckets.Values | Sort-Object -Property Hits -Descending | ForEach-Object {
+            [pscustomobject]@{
+                PSTypeName          = 'MSIX.IsolationAdvice'
+                SuggestedCapability = $_.Capability
+                Mode                = $Mode
+                Hits                = $_.Hits
+                ExamplePaths        = @($_.Paths)
+                Rationale           = $_.Rationale
             }
         }
     }

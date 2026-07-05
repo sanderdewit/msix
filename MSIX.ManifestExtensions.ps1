@@ -153,9 +153,32 @@ function _MsixGetOrCreatePackageExtensions {
 
 function Invoke-MsixManifestTransform {
     <#
-    Pure manifest transform — no file IO, no signing.
-    Accepts an [xml] or MSIX.ManifestDocument, runs $Transform against it,
-    returns the mutated [xml]. Used internally by _MsixMutateManifest.
+    .SYNOPSIS
+        Runs a pure in-memory manifest transform — no file IO, no signing.
+
+    .DESCRIPTION
+        Accepts an [xml] document or MSIX.ManifestDocument wrapper, binds the
+        supplied scriptblock to the module session state (so module-private
+        helpers resolve), invokes it against the manifest, and returns the
+        mutated [xml]. Used internally by _MsixMutateManifest; also useful for
+        testing manifest edits without a pack/sign cycle.
+
+    .PARAMETER Manifest
+        The manifest to transform: [xml], MSIX.ManifestDocument, or raw XML
+        text (routed through the hardened XXE-safe loader).
+
+    .PARAMETER Transform
+        Scriptblock receiving the [xml] document as its first argument.
+
+    .EXAMPLE
+        [xml]$m = Get-MsixManifest -Path 'C:\work\AppxManifest.xml'
+        Invoke-MsixManifestTransform -Manifest $m -Transform {
+            param([xml]$x)
+            Set-MsixManifestPublisher -Manifest $x -Publisher 'CN=New'
+        }
+
+    .OUTPUTS
+        [xml] — the mutated manifest document.
     #>
     [CmdletBinding()]
     param(
@@ -189,7 +212,13 @@ function _MsixGetOrCreateApplicationExtensions {
     # Returns the Application XmlElement, creating its <Extensions> child if absent.
     # When $AppId is empty, defaults to the first Application in the manifest.
     param([xml]$Manifest, [string]$AppId)
-    $app = Get-MsixManifestApplication -Manifest $Manifest -AppId $AppId
+    # Get-MsixManifestApplication validates -AppId as non-empty, so only pass
+    # it when the caller actually specified one (empty = first Application).
+    if ($AppId) {
+        $app = Get-MsixManifestApplication -Manifest $Manifest -AppId $AppId
+    } else {
+        $app = @(Get-MsixManifestApplication -Manifest $Manifest) | Select-Object -First 1
+    }
     if (-not $app) {
         $apps = @(Get-MsixManifestApplication -Manifest $Manifest)
         if ($AppId) { throw "Application '$AppId' not found. Available: $(($apps | ForEach-Object { $_.GetAttribute('Id') }) -join ', ')" }
@@ -236,7 +265,7 @@ function Set-MsixFileSystemWriteVirtualization {
         accept 'windows.filesystemwritevirtualization' as an Extensions Category.
 
     .PARAMETER PackagePath
-        .msix file to mutate.
+        The .msix file to mutate.
 
     .PARAMETER Enable
         Write 'enabled' instead of the default 'disabled'.
@@ -247,9 +276,17 @@ function Set-MsixFileSystemWriteVirtualization {
         Use KnownFolder tokens (e.g. '$(KnownFolder:LocalAppData)') or
         VFS-relative paths. Pass @() to suppress excluded-dirs entirely.
 
-    .PARAMETER OutputPath / SkipSigning / Pfx / PfxPassword
+    .PARAMETER OutputPath
         See Add-MsixPsfV2.
 
+    .PARAMETER SkipSigning
+        See Add-MsixPsfV2.
+
+    .PARAMETER Pfx
+        See Add-MsixPsfV2.
+
+    .PARAMETER PfxPassword
+        See Add-MsixPsfV2.
     .EXAMPLE
         # Disable write virtualization (the standard MSIX-conversion fix):
         Set-MsixFileSystemWriteVirtualization -PackagePath app.msix -Pfx cert.pfx -PfxPassword 'P@ss'
@@ -529,10 +566,17 @@ function Set-MsixInstalledLocationVirtualization {
         Min OS: Windows 10 2004 (build 19041+). MaxVersionTested is bumped
         automatically.
 
-    .PARAMETER ModifiedItems / DeletedItems / AddedItems
+    .PARAMETER ModifiedItems
         Each accepts 'keep' or 'reset'. Defaults match TMEditX:
         ModifiedItems=keep, DeletedItems=reset, AddedItems=keep.
 
+    .PARAMETER DeletedItems
+        Each accepts 'keep' or 'reset'. Defaults match TMEditX:
+        ModifiedItems=keep, DeletedItems=reset, AddedItems=keep.
+
+    .PARAMETER AddedItems
+        Each accepts 'keep' or 'reset'. Defaults match TMEditX:
+        ModifiedItems=keep, DeletedItems=reset, AddedItems=keep.
     .EXAMPLE
         Set-MsixInstalledLocationVirtualization -PackagePath app.msix `
             -DeletedItems keep -Pfx cert.pfx -PfxPassword 'P@ss'
@@ -1173,9 +1217,14 @@ function Add-MsixFontExtension {
         Add-MsixManifestNamespace -Manifest $M -Prefix 'uap4'
         $u4 = Get-MsixManifestNamespaceUri -Prefix 'uap4'
 
-        $pkgExt = _MsixGetOrCreatePackageExtensions -Manifest $M
+        # windows.sharedFonts is an APPLICATION-level extension — placing it
+        # under Package/Extensions fails MakeAppx schema validation
+        # ("uap4:Extension is unexpected according to content model of parent
+        # element Extensions"). Register it under the first Application.
+        $app    = _MsixGetOrCreateApplicationExtensions -Manifest $M
+        $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
         $cat    = 'windows.sharedFonts'
-        $existing = $pkgExt.ChildNodes | Where-Object {
+        $existing = $appExt.ChildNodes | Where-Object {
             $_.LocalName -eq 'Extension' -and $_.Category -eq $cat
         } | Select-Object -First 1
         if (-not $existing) {
@@ -1183,7 +1232,7 @@ function Add-MsixFontExtension {
             $existing.SetAttribute('Category', $cat)
             $body = $M.CreateElement('uap4:SharedFonts', $u4)
             $null = $existing.AppendChild($body)
-            $null = $pkgExt.AppendChild($existing)
+            $null = $appExt.AppendChild($existing)
         } else {
             $body = $existing.SelectSingleNode('*[local-name()="SharedFonts"]')
         }

@@ -35,15 +35,23 @@ function Invoke-MsixAutoFix {
         which stages would fire without mutating the package.
 
     .PARAMETER PackagePath
-        .msix to mutate.
+        The .msix to mutate.
 
     .PARAMETER Capabilities
         Names to add via Add-MsixCapability (rescap or standard, looked up
         against Get-MsixKnownCapability).
 
-    .PARAMETER PsfFixups / PsfAppOptions / PsfWorkingDirectory / PsfAdditionalFiles
+    .PARAMETER PsfFixups
         Forwarded to Add-MsixPsfV2.
 
+    .PARAMETER PsfAppOptions
+        Forwarded to Add-MsixPsfV2.
+
+    .PARAMETER PsfWorkingDirectory
+        Forwarded to Add-MsixPsfV2.
+
+    .PARAMETER PsfAdditionalFiles
+        Forwarded to Add-MsixPsfV2.
     .PARAMETER AddAliases
         If set, runs Add-MsixAlias for top-level user-facing executables.
         When -AliasAppIds is supplied, aliases are added only for those apps;
@@ -57,9 +65,11 @@ function Invoke-MsixAutoFix {
     .PARAMETER VcRuntimeSourceFolder
         If set, runs Add-MsixVcRuntimeBundle with this source folder.
 
-    .PARAMETER SplashImagePath / SplashAppId
+    .PARAMETER SplashImagePath
         If set, runs Add-MsixSplashScreen after PSF.
 
+    .PARAMETER SplashAppId
+        If set, runs Add-MsixSplashScreen after PSF.
     .PARAMETER VersionBumpComponent
         If set, runs Update-MsixPackageVersion before any other stage.
 
@@ -75,9 +85,11 @@ function Invoke-MsixAutoFix {
     .PARAMETER DryRun
         Report which stages would fire, then return — no mutation, no signing.
 
-    .PARAMETER Pfx / PfxPassword
+    .PARAMETER Pfx
         Signing certificate for the final pass.
 
+    .PARAMETER PfxPassword
+        Signing certificate for the final pass.
     .EXAMPLE
         Invoke-MsixAutoFix -PackagePath app.msix `
             -RemoveUninstallers `
@@ -291,9 +303,11 @@ function Invoke-MsixAutoFixFromAnalysis {
     .PARAMETER VcRuntimeSourceFolder
         VS Redist folder; required when a VcRuntime finding is in the report.
 
-    .PARAMETER StartupTaskAppId / StartupTaskName
+    .PARAMETER StartupTaskAppId
         Required when a ManifestFix:StartupTask finding is in the report.
 
+    .PARAMETER StartupTaskName
+        Required when a ManifestFix:StartupTask finding is in the report.
     .PARAMETER LoaderPaths
         Required when a ManifestFix:LoaderSearchPathOverride finding is in the report.
 
@@ -328,9 +342,18 @@ function Invoke-MsixAutoFixFromAnalysis {
     .PARAMETER DryRun
         Print the plan and return without mutating.
 
-    .PARAMETER OutputPath / Pfx / PfxPassword / SkipSigning (alias NoSign)
+    .PARAMETER OutputPath
         Forwarded to the underlying fixers. Signing only happens once at the end.
 
+    .PARAMETER Pfx
+        Forwarded to the underlying fixers. Signing only happens once at the end.
+
+    .PARAMETER PfxPassword
+        Forwarded to the underlying fixers. Signing only happens once at the end.
+
+    .PARAMETER SkipSigning
+        Forwarded to the underlying fixers. Signing only happens once at the end.
+        (alias NoSign)
     .EXAMPLE
         $report = Invoke-MsixInvestigation -PackagePath app.msix
         Invoke-MsixAutoFixFromAnalysis -Report $report `

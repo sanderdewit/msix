@@ -144,7 +144,7 @@ function Add-MsixAppIsolation {
         cmdlet throws with guidance; strip the COM server + its context-menu first.
 
     .PARAMETER PackagePath
-        .msix file to modify.
+        The .msix file to modify.
 
     .PARAMETER Mode
         AppContainer (default) — GA packagedClassicApp AppContainer.
@@ -165,9 +165,11 @@ function Add-MsixAppIsolation {
     .PARAMETER SkipSigning
         Do not sign the resulting package.
 
-    .PARAMETER Pfx / PfxPassword
+    .PARAMETER Pfx
         Signing certificate.
 
+    .PARAMETER PfxPassword
+        Signing certificate.
     .EXAMPLE
         # GA AppContainer (strict): the app runs in an AppContainer, ungranted
         # access is denied.
@@ -205,20 +207,6 @@ function Add-MsixAppIsolation {
         $Capabilities = if ($Mode -eq 'AppSilo') { @('isolatedWin32-promptForAccess') } else { @() }
     }
 
-    # Validate capability names against the mode (warn only).
-    foreach ($c in $Capabilities) {
-        if ($Mode -eq 'AppSilo') {
-            $known = $script:KnownIsolationCapabilities.Contains($c) -or $script:KnownIsolationDeviceCapabilities.Contains($c)
-            if (-not $known) {
-                Write-MsixLog -Level Warning -Message "'$c' is not a documented Win32-isolation capability. Verify against MS Learn before publishing."
-            }
-        } else {
-            if ($c -like 'isolatedWin32-*') {
-                Write-MsixLog -Level Warning -Message "'$c' is an appSilo (Win32 App Isolation) capability and is ignored in -Mode AppContainer. Use -Mode AppSilo for isolatedWin32-* capabilities, or pass a standard package capability name here."
-            }
-        }
-    }
-
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Add App Isolation ($Mode)")
 
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
@@ -226,6 +214,38 @@ function Add-MsixAppIsolation {
         -WhatIfPreview:$isWhatIf `
         -Activity "Add App Isolation ($Mode)" -Mutate {
         param([xml]$manifest)
+        _MsixApplyAppIsolation -Manifest $manifest -Mode $Mode -Capabilities $Capabilities -AppId $AppId
+    }
+}
+
+
+function _MsixApplyAppIsolation {
+    # Module-private core of Add-MsixAppIsolation: applies the isolation model
+    # (entry point, trust level, runFullTrust removal, capabilities) to an
+    # in-memory manifest. Shared with Invoke-MsixPipeline's AppIsolation stage
+    # so the two paths can never diverge again (issue #97).
+    param(
+        [Parameter(Mandatory)][xml]$Manifest,
+        [ValidateSet('AppContainer', 'AppSilo')]
+        [string]$Mode = 'AppContainer',
+        [string[]]$Capabilities = @(),
+        [string]$AppId
+    )
+        $manifest = $Manifest
+
+        # Validate capability names against the mode (warn only).
+        foreach ($c in $Capabilities) {
+            if ($Mode -eq 'AppSilo') {
+                $known = $script:KnownIsolationCapabilities.Contains($c) -or $script:KnownIsolationDeviceCapabilities.Contains($c)
+                if (-not $known) {
+                    Write-MsixLog -Level Warning -Message "'$c' is not a documented Win32-isolation capability. Verify against MS Learn before publishing."
+                }
+            } else {
+                if ($c -like 'isolatedWin32-*') {
+                    Write-MsixLog -Level Warning -Message "'$c' is an appSilo (Win32 App Isolation) capability and is ignored in -Mode AppContainer. Use -Mode AppSilo for isolatedWin32-* capabilities, or pass a standard package capability name here."
+                }
+            }
+        }
 
         # ── Namespaces + minimum-version floor ────────────────────────────────
         Add-MsixManifestNamespace -Manifest $manifest -Prefix 'uap10'
@@ -378,7 +398,6 @@ function Add-MsixAppIsolation {
             $null = $capsNode.AppendChild($node)
             Write-MsixLog -Level Info -Message "Capability added: $cap"
         }
-    }
 }
 
 
@@ -396,7 +415,7 @@ function Remove-MsixAppIsolation {
         normal packaged-Win32 default), and deletes any isolatedWin32-* capabilities.
 
     .PARAMETER PackagePath
-        .msix file to modify.
+        The .msix file to modify.
 
     .PARAMETER OutputPath
         Write the modified package here instead of overwriting -PackagePath.
@@ -404,7 +423,10 @@ function Remove-MsixAppIsolation {
     .PARAMETER SkipSigning
         Do not sign the resulting package.
 
-    .PARAMETER Pfx / PfxPassword
+    .PARAMETER Pfx
+        Signing certificate.
+
+    .PARAMETER PfxPassword
         Signing certificate.
     #>
     [CmdletBinding(SupportsShouldProcess)]

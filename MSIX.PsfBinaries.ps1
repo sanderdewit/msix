@@ -216,7 +216,7 @@ function _MsixVerifyAuthenticodeFolder {
         match side-by-side assembly manifests like 'app.exe.manifest' in some
         PowerShell versions because the FileSystem provider's wildcard engine
         treats '*.exe' more loosely than the .Extension equality check.
-        .manifest files are XML — not Authenticode-signable — so accidentally
+        The .manifest files are XML — not Authenticode-signable — so accidentally
         feeding them to Get-AuthenticodeSignature produced bogus "not signed"
         failures and aborted toolchain installs.
     #>

@@ -87,7 +87,7 @@ function Add-MsixCapability {
         the correct prefix is used.
 
     .PARAMETER PackagePath
-        .msix to modify.
+        The .msix to modify.
 
     .PARAMETER Names
         Capability names. Looked up against the registry — anything unknown
@@ -232,7 +232,7 @@ function Remove-MsixUninstallerArtifact {
         Invoke-MsixAutoFixFromAnalysis (RemoveUninstallers stage).
 
     .PARAMETER PackagePath
-        .msix file to mutate.
+        The .msix file to mutate.
 
     .PARAMETER PathPatterns
         Filename regex patterns. Defaults to a sensible uninstaller list.
@@ -414,7 +414,7 @@ function Remove-MsixUpdaterArtifact {
         Invoke-MsixAutoFixFromAnalysis (RemoveUpdaters stage).
 
     .PARAMETER PackagePath
-        .msix file to mutate.
+        The .msix file to mutate.
 
     .PARAMETER PathPatterns
         Filename regex patterns. Defaults to the same set
@@ -555,7 +555,7 @@ function Remove-MsixShellRegistryArtifact {
         through after Add-MsixLegacyContextMenu.
 
     .PARAMETER PackagePath
-        .msix to mutate.
+        The .msix to mutate.
 
     .PARAMETER Entries
         Array of pscustomobjects with at least Target, HandlerName/VerbName,
@@ -568,9 +568,14 @@ function Remove-MsixShellRegistryArtifact {
     .PARAMETER SkipSigning
         Skip signing. Alias: -NoSign.
 
-    .PARAMETER Pfx / PfxPassword / UnsignedOutputPath
+    .PARAMETER Pfx
         Forwarded to the shared sign/move path.
 
+    .PARAMETER PfxPassword
+        Forwarded to the shared sign/move path.
+
+    .PARAMETER UnsignedOutputPath
+        Forwarded to the shared sign/move path.
     .EXAMPLE
         $shell = Get-MsixShellContextMenuEntry -PackagePath app.msix
         Remove-MsixShellRegistryArtifact -PackagePath app.msix -Entries $shell -SkipSigning
@@ -763,7 +768,7 @@ function Add-MsixSplashScreen {
         Integrates with Invoke-MsixAutoFix via -SplashImagePath / -SplashAppId.
 
     .PARAMETER PackagePath
-        .msix to modify (must already use PsfLauncher).
+        The .msix to modify (must already use PsfLauncher).
 
     .PARAMETER ImagePath
         PNG/JPG to display. Copied into the package folder next to config.json.
@@ -835,7 +840,10 @@ function Add-MsixSplashScreen {
             $cfgPaths = @(Get-ChildItem -LiteralPath $workspace -Recurse -Filter 'config.json' -ErrorAction SilentlyContinue)
             if (-not $cfgPaths) { throw 'config.json not found; run Add-MsixPsfV2 first.' }
             $cfgPath = $cfgPaths[0].FullName
-            $cfgDir  = Split-Path -LiteralPath $cfgPath -Parent
+            # NOT Split-Path -LiteralPath ... -Parent: those two parameters sit
+            # in different parameter sets and always throw 'Parameter set cannot
+            # be resolved' (bug found by the #102 coverage tests).
+            $cfgDir  = [IO.Path]::GetDirectoryName($cfgPath)
 
             # Copy splash next to config.json
             $imageLeaf = (Get-Item -LiteralPath $ImagePath).Name

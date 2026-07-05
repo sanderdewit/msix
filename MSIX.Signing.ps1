@@ -407,7 +407,7 @@ function New-MsixSelfSignedCertificate {
         TrustedPeople.
 
     .PARAMETER PackagePath
-        .msix whose Publisher is read to use as the cert Subject.
+        The .msix whose Publisher is read to use as the cert Subject.
 
     .PARAMETER OutputFolder
         Where to place the cert files. Defaults to a temp folder.
@@ -502,7 +502,7 @@ function Invoke-MsixSelfSignAndDebug {
         -AutoSign calls this automatically.
 
     .PARAMETER PackagePath
-        .msix to sign in place.
+        The .msix to sign in place.
 
     .PARAMETER Force
         Re-sign even if the package already has a valid signature.

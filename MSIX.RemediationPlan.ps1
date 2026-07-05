@@ -560,7 +560,7 @@ function Invoke-MsixRemediationPlan {
         MsixRemediationPlan to apply.
 
     .PARAMETER PackagePath
-        .msix file to act on.
+        The .msix file to act on.
 
     .PARAMETER OutputPath
         Write the result here (default: overwrite PackagePath).
@@ -568,9 +568,17 @@ function Invoke-MsixRemediationPlan {
     .PARAMETER DryRun
         Print the plan and exit without writing anything.
 
-    .PARAMETER SkipSigning / NoSign / Pfx / PfxPassword
+    .PARAMETER SkipSigning
         Signing controls forwarded to the final Invoke-MsixSigning call.
 
+    .PARAMETER NoSign
+        Signing controls forwarded to the final Invoke-MsixSigning call.
+
+    .PARAMETER Pfx
+        Signing controls forwarded to the final Invoke-MsixSigning call.
+
+    .PARAMETER PfxPassword
+        Signing controls forwarded to the final Invoke-MsixSigning call.
     .EXAMPLE
         $plan = Import-MsixRemediationPlan .\app-remediation.yaml
         Invoke-MsixRemediationPlan -Plan $plan -PackagePath app.msix `

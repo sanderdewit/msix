@@ -111,7 +111,7 @@ MSIX\
 ├── MSIX.PsfBinaries.ps1       PSF / Procmon / SDK downloader + Authenticode verify
 ├── MSIX.Signing.ps1           Invoke-MsixSigning (SignTool / TrustedSigning / AzureSignTool)
 ├── MSIX.Pipeline.ps1          Invoke-MsixPipeline — sign-once orchestrator
-├── MSIX.ContextMenu.ps1       desktop9 (legacy IContextMenu) + desktop4 (IExplorerCommand)
+├── MSIX.ContextMenu.ps1       com + desktop4/desktop5 context menus (legacy IContextMenu + modern IExplorerCommand)
 ├── MSIX.Scripts.ps1           PSADT-flavoured standard scripts + Set-MsixScriptSignature
 ├── MSIX.AppIsolation.ps1      Win32 App Isolation (rescap capabilities, opt-in)
 ├── MSIX.Investigation.ps1     Static + procmon analysis + recommendations
@@ -396,7 +396,9 @@ Test-MsixAppAttachImage -ImagePath app.vhdx
 ## Context menus
 
 ```powershell
-# Legacy IContextMenu (desktop9, Win 11 21H2+ / build 22000+)
+# Legacy IContextMenu COM shell extension (com + desktop4/desktop5, Win10 1809+ / build 17763+).
+# Emits the com:SurrogateServer registration AND the desktop4:FileExplorerContextMenus
+# verb in one call — the TMEditX-verified pattern Explorer actually activates.
 Add-MsixLegacyContextMenu -PackagePath app.msix `
     -ShellExtDll 'VFS\ProgramFilesX64\App\ShellExt.dll' `
     -Clsid       'XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX' `

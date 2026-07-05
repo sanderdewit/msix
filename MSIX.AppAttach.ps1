@@ -278,7 +278,7 @@ function New-MsixAppAttachImage {
         One or more .msix files to include.
 
     .PARAMETER OutputPath
-        .vhdx or .cim path to create.
+        The .vhdx or .cim path to create.
 
     .PARAMETER FileType
         'vhdx' or 'cim'. Default: vhdx.

@@ -79,7 +79,7 @@ function Get-MsixUninstallerCandidate {
         Feeds the `UninstallerArtifact` finding in Get-MsixHeuristicFinding.
 
     .PARAMETER PackagePath
-        .msix to scan (read-only).
+        The .msix to scan (read-only).
 
     .EXAMPLE
         # List uninstaller leftovers, then remove them in a follow-up call
@@ -147,7 +147,7 @@ function Get-MsixUpdaterCandidate {
         UCRT redistributables, or the MSIX runtime itself are skipped.
 
     .PARAMETER PackagePath
-        .msix to scan (read-only).
+        The .msix to scan (read-only).
 
     .EXAMPLE
         # List updater leftovers, then remove them in a follow-up call
@@ -246,7 +246,7 @@ function Get-MsixUninstallRegistryEntry {
         without mounting it into the live registry, so no privileges are needed.
 
     .PARAMETER PackagePath
-        .msix file (read-only).
+        The .msix file (read-only).
 
     .EXAMPLE
         # Surface leftover uninstall registry entries (no elevation required)
@@ -332,7 +332,7 @@ function Get-MsixRunKeyEntry {
         false negatives (strings not 2-byte aligned).
 
     .PARAMETER PackagePath
-        .msix to scan (read-only).
+        The .msix to scan (read-only).
 
     .EXAMPLE
         # Find Run-key autostart leftovers
@@ -503,7 +503,7 @@ function Get-MsixShellContextMenuEntry {
         through the `AddLegacyContextMenu` stage of Invoke-MsixAutoFixFromAnalysis.
 
     .PARAMETER PackagePath
-        .msix file to inspect.
+        The .msix file to inspect.
 
     .EXAMPLE
         # Surface all shell verbs and shellex handlers (no elevation required)
@@ -690,7 +690,7 @@ function Get-MsixComServerEntry {
         Invoke-MsixAutoFixFromAnalysis, which calls Add-MsixComServerExtension.
 
     .PARAMETER PackagePath
-        .msix file to inspect.
+        The .msix file to inspect.
 
     .EXAMPLE
         # Find COM servers registered in the package's Registry.dat
@@ -792,7 +792,7 @@ function Get-MsixAliasCandidate {
         Pass the AppId values to Add-MsixAlias to register the suggestions.
 
     .PARAMETER PackagePath
-        .msix to scan (read-only).
+        The .msix to scan (read-only).
 
     .EXAMPLE
         # Surface alias candidates and add the first one with Add-MsixAlias

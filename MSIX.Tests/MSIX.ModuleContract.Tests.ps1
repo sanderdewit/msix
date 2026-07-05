@@ -98,3 +98,22 @@ Describe 'Export source-of-truth contract (issue #41)' -Tag 'ModuleContract' {
         $src | Should -Not -Match 'Export-ModuleMember\s+-Function\s+@\('
     }
 }
+
+Describe 'Approved-verb contract (issue #101; CONTRIBUTING "Approved verbs only")' -Tag 'ModuleContract' {
+    # CONTRIBUTING.md mandates Verb-MsixNoun with a verb from Get-Verb, so a
+    # bad name fails CI rather than code review. An unapproved verb also makes
+    # Import-Module emit a noisy warning for every consumer.
+
+    It 'every exported function uses an approved PowerShell verb' {
+        $approved = (Get-Verb).Verb
+        $manifest = Import-PowerShellDataFile -Path (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1'))
+        $bad = @($manifest.FunctionsToExport | Where-Object { ($_ -split '-', 2)[0] -notin $approved })
+        $bad | Should -BeNullOrEmpty -Because "these exported functions use unapproved verbs (see Get-Verb): $($bad -join ', ')"
+    }
+
+    It 'every exported function follows the Verb-MsixNoun naming pattern' {
+        $manifest = Import-PowerShellDataFile -Path (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1'))
+        $offPattern = @($manifest.FunctionsToExport | Where-Object { $_ -notmatch '^[A-Z][a-z]+-Msix[A-Za-z0-9]+$' })
+        $offPattern | Should -BeNullOrEmpty -Because "these exported functions do not match Verb-MsixNoun: $($offPattern -join ', ')"
+    }
+}

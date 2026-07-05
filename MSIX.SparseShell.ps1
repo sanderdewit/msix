@@ -61,9 +61,14 @@ function Import-MsixSparseShellExtension {
     .PARAMETER SkipSigning
         Don't sign the repacked package. Alias: -NoSign.
 
-    .PARAMETER Pfx / PfxPassword / UnsignedOutputPath
+    .PARAMETER Pfx
         Forwarded to the shared sign/move path.
 
+    .PARAMETER PfxPassword
+        Forwarded to the shared sign/move path.
+
+    .PARAMETER UnsignedOutputPath
+        Forwarded to the shared sign/move path.
     .PARAMETER KeepInnerPackage
         Preserve the inner .msix file inside the outer package. Default is to
         delete it because, after the merge, it has no consumer.

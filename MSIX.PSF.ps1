@@ -462,6 +462,7 @@ function New-MsixPsfConfig {
         [Parameter(Mandatory)]
         [xml]$Manifest,
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [hashtable[]]$Fixups,
         [string]$WorkingDirectory,
         [hashtable[]]$AppOptions
@@ -609,7 +610,11 @@ function Add-MsixPsfV2 {
     param(
         [Parameter(Mandatory)]
         [string]$PackagePath,
+        # Empty is allowed: a script-only PSF injection (startScript via
+        # -AppOptions, e.g. Add-MsixStandardScript) needs the launcher +
+        # config.json but no fixup DLLs.
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [hashtable[]]$Fixups,
         [string]$PsfSourcePath,
         [string]$WorkingDirectory,

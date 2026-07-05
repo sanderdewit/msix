@@ -21,14 +21,14 @@ unless explicitly testing a production signing backend.
 
 ---
 
-## Scenario 1 — Legacy IContextMenu shell extension (desktop9)
+## Scenario 1 — Legacy IContextMenu shell extension (com + desktop4/desktop5)
 
 Verifies `Add-MsixLegacyContextMenu` produces a manifest that activates a
-classic shell extension on Windows 11.
+classic shell extension on Windows 10 1809+ / Windows 11.
 
 ### Setup
 
-- Windows 11 21H2 (build 22000) or later, with Developer Mode enabled.
+- Windows 10 1809 (build 17763) or later, with Developer Mode enabled.
 - A test MSIX package containing a Win32 app and an in-package shell-extension
   DLL (any DLL exporting `DllGetClassObject` for a registered CLSID).
   Reference DLL: `VFS\ProgramFilesX64\Lab\ShellExt.dll`.
@@ -58,15 +58,21 @@ Menu" entry should appear in each case.
 
 - Resulting `.msix` is signed.
 - `AppxManifest.xml` contains:
-  - `xmlns:com`, `xmlns:desktop9`, both listed in `IgnorableNamespaces`.
-  - `<Package><Dependencies><TargetDeviceFamily MaxVersionTested="10.0.22000.0"`
+  - `xmlns:com`, `xmlns:desktop4`, `xmlns:desktop5`, all listed in
+    `IgnorableNamespaces`.
+  - `<Package><Dependencies><TargetDeviceFamily MaxVersionTested="10.0.17763.0"`
     or higher.
   - One `<com:Extension Category="windows.comServer">` under the Application's
-    Extensions block with the surrogate registration.
-  - One `<desktop9:Extension Category="windows.fileExplorerClassicContextMenuHandler">`
-    with three `<desktop9:ExtensionHandler>` children (`*`, `.log`, `Directory`),
-    all referencing the bare CLSID (no curly braces).
-- The right-click context menu fires on Windows 11.
+    Extensions block with the `com:SurrogateServer` / `com:Class` registration.
+  - One `<desktop4:Extension Category="windows.fileExplorerContextMenus">`
+    containing `<desktop4:FileExplorerContextMenus>` with three
+    `<desktop5:ItemType>` children (`Type="*"`, `Type=".log"`,
+    `Type="Directory"`), each holding a
+    `<desktop5:Verb Id="ContextMenuHandlers" Clsid="…"/>` — the CLSID is the
+    bare lowercase GUID (no curly braces) in both `com:Class@Id` and
+    `desktop5:Verb@Clsid`.
+- The right-click context menu fires (on Windows 11 it may sit behind
+  "Show more options" depending on the handler type).
 
 ### Cleanup
 
@@ -76,13 +82,19 @@ Remove-AppxPackage 'TestApp_1.0.0.0_x64__<pfn>'
 
 ### Common failure modes
 
-- Menu doesn't appear → check `MaxVersionTested` ≥ 22000. desktop9 won't
-  activate below that.
+- Menu doesn't appear → check `MaxVersionTested` ≥ 17763 — the desktop4
+  `windows.fileExplorerContextMenus` category won't activate below that.
+  Also confirm `Folder`-class targets were mapped to `Directory` (the
+  desktop5 schema does not accept `Folder`).
 - Menu appears but click does nothing → CLSID format wrong. Both `com:Class@Id`
-  and `desktop9:ExtensionHandler@Clsid` must be the bare GUID, no `{}`.
+  and `desktop5:Verb@Clsid` must be the bare lowercase GUID, no `{}`.
 - Package fails to install → missing `runFullTrust` capability.
   `Add-MsixComServerExtension` auto-injects it; if you used the lower-level
   helpers, add it manually.
+- Note: an earlier module version emitted `desktop9`
+  (`windows.fileExplorerClassicContextMenuHandler`); that schema turned out
+  not to activate for COM-based shell extensions and was replaced by the
+  com + desktop4/desktop5 pattern above.
 
 ---
 

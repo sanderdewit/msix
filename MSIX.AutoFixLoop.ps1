@@ -52,7 +52,7 @@ function Invoke-MsixAutoFixLoop {
         writing anything.
 
     .PARAMETER PackagePath
-        .msix to act on.
+        The .msix to act on.
 
     .PARAMETER MaxPasses
         Hard cap on pass count (default 5). Prevents runaway loops.
@@ -86,21 +86,46 @@ function Invoke-MsixAutoFixLoop {
     .PARAMETER DryRun
         Run only the first pass planner and print the plan; do not write.
 
-    .PARAMETER SkipSigning / NoSign / Pfx / PfxPassword
+    .PARAMETER SkipSigning
         Signing controls for the final sign-once call.
 
     # --- Auto-fix pass-through parameters (forwarded each pass) ---
 
+    .PARAMETER NoSign
+        Signing controls for the final sign-once call.
+
+    # --- Auto-fix pass-through parameters (forwarded each pass) ---
+
+    .PARAMETER Pfx
+        Signing controls for the final sign-once call.
+
+    # --- Auto-fix pass-through parameters (forwarded each pass) ---
+
+    .PARAMETER PfxPassword
+        Signing controls for the final sign-once call.
+
+    # --- Auto-fix pass-through parameters (forwarded each pass) ---
     .PARAMETER VcRuntimeSourceFolder
         Forwarded to Invoke-MsixAutoFixFromAnalysis.
 
-    .PARAMETER StartupTaskAppId / StartupTaskName / LoaderPaths
+    .PARAMETER StartupTaskAppId
         Forwarded to Invoke-MsixAutoFixFromAnalysis.
 
-    .PARAMETER IgnoreUpdaters / IgnorePluginDirectories / LegacyPluginFix
-    .PARAMETER IgnoreNestedPackages / PreferManifestOverPsf
+    .PARAMETER StartupTaskName
         Forwarded to Invoke-MsixAutoFixFromAnalysis.
 
+    .PARAMETER LoaderPaths
+        Forwarded to Invoke-MsixAutoFixFromAnalysis.
+    .PARAMETER IgnoreUpdaters
+
+    .PARAMETER IgnorePluginDirectories
+
+    .PARAMETER LegacyPluginFix
+    .PARAMETER IgnoreNestedPackages
+        Forwarded to Invoke-MsixAutoFixFromAnalysis.
+
+    .PARAMETER PreferManifestOverPsf
+        Forwarded to Invoke-MsixAutoFixFromAnalysis.
     .OUTPUTS
         [pscustomobject] @{
             Output      [string]  path to the final (signed) package

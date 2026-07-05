@@ -1350,6 +1350,11 @@ function Set-MsixBrandMetadata {
         If set, also propagate DisplayName / Description into every
         Application's uap:VisualElements block.
 
+    .PARAMETER RegeneratePri
+        After the edit, regenerate resources.pri (Update-MsixResourcePri) so
+        the new literal values take effect on pri-localized packages instead
+        of being shadowed by the old pri (issue #124).
+
     .EXAMPLE
         Set-MsixBrandMetadata -PackagePath app.msix `
             -DisplayName 'Contoso Expenses' `
@@ -1369,6 +1374,7 @@ function Set-MsixBrandMetadata {
         [string]$Description,
         [string]$LogoPath,
         [switch]$ApplyToApplications,
+        [switch]$RegeneratePri,
         [string]$OutputPath,
         [Alias('NoSign')]
         [switch]$SkipSigning,
@@ -1382,8 +1388,12 @@ function Set-MsixBrandMetadata {
     }
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Set brand metadata')
 
+    # With -RegeneratePri the pri pass repacks + signs LAST, so the brand pass
+    # runs unsigned to avoid a pointless double signature.
+    $skipForBrand = $SkipSigning -or ($RegeneratePri -and -not $isWhatIf)
+
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
-                        -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+                        -SkipSigning:$skipForBrand -Pfx $Pfx -PfxPassword $PfxPassword `
                         -UnsignedOutputPath $UnsignedOutputPath `
                         -WhatIfPreview:$isWhatIf `
                         -Activity 'Brand metadata' -Mutate {
@@ -1425,6 +1435,13 @@ function Set-MsixBrandMetadata {
             }
         }
         Write-MsixLog -Level Info -Message 'Brand metadata updated.'
+    }
+
+    if ($RegeneratePri -and -not $isWhatIf) {
+        $target = if ($OutputPath) { $OutputPath } else { $PackagePath }
+        Update-MsixResourcePri -PackagePath $target `
+            -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+            -UnsignedOutputPath $UnsignedOutputPath
     }
 }
 

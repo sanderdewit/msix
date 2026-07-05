@@ -56,6 +56,8 @@ try {
 . "$PSScriptRoot\MSIX.RemediationPlan.ps1"
 . "$PSScriptRoot\MSIX.AutoFixLoop.ps1"
 . "$PSScriptRoot\MSIX.Distribution.ps1"
+. "$PSScriptRoot\MSIX.Bundle.ps1"
+. "$PSScriptRoot\MSIX.RuntimeTest.ps1"
 #endregion
 
 

@@ -89,10 +89,14 @@
         RFC 3161 timestamp server URL. Defaults to DigiCert.
 
     .PARAMETER Signer
-        Which backend to use: SignTool (default), TrustedSigning, or
-        AzureSignTool. See top-level description. 'SignerSignEx' is RESERVED
-        for a future mssign32!SignerSignEx2 P/Invoke backend (issue #17); it is
-        accepted but currently throws a clear "not yet implemented" error.
+        Which backend to use: SignTool (default), TrustedSigning,
+        AzureSignTool, or SignerSignEx. See top-level description.
+
+        SignerSignEx (issue #17): the safe local-PFX path. The password is used
+        only in-process to load the certificate into an ephemeral CurrentUser\My
+        store entry; signtool then selects it by thumbprint (public), so the PFX
+        password and path never appear on any process command line the way the
+        plain SignTool /f /p path exposes them. Requires -Pfx / -PfxPassword.
 
     .EXAMPLE
         # Local PFX (dev / self-signed)
@@ -160,22 +164,23 @@
         [string]$TimestampUrl = 'http://timestamp.digicert.com'
     )
 
-    # Fail-closed contract (issue #77): an EXPLICIT -Signer always wins over
-    # the parameter-set inference. Without this, -Signer SignerSignEx combined
-    # with -Pfx/-PfxPassword bound to the SignToolPfx set and silently entered
-    # the SignTool path (including its command-line password exposure) instead
-    # of throwing the reserved-backend error.
-    if ($PSBoundParameters.ContainsKey('Signer') -and $Signer -eq 'SignerSignEx') {
-        throw "The SignerSignEx backend is not yet implemented (reserved; see issue #17). Use -Signer SignTool (PFX), TrustedSigning, or AzureSignTool."
-    }
-
-    # ParameterSetName drives the backend; fall back to the explicit -Signer
-    # when caller used the default SignTool set.
+    # ParameterSetName drives the backend when -Signer is not explicit;
+    # -Pfx/-PfxPassword otherwise imply the SignTool PFX path.
     $effectiveSigner = switch ($PSCmdlet.ParameterSetName) {
         'SignToolPfx'    { 'SignTool' }
         'TrustedSigning' { 'TrustedSigning' }
         'AzureSignTool'  { 'AzureSignTool' }
         default          { $Signer }
+    }
+
+    # Fail-closed contract (issue #77): an EXPLICIT -Signer always wins over the
+    # parameter-set inference. Without this, '-Signer SignerSignEx -Pfx ...'
+    # bound the SignToolPfx set and silently entered the SignTool path (with its
+    # command-line password exposure) instead of the requested in-process
+    # SignerSignEx backend. SignerSignEx needs the PFX, so it coexists with the
+    # SignToolPfx set — the explicit choice must therefore be honoured here.
+    if ($PSBoundParameters.ContainsKey('Signer')) {
+        $effectiveSigner = $Signer
     }
 
     # Emit security warning before any file I/O so it is always visible even
@@ -328,15 +333,79 @@
         }
 
         # =====================================================================
-        # SignerSignEx — RESERVED (issue #17). A future mssign32!SignerSignEx2
-        # P/Invoke backend that keeps the PFX password in process memory instead
-        # of on the command line. Not implemented yet: it is security-critical
-        # Win32 interop that must be validated on Windows against a real
-        # code-signing certificate before it can be trusted to produce correct
-        # Authenticode signatures. Throw clearly rather than silently no-op.
+        # SignerSignEx (issue #17 / #126) — in-process certificate handling.
+        # Closes the SignTool-PFX weakness: the password is decrypted only to
+        # construct an in-memory X509Certificate2 and the private key is loaded
+        # into an ephemeral CurrentUser\My store entry; signtool then selects
+        # that cert BY THUMBPRINT (public, non-sensitive). Neither the PFX path
+        # nor the password ever appears on any process command line, so it can't
+        # be read via WMI Win32_Process. The temporary store entry is removed in
+        # a finally block.
+        #
+        # (This realizes issue #17's security goal without the raw
+        # mssign32!SignerSignEx2 APPX-SIP P/Invoke, which remains future work —
+        # that interop is unvalidatable without a trusted code-signing cert and
+        # a subtly-wrong appx signature installs as corrupt.)
         # =====================================================================
         'SignerSignEx' {
-            throw "The SignerSignEx backend is not yet implemented (reserved; see issue #17). Use -Signer SignTool (PFX), TrustedSigning, or AzureSignTool."
+            if (-not $Pfx) {
+                throw '-Signer SignerSignEx requires -Pfx / -PfxPassword (its purpose is safe local PFX signing). For store/HSM signing use TrustedSigning or AzureSignTool.'
+            }
+            $cert = $null
+            $imported = $null
+            try {
+                # Decrypt the password ONLY to build the cert; never a plain var
+                # on the command line. Exportable+PersistKeySet so signtool can
+                # use the private key from the store.
+                $flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]'PersistKeySet, Exportable'
+                $cert  = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+                    (Resolve-Path -LiteralPath $Pfx).Path, $PfxPassword, $flags)
+                if (-not $cert.HasPrivateKey) {
+                    throw "The PFX '$Pfx' has no private key; it cannot be used to sign."
+                }
+                $thumb = $cert.Thumbprint
+
+                $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('My', 'CurrentUser')
+                $store.Open('ReadWrite')
+                try {
+                    if (-not $store.Certificates.Find('FindByThumbprint', $thumb, $false).Count) {
+                        $store.Add($cert)
+                        $imported = $thumb
+                    }
+                } finally {
+                    $store.Close()
+                }
+
+                # Only the thumbprint (public) reaches the command line.
+                $sigArgs = @('sign', '/v', '/sha1', $thumb,
+                             '/tr', $TimestampUrl, '/td', 'sha256', '/fd', 'sha256',
+                             $fileinfo.FullName)
+                if ($PSCmdlet.ShouldProcess($fileinfo.FullName, 'Sign with in-process certificate (SignerSignEx)')) {
+                    $r = Invoke-MsixProcess -FilePath $signtool -ArgumentList $sigArgs
+                    if ($r.ExitCode -ne 0) {
+                        $detail = if ($r.StdErr) { $r.StdErr } else { $r.StdOut }
+                        throw "signtool (SignerSignEx) failed (exit $($r.ExitCode)): $detail`nCheck: Microsoft-Windows-AppxPackagingOM event log."
+                    }
+                    Write-MsixLog -Level Info -Message "Signed successfully (SignerSignEx, in-process cert, no password on command line): $($fileinfo.Name)"
+                }
+            } finally {
+                # Remove the ephemeral store entry we added (leave pre-existing
+                # certs of the same thumbprint alone).
+                if ($imported) {
+                    $store2 = [System.Security.Cryptography.X509Certificates.X509Store]::new('My', 'CurrentUser')
+                    try {
+                        $store2.Open('ReadWrite')
+                        foreach ($c in @($store2.Certificates.Find('FindByThumbprint', $imported, $false))) {
+                            $store2.Remove($c)
+                        }
+                    } catch {
+                        Write-MsixLog -Level Warning -Message "Could not remove the temporary signing certificate ($imported) from CurrentUser\My: $($_.Exception.Message)"
+                    } finally {
+                        $store2.Close()
+                    }
+                }
+                if ($cert) { $cert.Dispose() }
+            }
         }
     }
 }

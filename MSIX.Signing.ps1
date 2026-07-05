@@ -407,7 +407,7 @@ function New-MsixSelfSignedCertificate {
         TrustedPeople.
 
     .PARAMETER PackagePath
-        .msix whose Publisher is read to use as the cert Subject.
+        The .msix whose Publisher is read to use as the cert Subject.
 
     .PARAMETER OutputFolder
         Where to place the cert files. Defaults to a temp folder.
@@ -488,7 +488,7 @@ function New-MsixSelfSignedCertificate {
 }
 
 
-function Invoke-MsixSelfSignAndDebug {
+function Invoke-MsixSelfSign {
     <#
     .SYNOPSIS
         End-to-end: detect if an .msix needs a self-signed cert, generate one
@@ -496,19 +496,26 @@ function Invoke-MsixSelfSignAndDebug {
         signed-package paths ready for Start-MsixSandbox -CertPath.
 
     .DESCRIPTION
+        Does NOT rewrite the manifest Publisher: it reads the existing
+        Identity/Publisher and generates a certificate whose Subject matches
+        it. To change the publisher (and sign to match), use Update-MsixSigner.
+
         The .cer should be passed to New-MsixSandboxConfig -CertPath so the
         sandbox bootstrap installs it into LocalMachine\Root +
         TrustedPeople before installing the package. Start-MsixSandbox
         -AutoSign calls this automatically.
 
+        Renamed from Invoke-MsixSelfSignAndDebug in 0.71.3 (it only signs; it
+        never attached a debugger). The old name remains as an alias.
+
     .PARAMETER PackagePath
-        .msix to sign in place.
+        The .msix to sign in place.
 
     .PARAMETER Force
         Re-sign even if the package already has a valid signature.
 
     .EXAMPLE
-        $r = Invoke-MsixSelfSignAndDebug -PackagePath app.msix
+        $r = Invoke-MsixSelfSign -PackagePath app.msix
         Start-MsixSandbox -DropFolder (Split-Path -Path $r.PackagePath) `
                           -PackageName (Split-Path -Path $r.PackagePath -Leaf) `
                           -CertPath $r.CertPath
@@ -546,3 +553,8 @@ function Invoke-MsixSelfSignAndDebug {
         Signed      = $true
     }
 }
+
+
+# Backward-compatible alias: the old name implied debugging, but the function
+# only ever signed (renamed in 0.71.3).
+Set-Alias Invoke-MsixSelfSignAndDebug Invoke-MsixSelfSign

@@ -223,3 +223,66 @@ Describe 'Remove-MsixAppIsolation reverses isolation (real package)' -Tag 'Integ
         if (Test-Path -LiteralPath $fx.StagingFolder) { Remove-Item -LiteralPath $fx.StagingFolder -Recurse -Force }
     }
 }
+
+Describe 'Invoke-MsixPipeline AppIsolation stage (real package, issue #97)' -Tag 'Integration' {
+
+    BeforeAll {
+        $script:ToolingAvailable = Test-MsixFixtureToolingAvailable
+        if (-not $script:ToolingAvailable) { Write-Warning 'Integration tests SKIPPED: MakeAppx not resolvable.' }
+        $script:Uap10Uri = 'http://schemas.microsoft.com/appx/manifest/uap/windows10/10'
+        $script:Uap18Uri = 'http://schemas.microsoft.com/appx/manifest/uap/windows10/18'
+        $script:Dir = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "msix-pipe-iso-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $script:Dir -Force | Out-Null
+    }
+    BeforeEach { if (-not $script:ToolingAvailable) { Set-ItResult -Skipped -Because 'MakeAppx not available.' } }
+    AfterAll { if ($script:Dir -and (Test-Path -LiteralPath $script:Dir)) { Remove-Item -LiteralPath $script:Dir -Recurse -Force } }
+
+    It 'default AppContainer mode: PartialTrust + uap10 attrs + runFullTrust removed (not the old capability-only shape)' {
+        $pkg = Join-Path $script:Dir 'base.msix'
+        $out = Join-Path $script:Dir 'pipe-ac.msix'
+        $fx  = New-MsixTestFixture -OutputPath $pkg
+
+        Invoke-MsixPipeline -PackagePath $fx.PackagePath -OutputPath $out -Config @{
+            AppIsolation = @{ Mode = 'AppContainer' }
+            Signing      = @{ Skip = $true }
+        }
+
+        [xml]$m = Get-MsixManifest -Path $out
+        $app = $m.Package.Applications.Application
+        $app.GetAttribute('EntryPoint')                        | Should -Be 'Windows.PartialTrustApplication'
+        $app.GetAttribute('TrustLevel', $script:Uap10Uri)      | Should -Be 'appContainer'
+        $app.GetAttribute('RuntimeBehavior', $script:Uap10Uri) | Should -Be 'packagedClassicApp'
+
+        $rft = $m.Package.Capabilities.ChildNodes |
+            Where-Object { $_.LocalName -eq 'Capability' -and $_.GetAttribute('Name') -eq 'runFullTrust' }
+        $rft | Should -BeNullOrEmpty -Because 'the pipeline must apply the same model as Add-MsixAppIsolation'
+
+        if (Test-Path -LiteralPath $fx.StagingFolder) { Remove-Item -LiteralPath $fx.StagingFolder -Recurse -Force }
+    }
+
+    It 'AppSilo mode: uap18 silo attrs + default isolatedWin32-promptForAccess + MinVersion 26100' {
+        $pkg = Join-Path $script:Dir 'base2.msix'
+        $out = Join-Path $script:Dir 'pipe-silo.msix'
+        $fx  = New-MsixTestFixture -OutputPath $pkg
+
+        Invoke-MsixPipeline -PackagePath $fx.PackagePath -OutputPath $out -Config @{
+            AppIsolation = @{ Mode = 'AppSilo' }
+            Signing      = @{ Skip = $true }
+        }
+
+        [xml]$m = Get-MsixManifest -Path $out
+        $app = $m.Package.Applications.Application
+        $app.GetAttribute('EntryPoint')                        | Should -Be 'Windows.PartialTrustApplication'
+        $app.GetAttribute('RuntimeBehavior', $script:Uap18Uri) | Should -Be 'appSilo'
+        $app.GetAttribute('EntryPoint', $script:Uap18Uri)      | Should -Be 'Isolated.App'
+
+        $cap = $m.Package.Capabilities.ChildNodes |
+            Where-Object { $_.LocalName -eq 'Capability' -and $_.GetAttribute('Name') -eq 'isolatedWin32-promptForAccess' }
+        $cap | Should -Not -BeNullOrEmpty -Because 'AppSilo default capability must be applied by the pipeline too'
+
+        $tdf = @($m.Package.Dependencies.TargetDeviceFamily) | Where-Object { $_.GetAttribute('Name') -eq 'Windows.Desktop' }
+        $tdf.GetAttribute('MinVersion') | Should -Be '10.0.26100.0'
+
+        if (Test-Path -LiteralPath $fx.StagingFolder) { Remove-Item -LiteralPath $fx.StagingFolder -Recurse -Force }
+    }
+}

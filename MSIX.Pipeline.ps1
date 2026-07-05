@@ -35,7 +35,15 @@
             AdditionalFiles   [string[]]
 
           AppIsolation [hashtable]   Keys:
-            Capabilities      [string[]]   Add Win32 isolation capabilities
+            Mode              [string]     'AppContainer' (GA, default) or 'AppSilo' (preview)
+            Capabilities      [string[]]   AppContainer: standard package capabilities;
+                                           AppSilo: isolatedWin32-* / device capabilities
+                                           (default isolatedWin32-promptForAccess)
+            AppId             [string]     Restrict to one Application (default: all)
+            RemoveComServer   [bool]       Strip windows.comServer + context-menu
+                                           verbs instead of refusing to isolate
+            NOTE: applies the same model as Add-MsixAppIsolation — partial-trust
+            entry point, TrustLevel=appContainer, runFullTrust removed.
 
           Signing      [hashtable]   Keys:
             Pfx                 [string]
@@ -138,25 +146,25 @@
         }
 
         # ── App Isolation ────────────────────────────────────────────────
-        if ($Config.AppIsolation -and $Config.AppIsolation.Capabilities) {
-            Add-MsixManifestNamespace -Manifest $manifest -Prefix 'rescap'
-            Set-MsixManifestMaxVersionTested -Manifest $manifest -MinBuild 26100
-            $rescapUri = Get-MsixManifestNamespaceUri -Prefix 'rescap'
-            $capsNode  = $manifest.Package.Capabilities
-            if (-not $capsNode) {
-                $capsNode = $manifest.CreateElement('Capabilities', $manifest.Package.NamespaceURI)
-                $null     = $manifest.Package.AppendChild($capsNode)
+        # Delegates to the same core as Add-MsixAppIsolation so the pipeline
+        # can never again emit the obsolete capability-only shape (issue #97):
+        # partial-trust entry point + TrustLevel=appContainer + runFullTrust
+        # removed, per Mode = AppContainer (GA default) / AppSilo (preview).
+        if ($Config.AppIsolation) {
+            $isoMode = 'AppContainer'
+            if ($Config.AppIsolation.Mode) { $isoMode = [string]$Config.AppIsolation.Mode }
+            if ($Config.AppIsolation.ContainsKey('Capabilities')) {
+                $isoCaps = @($Config.AppIsolation.Capabilities)
+            } elseif ($isoMode -eq 'AppSilo') {
+                $isoCaps = @('isolatedWin32-promptForAccess')   # mirror the cmdlet default
+            } else {
+                $isoCaps = @()
             }
-            foreach ($cap in @($Config.AppIsolation.Capabilities)) {
-                $existing = $capsNode.ChildNodes | Where-Object { $_.LocalName -eq 'Capability' -and $_.Name -eq $cap }
-                if (-not $existing) {
-                    $node = $manifest.CreateElement('rescap:Capability', $rescapUri)
-                    $node.SetAttribute('Name', $cap)
-                    $null = $capsNode.AppendChild($node)
-                    Write-MsixLog -Level Info -Message "Capability added: $cap"
-                    $manifestDirty = $true
-                }
-            }
+            $isoAppId = ''
+            if ($Config.AppIsolation.AppId) { $isoAppId = [string]$Config.AppIsolation.AppId }
+            $isoStripCom = [bool]$Config.AppIsolation.RemoveComServer
+            _MsixApplyAppIsolation -Manifest $manifest -Mode $isoMode -Capabilities $isoCaps -AppId $isoAppId -RemoveComServer:$isoStripCom
+            $manifestDirty = $true
         }
 
         if ($manifestDirty) {
@@ -300,7 +308,7 @@ function _MsixMutatePackage {
           6. The workspace is always cleaned up in a finally.
 
     .PARAMETER PackagePath
-        .msix to mutate.
+        The .msix to mutate.
 
     .PARAMETER Mutator
         Script block invoked with the workspace path as positional arg 0.

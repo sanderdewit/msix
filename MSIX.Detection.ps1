@@ -26,7 +26,7 @@ function Get-MsixFontCandidate {
         when the package ships fonts but does not declare them.
 
     .PARAMETER PackagePath
-        .msix to scan (read-only).
+        The .msix to scan (read-only).
 
     .EXAMPLE
         # Discover fonts and register them via uap4:SharedFonts in one pipeline
@@ -79,7 +79,7 @@ function Get-MsixDesktopShortcutCandidate {
         detection half of Remove-MsixDesktopShortcut. No mutation, no signing.
 
     .PARAMETER PackagePath
-        .msix to scan (read-only).
+        The .msix to scan (read-only).
 
     .EXAMPLE
         # Surface unwanted desktop shortcuts, then strip them in-place
@@ -138,7 +138,7 @@ function Remove-MsixDesktopShortcut {
         finding category.
 
     .PARAMETER PackagePath
-        .msix file to mutate.
+        The .msix file to mutate.
 
     .PARAMETER OutputPath
         If set, the repacked package is written here instead of overwriting
@@ -236,7 +236,7 @@ function Get-MsixCapabilityHint {
         `AddCapabilityHints` stage of Invoke-MsixAutoFixFromAnalysis.
 
     .PARAMETER PackagePath
-        .msix to scan (read-only).
+        The .msix to scan (read-only).
 
     .EXAMPLE
         # Discover hints and add them via Add-MsixCapability
@@ -294,7 +294,7 @@ function Get-MsixNestedPackageCandidate {
         strategy (side-loading, startScript wrapper, or Intune / SCCM staging).
 
     .PARAMETER PackagePath
-        .msix to scan (read-only).
+        The .msix to scan (read-only).
 
     .EXAMPLE
         # Surface any nested installer packages — there is no auto-fix
@@ -387,7 +387,7 @@ function Get-MsixPluginExtensionPoint {
         directly) to apply the fix.
 
     .PARAMETER PackagePath
-        .msix to scan (read-only).
+        The .msix to scan (read-only).
 
     .PARAMETER MinFiles
         Minimum number of entries a directory must contain to be flagged.

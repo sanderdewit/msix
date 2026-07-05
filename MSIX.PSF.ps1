@@ -462,6 +462,7 @@ function New-MsixPsfConfig {
         [Parameter(Mandatory)]
         [xml]$Manifest,
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [hashtable[]]$Fixups,
         [string]$WorkingDirectory,
         [hashtable[]]$AppOptions
@@ -609,7 +610,11 @@ function Add-MsixPsfV2 {
     param(
         [Parameter(Mandatory)]
         [string]$PackagePath,
+        # Empty is allowed: a script-only PSF injection (startScript via
+        # -AppOptions, e.g. Add-MsixStandardScript) needs the launcher +
+        # config.json but no fixup DLLs.
         [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
         [hashtable[]]$Fixups,
         [string]$PsfSourcePath,
         [string]$WorkingDirectory,
@@ -865,6 +870,158 @@ function Add-MsixPsfV2 {
     } finally {
         Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
     }
+}
+
+#endregion
+
+#region Remove PSF -----------------------------------------------------------
+
+function Remove-MsixPsf {
+    <#
+    .SYNOPSIS
+        Strips the Package Support Framework from a package: repoints each
+        Application at its real executable and deletes the PSF payload.
+        The inverse of Add-MsixPsfV2.
+
+    .DESCRIPTION
+        Reads config.json to discover the real target executable per
+        application, sets Application@Executable back to it, then deletes the
+        PSF payload files (PsfLauncher*, PsfRuntime*, PsfRunDll*, fixup DLLs,
+        config.json and script wrappers). Repacks and re-signs.
+
+        The primary use case is preparing a package for AppContainer isolation:
+        PSF and isolation are mutually exclusive (PSF injects fixup DLLs into
+        the target process, which AppContainer blocks), so Add-MsixAppIsolation
+        refuses PSF-launched packages until this cmdlet has run.
+
+        WARNING: every behaviour PSF provided disappears with it — file
+        redirection, environment variables, start/end scripts, argument and
+        working-directory overrides. The cmdlet logs a warning for each
+        behaviour it detects in config.json so you know what you are giving up.
+
+        Idempotent: a package without PSF is reported as a no-op.
+
+    .PARAMETER PackagePath
+        The .msix file to strip PSF from.
+
+    .PARAMETER OutputPath
+        Write the modified package here instead of overwriting -PackagePath.
+
+    .PARAMETER SkipSigning
+        Skip the signing pass. Alias: -NoSign.
+
+    .PARAMETER Pfx
+        Signing certificate (.pfx) path.
+
+    .PARAMETER PfxPassword
+        SecureString password for the .pfx.
+
+    .PARAMETER UnsignedOutputPath
+        If signing fails, preserve the unsigned scratch package here.
+
+    .EXAMPLE
+        # Strip PSF, then isolate (the order matters)
+        Remove-MsixPsf -PackagePath app.msix -SkipSigning
+        Add-MsixAppIsolation -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw
+
+    .OUTPUTS
+        [pscustomobject] with ExecutablesRestored, FilesRemoved, Output — or
+        $null when the package carries no PSF.
+
+    .LINK
+        https://github.com/microsoft/MSIX-PackageSupportFramework
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSShouldProcess', '',
+        Justification = 'ShouldProcess is invoked inside _MsixMutatePackage; PSSA cannot trace it through the scriptblock dispatch (issue #40).')]
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory)] [string]$PackagePath,
+        [string]$OutputPath,
+        [Alias('NoSign')]
+        [switch]$SkipSigning,
+        [string]$Pfx,
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
+    )
+
+    $null = _MsixMutatePackage -PackagePath $PackagePath -Operation 'remove-psf' `
+        -OutputPath $OutputPath -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
+        -UnsignedOutputPath $UnsignedOutputPath `
+        -NoChangeMessage 'No PSF payload found; nothing to remove.' `
+        -Mutator {
+            param($workspace)
+
+            # ── Locate config.json (anywhere in the package) ─────────────
+            $cfgItem = Get-ChildItem -LiteralPath $workspace -Recurse -Filter 'config.json' -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            $cfg = $null
+            if ($cfgItem) {
+                try { $cfg = Get-Content -LiteralPath $cfgItem.FullName -Raw | ConvertFrom-Json } catch {
+                    Write-MsixLog -Level Warning -Message "config.json found but not parseable ($($_.Exception.Message)); executables cannot be restored from it."
+                }
+            }
+
+            # ── Repoint each Application at its real executable ──────────
+            $manifestPath = Join-Path -Path $workspace -ChildPath 'AppxManifest.xml'
+            [xml]$manifest = Get-MsixManifest -Path $manifestPath
+            $restored = 0
+            $manifestDirty = $false
+            foreach ($app in @($manifest.Package.Applications.Application)) {
+                $exe = $app.GetAttribute('Executable')
+                if ($exe -notmatch 'PsfLauncher\d*\.exe$') { continue }
+
+                $appId  = $app.GetAttribute('Id')
+                $target = $null
+                if ($cfg -and $cfg.applications) {
+                    $cfgApp = @($cfg.applications) | Where-Object { $_.id -eq $appId } | Select-Object -First 1
+                    if ($cfgApp -and $cfgApp.executable) { $target = ([string]$cfgApp.executable).Replace('/', '\') }
+                }
+                if (-not $target) {
+                    Write-MsixLog -Level Warning -Message "Application '$appId' launches PsfLauncher but config.json does not map it to a real executable; leaving its Executable unchanged."
+                    continue
+                }
+                $app.SetAttribute('Executable', $target)
+                $restored++
+                $manifestDirty = $true
+                Write-MsixLog -Level Info -Message "Application '$appId': Executable restored to '$target' (was '$exe')."
+
+                # Surface what the PSF config did for this app — all of it is lost.
+                if ($cfgApp.PSObject.Properties['arguments'] -and $cfgApp.arguments) {
+                    Write-MsixLog -Level Warning -Message "Application '$appId' had PSF launch arguments ('$($cfgApp.arguments)') — lost with PSF. Bake them into a wrapper or shortcut if still needed."
+                }
+                if ($cfgApp.PSObject.Properties['workingDirectory'] -and $cfgApp.workingDirectory) {
+                    Write-MsixLog -Level Warning -Message "Application '$appId' had a PSF working-directory override ('$($cfgApp.workingDirectory)') — lost with PSF."
+                }
+                if ($cfgApp.PSObject.Properties['startScript'] -and $cfgApp.startScript) {
+                    Write-MsixLog -Level Warning -Message "Application '$appId' had a PSF startScript — lost with PSF."
+                }
+                if ($cfgApp.PSObject.Properties['endScript'] -and $cfgApp.endScript) {
+                    Write-MsixLog -Level Warning -Message "Application '$appId' had a PSF endScript — lost with PSF."
+                }
+            }
+            if ($cfg -and $cfg.processes) {
+                $fixupNames = @($cfg.processes | ForEach-Object { @($_.fixups) } | ForEach-Object { $_.dll } | Where-Object { $_ } | Select-Object -Unique)
+                if ($fixupNames) {
+                    Write-MsixLog -Level Warning -Message ("PSF fixups removed with the framework: {0}. Behaviour they provided (file redirection, env vars, tracing, ...) is gone — validate the app still works." -f ($fixupNames -join ', '))
+                }
+            }
+            if ($manifestDirty) { Save-MsixManifest -Manifest $manifest -Path $manifestPath }
+
+            # ── Delete the PSF payload ────────────────────────────────────
+            $patterns = 'PsfLauncher*.exe', 'PsfLauncher*.dll', 'PsfRuntime*.dll', 'PsfRunDll*.exe',
+                        '*Fixup*.dll', 'config.json', 'StartingScriptWrapper.ps1'
+            $removedFiles = 0
+            foreach ($pattern in $patterns) {
+                foreach ($file in @(Get-ChildItem -LiteralPath $workspace -Recurse -File -Filter $pattern -ErrorAction SilentlyContinue)) {
+                    [IO.File]::Delete($file.FullName)
+                    $removedFiles++
+                    Write-MsixLog -Level Info -Message "Removed PSF file: $($file.FullName.Substring($workspace.Length + 1))"
+                }
+            }
+
+            if ($restored -eq 0 -and $removedFiles -eq 0) { return $null }
+            @{ ExecutablesRestored = $restored; FilesRemoved = $removedFiles }
+        }
 }
 
 #endregion

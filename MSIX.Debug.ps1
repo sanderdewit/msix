@@ -283,14 +283,16 @@ function Start-MsixDebugSession {
         after copying the .msix in.
 
     .PARAMETER PackagePath
-        .msix file under investigation.
+        The .msix file under investigation.
 
     .PARAMETER Install
         Install (or re-install) the package via Add-AppPackage before debugging.
 
-    .PARAMETER LaunchProcMon / LaunchDebugView
+    .PARAMETER LaunchProcMon
         Open the corresponding Sysinternals tool. Auto-installs Procmon if missing.
 
+    .PARAMETER LaunchDebugView
+        Open the corresponding Sysinternals tool. Auto-installs Procmon if missing.
     .PARAMETER AddTraceFixup
         Inject the PSF TraceFixup DLL into the package before debugging so that
         file-system and registry failures are emitted via OutputDebugString.
@@ -972,7 +974,7 @@ function Start-MsixSandbox {
             $needsSelfSign = (Test-MsixSignature -PackagePath $msix).NeedsSelfSign
             if ($needsSelfSign) {
                 Write-MsixLog -Level Info -Message 'Package signature missing/invalid; generating self-signed cert and re-signing.'
-                $signed = Invoke-MsixSelfSignAndDebug -PackagePath $msix
+                $signed = Invoke-MsixSelfSign -PackagePath $msix
                 $effectiveCertPath = $signed.CertPath
             } else {
                 Write-MsixLog -Level Info -Message 'Package signature is valid; skipping self-sign.'

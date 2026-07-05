@@ -692,12 +692,41 @@ function Add-MsixStartMenuFolder {
             -Activity "Set VisualGroup '$FolderName'" -Mutate {
             param([xml]$manifest)
 
+            # Per MS Learn (packaging-tool/create-start-group): the VisualGroup
+            # attribute only exists on the uap3 REDEFINITION of VisualElements.
+            # The element itself must become <uap3:VisualElements> (children
+            # like uap:DefaultTile keep their prefixes); the VisualGroup
+            # attribute stays unprefixed. A bare attribute on uap:VisualElements
+            # fails MakeAppx schema validation.
+            Add-MsixManifestNamespace -Manifest $manifest -Prefix 'uap3'
+            $uap3Uri = Get-MsixManifestNamespaceUri -Prefix 'uap3'
+
             foreach ($app in @($manifest.Package.Applications.Application)) {
                 $ve = $app.SelectSingleNode('*[local-name()="VisualElements"]')
                 if (-not $ve) { continue }
+
+                if ($ve.NamespaceURI -ne $uap3Uri) {
+                    # Rebuild the element in the uap3 namespace, keeping every
+                    # attribute (except xmlns declarations) and all children.
+                    $new = $manifest.CreateElement('uap3', 'VisualElements', $uap3Uri)
+                    foreach ($a in @($ve.Attributes)) {
+                        if ($a.Prefix -eq 'xmlns' -or $a.Name -eq 'xmlns') { continue }
+                        if ($a.LocalName -eq 'VisualGroup') { continue }   # re-set below
+                        if ($a.NamespaceURI) {
+                            $null = $new.SetAttribute($a.LocalName, $a.NamespaceURI, $a.Value)
+                        } else {
+                            $new.SetAttribute($a.Name, $a.Value)
+                        }
+                    }
+                    while ($ve.HasChildNodes) { $null = $new.AppendChild($ve.FirstChild) }
+                    $null = $ve.ParentNode.ReplaceChild($new, $ve)
+                    $ve = $new
+                }
+
                 $ve.SetAttribute('VisualGroup', $FolderName)
                 Write-MsixLog -Level Info -Message "VisualGroup '$FolderName' set on $($app.Id)"
             }
+            Write-MsixLog -Level Warning -Message 'Start-menu folders only materialise when at least TWO packaged applications share the same VisualGroup; with a single app Windows ignores the group and pins the shortcut directly.'
         }
     }
 }

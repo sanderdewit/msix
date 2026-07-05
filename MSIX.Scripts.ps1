@@ -232,7 +232,7 @@ function Set-MsixScriptSignature {
         certificate loading / timestamp server arguments.
 
     .PARAMETER ScriptPath
-        .ps1 (or .psm1) file to sign.
+        The .ps1 (or .psm1) file to sign.
 
     .PARAMETER Pfx
         Path to the PFX certificate. Required.
@@ -292,7 +292,7 @@ function Add-MsixStandardScript {
         and the package so they form a coherent signed artefact.
 
     .PARAMETER PackagePath
-        .msix file to modify.
+        The .msix file to modify.
 
     .PARAMETER AppId
         Application Id to attach the startScript to.

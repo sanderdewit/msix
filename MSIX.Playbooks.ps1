@@ -119,7 +119,7 @@ function Find-MsixPlaybook {
           PublisherSubject   regex matched against Package/Identity/@Publisher
 
     .PARAMETER PackagePath
-        .msix or AppxManifest.xml to fingerprint.
+        The .msix or AppxManifest.xml to fingerprint.
 
     .PARAMETER SearchPath
         Forwarded to Get-MsixPlaybook.
@@ -177,7 +177,7 @@ function Invoke-MsixPlaybook {
           4. With -DryRun, prints the plan and stops without running.
 
     .PARAMETER PackagePath
-        .msix to act on.
+        The .msix to act on.
 
     .PARAMETER Playbook
         A playbook object from Get-MsixPlaybook / Find-MsixPlaybook, OR a
@@ -187,10 +187,21 @@ function Invoke-MsixPlaybook {
     .PARAMETER DryRun
         Print the resolved plan and exit without executing.
 
-    .PARAMETER OutputPath / Pfx / PfxPassword / SkipSigning
+    .PARAMETER OutputPath
         Forwarded to the final signing call. Same semantics as
         Invoke-MsixAutoFixFromAnalysis.
 
+    .PARAMETER Pfx
+        Forwarded to the final signing call. Same semantics as
+        Invoke-MsixAutoFixFromAnalysis.
+
+    .PARAMETER PfxPassword
+        Forwarded to the final signing call. Same semantics as
+        Invoke-MsixAutoFixFromAnalysis.
+
+    .PARAMETER SkipSigning
+        Forwarded to the final signing call. Same semantics as
+        Invoke-MsixAutoFixFromAnalysis.
     .EXAMPLE
         Find-MsixPlaybook -PackagePath app.msix |
             Invoke-MsixPlaybook -PackagePath app.msix -DryRun

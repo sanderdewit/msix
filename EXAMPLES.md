@@ -390,7 +390,7 @@ Update-MsixSigner `
     -OutputPath  'C:\drop\App-lab.msix'
 
 # Launch a Windows Sandbox session with the package preloaded + DebugView running
-Invoke-MsixSelfSignAndDebug -PackagePath 'C:\drop\App-lab.msix'
+Invoke-MsixSelfSign -PackagePath 'C:\drop\App-lab.msix'
 ```
 
 ---
@@ -527,12 +527,20 @@ Bundled templates (`Get-MsixStandardScript | Select-Object Name, Description`):
 
 ---
 
-## 19. Win32 App Isolation (opt-in)
+## 19. App isolation (opt-in): AppContainer + AppSilo
 
-Adds `rescap:Capability` entries to the manifest so the app runs inside the
-Win32 isolation broker (Windows 11 24H2 / build 26100+). The module
-auto-injects the `rescap` namespace, bumps `MaxVersionTested` to `10.0.26100.0`,
-and adds the `unvirtualizedResources` capability required by the schema.
+`Add-MsixAppIsolation` makes a packaged Win32 app run in an **AppContainer**:
+it switches the Application to `EntryPoint="Windows.PartialTrustApplication"`,
+sets `TrustLevel="appContainer"`, and **removes `runFullTrust`** (the full-trust
+entry point requires `runFullTrust`, which keeps the process full-trust — so it
+could never isolate). Two modes:
+
+- **AppContainer** (default, GA — Win10 2004+): `packagedClassicApp`. Ungranted
+  access is **denied**. `-Capabilities` are **standard package capabilities**.
+- **AppSilo** (`-Mode AppSilo`, preview — Win11 24H2): the Win32 App Isolation
+  silo with the consent **broker** on top of the same AppContainer base.
+  `-Capabilities` are **`isolatedWin32-*` / device capabilities**; raises
+  `Windows.Desktop` MinVersion to `10.0.26100.0`.
 
 **Validate first** — many legacy apps break under isolation because they rely on
 broad filesystem / registry access.  Use Microsoft's
@@ -542,35 +550,29 @@ to discover exactly which capabilities your app needs before adding them.
 ```powershell
 $pw = Read-Host -AsSecureString -Prompt 'PFX password'
 
-# See all documented isolation capabilities the module knows about
-Get-MsixIsolationCapability
+# GA AppContainer (strict): ungranted access denied, no capabilities granted
+Add-MsixAppIsolation -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw
 
-# Enable isolation with minimal profile access
+# AppContainer with specific standard capabilities granted
 Add-MsixAppIsolation -PackagePath app.msix `
+    -Capabilities internetClient, privateNetworkClientServer `
+    -Pfx cert.pfx -PfxPassword $pw
+
+# AppSilo (preview): brokered access with the consent prompt
+# (see all documented silo capabilities: Get-MsixIsolationCapability)
+Add-MsixAppIsolation -PackagePath app.msix -Mode AppSilo `
     -Capabilities 'isolatedWin32-promptForAccess', 'isolatedWin32-userProfileMinimal' `
     -Pfx cert.pfx -PfxPassword $pw
 
-# Networking-capable isolated app
-Add-MsixAppIsolation -PackagePath app.msix `
-    -Capabilities @(
-        'isolatedWin32-promptForAccess'
-        'isolatedWin32-userProfileMinimal'
-        'isolatedWin32-internetClient'
-        'isolatedWin32-privateNetworkClientServer'
-    ) `
-    -Pfx cert.pfx -PfxPassword $pw
-
-# Remove isolation entirely (roll back)
+# Remove isolation entirely (restores FullTrustApplication + runFullTrust)
 Remove-MsixAppIsolation -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw
 
 # Preview what the manifest would look like — no package written
-Add-MsixAppIsolation -PackagePath app.msix `
-    -Capabilities 'isolatedWin32-promptForAccess' `
-    -Pfx cert.pfx -PfxPassword $pw `
-    -WhatIf
+Add-MsixAppIsolation -PackagePath app.msix -Mode AppSilo -Pfx cert.pfx -PfxPassword $pw -WhatIf
 ```
 
-Common capabilities and their meaning:
+Common **AppSilo** capabilities and their meaning (`isolatedWin32-*` are ignored
+with a warning in AppContainer mode — use standard capability names there):
 
 | Capability | Grants |
 |---|---|
@@ -583,9 +585,17 @@ Common capabilities and their meaning:
 | `isolatedWin32-allowElevation` | UAC elevation inside the isolation boundary |
 | `isolatedWin32-fullFileSystemAccess` | Broad filesystem access (defeats much of the isolation benefit) |
 
-> The pipeline supports isolation natively — add `AppIsolation` to your
-> `Invoke-MsixPipeline` config alongside `PSF` and `Signing` so it is applied in
-> one unpack/repack/sign pass.
+Two package shapes **cannot** be isolated (the cmdlet warns / throws):
+a **PSF launcher** entry point (`PsfLauncher*.exe` — PSF injects fixup DLLs,
+which AppContainer blocks) and a **`windows.comServer`** extension (invalid
+with a partial-trust entry point). Verify isolation actually engaged by
+checking the running process for an `S-1-15-2` AppContainer SID — see
+`TEST-PLAN.md` Scenario 6.
+
+> The pipeline supports isolation natively — add
+> `AppIsolation = @{ Mode = 'AppContainer'|'AppSilo'; Capabilities = @(...) }`
+> to your `Invoke-MsixPipeline` config alongside `PSF` and `Signing`; it applies
+> the same model in one unpack/repack/sign pass.
 
 ---
 

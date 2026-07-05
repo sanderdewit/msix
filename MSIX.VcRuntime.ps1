@@ -56,7 +56,7 @@ function Get-MsixVcRuntimeReference {
         package.
 
     .PARAMETER PackagePath
-        .msix file (will be unpacked into a workspace, then cleaned up).
+        The .msix file (will be unpacked into a workspace, then cleaned up).
 
     .OUTPUTS
         [pscustomobject] with:
@@ -183,7 +183,7 @@ function Add-MsixVcRuntimeBundle {
         to the application executable(s), repacks, and signs.
 
     .PARAMETER PackagePath
-        .msix to modify.
+        The .msix to modify.
 
     .PARAMETER SourceFolder
         Folder containing release-built VC runtime DLLs. Typically the

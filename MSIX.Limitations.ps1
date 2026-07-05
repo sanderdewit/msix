@@ -214,7 +214,7 @@ function Test-MsixAgainstLimitation {
         afterwards.
 
     .PARAMETER PackagePath
-        .msix file to analyse.
+        The .msix file to analyse.
 
     .OUTPUTS
         [pscustomobject] one per matched limitation, deduplicated by Id. Same

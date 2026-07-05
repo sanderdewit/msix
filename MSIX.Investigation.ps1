@@ -57,7 +57,10 @@ function Add-MsixDiagnosticTrace {
     .PARAMETER SkipSigning
         Do not sign the resulting package.
 
-    .PARAMETER Pfx / PfxPassword
+    .PARAMETER Pfx
+        Signing certificate. Omit for /a (auto store).
+
+    .PARAMETER PfxPassword
         Signing certificate. Omit for /a (auto store).
     #>
     [CmdletBinding(SupportsShouldProcess)]
@@ -243,7 +246,7 @@ function Get-MsixStaticAnalysis {
           - Detect existing PSF integration so re-runs are idempotent
 
     .PARAMETER PackagePath
-        .msix file to analyse (read-only; not modified).
+        The .msix file to analyse (read-only; not modified).
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
@@ -452,7 +455,7 @@ function Get-MsixCompatibilityReport {
         into Add-MsixPsfV2 / Invoke-MsixPipeline.
 
     .PARAMETER PackagePath
-        .msix file.
+        The .msix file.
 
     .PARAMETER PmlPath
         Optional procmon log captured with Invoke-MsixProcMonCapture.
@@ -577,15 +580,17 @@ function Invoke-MsixInvestigation {
         if the package is installed, optionally drives procmon + parses results.
 
     .PARAMETER PackagePath
-        .msix file to investigate.
+        The .msix file to investigate.
 
     .PARAMETER WithProcMon
         Also capture a runtime trace under Process Monitor. Requires the package
         to be installed and procmon.exe available.
 
-    .PARAMETER PackageFamilyName / AppId
+    .PARAMETER PackageFamilyName
         Required when -WithProcMon is set.
 
+    .PARAMETER AppId
+        Required when -WithProcMon is set.
     .PARAMETER DurationSeconds
         How long to capture for. Default 30s.
 

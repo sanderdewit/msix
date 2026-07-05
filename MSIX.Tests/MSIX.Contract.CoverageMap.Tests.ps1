@@ -23,30 +23,21 @@ AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 Describe 'Coverage map: every mutator is exercised by a test' -Tag 'Meta' {
 
     BeforeAll {
-        $script:KnownUncovered = @(
-            'Add-MsixAlias'
-            'Add-MsixDiagnosticTrace'
-            'Add-MsixFileTypeAssociation'
-            'Add-MsixFontExtension'
-            'Add-MsixProtocolHandler'
-            'Add-MsixPsfV2'
-            'Add-MsixShellVerbExtension'
-            'Add-MsixSplashScreen'
-            'Add-MsixStandardScript'
-            'Add-MsixStartMenuFolder'
-            'Add-MsixVcRuntimeBundle'
-            'Remove-MsixDesktopShortcut'
-            'Remove-MsixStartMenuEntry'
-            'Set-MsixBrandMetadata'
-            'Set-MsixLogFile'
-            'Set-MsixLogLevel'
-            'Set-MsixScriptSignature'
-            'Set-MsixToolsRoot'
+        # Debt list — burned down to EMPTY in issue #102. Any name added here
+        # is new debt and needs a justification in the PR.
+        $script:KnownUncovered = @()
+
+        # PERMANENT exclusions with justification (not debt): these cmdlets'
+        # entire job is downloading/refreshing external toolchain binaries from
+        # the internet (GitHub/Sysinternals/NuGet). A unit/integration test that
+        # invokes them would hit the network on every CI run and pin external
+        # availability to the build — deliberately out of scope. Manual coverage:
+        # TEST-PLAN.md Scenario 12 (toolchain provisioning).
+        $script:PermanentlyExcluded = @(
             'Update-MsixAppRuntime'
             'Update-MsixDebugView'
             'Update-MsixProcMon'
             'Update-MsixPsfBinary'
-            'Update-MsixSigner'
         )
 
         $psd1     = Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')
@@ -72,9 +63,18 @@ Describe 'Coverage map: every mutator is exercised by a test' -Tag 'Meta' {
 
     It 'introduces no NEW uncovered mutator (every mutator is invoked, or grandfathered)' {
         $uncovered = @($script:Mutators | Where-Object {
-            -not (Test-MsixInvoked -Name $_) -and ($_ -notin $script:KnownUncovered)
+            -not (Test-MsixInvoked -Name $_) -and
+            ($_ -notin $script:KnownUncovered) -and
+            ($_ -notin $script:PermanentlyExcluded)
         })
         $uncovered | Should -BeNullOrEmpty -Because "these exported mutators are never invoked by a test (add a behavioural test, or — only if genuinely untestable — grandfather them in `$KnownUncovered): $($uncovered -join ', ')"
+    }
+
+    It 'permanent exclusions are still exported and still network-updater shaped' {
+        foreach ($name in $script:PermanentlyExcluded) {
+            $name | Should -BeIn $script:Mutators -Because 'a permanently-excluded name that is no longer exported should be deleted from the list'
+            $name | Should -Match '^Update-Msix' -Because 'the permanent-exclusion rationale only covers toolchain updaters; anything else must be tested instead'
+        }
     }
 
     It 'has no stale allowlist entries (the debt list only shrinks)' {

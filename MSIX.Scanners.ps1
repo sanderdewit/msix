@@ -1095,7 +1095,7 @@ function Get-MsixAliasCandidate {
 function Get-MsixHeuristicFinding {
     <#
     .SYNOPSIS
-        Runs every read-only TMEditX-style analyzer against a package and
+        Runs every read-only heuristic analyzer against a package and
         returns merged findings. Used by Get-MsixStaticAnalysis to expand the
         report.
         .EXAMPLE

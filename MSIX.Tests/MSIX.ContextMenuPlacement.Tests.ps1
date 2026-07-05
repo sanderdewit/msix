@@ -28,9 +28,9 @@
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
 
-Describe 'Shell-extension context menu placement (TMEditX-verified pattern)' -Tag 'ContextMenu' {
+Describe 'Shell-extension context menu placement (field-verified pattern)' -Tag 'ContextMenu' {
 
-    # Working pattern, derived from a TMEditX-generated manifest that the
+    # Working pattern, derived from a field-captured working manifest that the
     # Windows shell actually wires up at runtime (Notepad++ NppShell case):
     #
     #   Applications/Application/Extensions
@@ -110,7 +110,7 @@ Describe 'Shell-extension context menu placement (TMEditX-verified pattern)' -Ta
 
     It 'desktop9 construction is gated behind the opt-in -Schema switch (issue #108)' {
         # Since #108, desktop9 (windows.fileExplorerClassicContextMenuHandler,
-        # the MS-documented / Advanced Installer shape, Win11 21H2+) is a
+        # the MS-documented shape (also used by commercial packaging tools), Win11 21H2+) is a
         # legitimate OPT-IN via -Schema desktop9|Both. The default stays
         # desktop4. Guard both facts: the elements exist, and their emission
         # is conditional on the schema flag, not unconditional.

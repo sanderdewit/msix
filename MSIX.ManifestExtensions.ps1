@@ -567,15 +567,15 @@ function Set-MsixInstalledLocationVirtualization {
         automatically.
 
     .PARAMETER ModifiedItems
-        Each accepts 'keep' or 'reset'. Defaults match TMEditX:
+        Each accepts 'keep' or 'reset'. Defaults:
         ModifiedItems=keep, DeletedItems=reset, AddedItems=keep.
 
     .PARAMETER DeletedItems
-        Each accepts 'keep' or 'reset'. Defaults match TMEditX:
+        Each accepts 'keep' or 'reset'. Defaults:
         ModifiedItems=keep, DeletedItems=reset, AddedItems=keep.
 
     .PARAMETER AddedItems
-        Each accepts 'keep' or 'reset'. Defaults match TMEditX:
+        Each accepts 'keep' or 'reset'. Defaults:
         ModifiedItems=keep, DeletedItems=reset, AddedItems=keep.
     .EXAMPLE
         Set-MsixInstalledLocationVirtualization -PackagePath app.msix `

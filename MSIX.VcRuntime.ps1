@@ -13,7 +13,7 @@
 #     self-contained.
 #
 # References:
-#   - TMEditX UCVCRuntimes (v0.9 modelled on this)
+#   - commercial editors' VC-runtime bundling features
 #   - https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files
 # =============================================================================
 

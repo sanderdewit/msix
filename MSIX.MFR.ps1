@@ -6,7 +6,7 @@
 # four different override modes per redirected path, plus an ILV-aware mode
 # that respects the package's installedLocationVirtualization extension.
 #
-# Override modes (mirroring TMEditX):
+# Override modes (matching common packaging-tool behaviour):
 #   - Traditional   classic VFS folder name (Local AppData, AppData,
 #                   ProgramFilesX64, Windows, Fonts, …) — default for VFS paths
 #   - Local         user-shell folder (ThisPCDesktopFolder, Personal,
@@ -17,7 +17,7 @@
 #                   uap10:installedLocationVirtualization extension
 # =============================================================================
 
-# Documented values that mirror the TMEditX UI
+# Documented values that mirror the documented MFR option set
 $script:MfrTraditionalKnownFolders = @(
     'Local AppData','AppData','LocalAppDataLow','Common AppData',
     'FOLDERID_System\Catroot2','FOLDERID_System\Catroot',
@@ -45,7 +45,7 @@ function Get-MsixMfrKnownFolder {
         'Traditional' VFS-style folders (Local AppData, ProgramFilesX64, …)
         and 'Local' user-shell folders (Personal, Common Desktop, …). This
         function returns those documented values so callers can validate
-        their MFR rules against the actual TMEditX-equivalent list rather
+        their MFR rules against the documented option list rather
         than passing free-form strings.
 
         With -Mode Both (the default), an object with all three sets is

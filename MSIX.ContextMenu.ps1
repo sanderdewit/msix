@@ -5,7 +5,7 @@
 
     .DESCRIPTION
         Wraps a COM IContextMenu / IDropTarget shell-extension DLL so it
-        surfaces under MSIX containerisation. This is the TMEditX-verified
+        surfaces under MSIX containerisation. This is the field-verified
         pattern that the Windows shell actually wires up at runtime.
 
         Min OS: Windows 10 1809 (build 17763) for the desktop4
@@ -25,13 +25,12 @@
         Two schemas are supported via -Schema (issue #108):
 
           desktop4 (default) — desktop4:FileExplorerContextMenus +
-            desktop5:ItemType/Verb. TMEditX-verified; activates from
+            desktop5:ItemType/Verb. field-verified; activates from
             Win10 1809 (17763) and drives both legacy IContextMenu and
             modern IExplorerCommand depending on the COM class.
 
           desktop9 — windows.fileExplorerClassicContextMenuHandler, the
-            MS-documented classic-handler registration (also what
-            Advanced Installer emits). Win11 21H2+ ONLY (MaxVersionTested
+            MS-documented classic-handler registration (also emitted by commercial packaging tools). Win11 21H2+ ONLY (MaxVersionTested
             is raised to 10.0.22000.0) and the entry appears in the
             CLASSIC menu ("Show more options"), not the new Win11 menu.
             Context menus only (not -MenuType DragDrop).
@@ -174,7 +173,7 @@
 
     # com:Class/@Id and desktop5:Verb/@Clsid both use the bare GUID format
     # (no curly braces): xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-    # Normalise CLSID: strip surrounding braces and lower-case. TMEditX-style
+    # Normalise CLSID: strip surrounding braces and lower-case. heuristic
     # lowercase matches the format Windows actually persists into HKCR\CLSID\…
     # entries; the AppX schema is case-insensitive but staying lower-case keeps
     # diff output stable when re-running this cmdlet.
@@ -229,7 +228,7 @@
         param([xml]$manifest)
 
         # Required namespaces.
-        # The TMEditX-verified working pattern for shell-extension context
+        # The field-verified working pattern for shell-extension context
         # menus in MSIX uses the desktop4 + desktop5 schemas, NOT desktop9:
         #
         #   <com:Extension Category="windows.comServer">                ← Application
@@ -314,7 +313,7 @@
         # ── Application-level Extensions node ────────────────────────────
         # Everything in this cmdlet lives at Applications/Application/Extensions —
         # the COM declaration AND the desktop4 verb. This is the placement
-        # TMEditX uses and that Explorer actually wires up at runtime.
+        # commercial MSIX editors uses and that Explorer actually wires up at runtime.
         $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
         if (-not $appExt) {
             $appExt = $manifest.CreateElement('Extensions', $manifest.Package.NamespaceURI)
@@ -379,7 +378,7 @@
         }
 
         # ── desktop9 classic-handler declaration (issue #108) ─────────────
-        # The MS-documented / Advanced Installer shape:
+        # The MS-documented classic-handler shape (also used by commercial packaging tools):
         #   <desktop9:Extension Category="windows.fileExplorerClassicContextMenuHandler">
         #     <desktop9:FileExplorerClassicContextMenuHandler>
         #       <desktop9:ExtensionHandler Type="*" Clsid="..."/>
@@ -519,7 +518,7 @@ function Add-MsixFileExplorerContextMenu {
     $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, 'Add File Explorer Context Menu')
 
     # CLSID is case-insensitive in the schema but we normalise to lower-case
-    # (matching TMEditX style and the persisted HKCR\CLSID\... format).
+    # (matching the persisted HKCR\CLSID\... format).
     $verbClsid = $verbClsid.Trim().Trim('{', '}').ToLowerInvariant()
 
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
@@ -530,7 +529,7 @@ function Add-MsixFileExplorerContextMenu {
         param([xml]$manifest)
 
         # desktop4 wraps the Extension/FileExplorerContextMenus container;
-        # desktop5 provides the ItemType/Verb children (TMEditX-verified
+        # desktop5 provides the ItemType/Verb children (field-verified
         # working pattern). desktop4 alone (using desktop4:ItemType/Verb)
         # also exists but desktop5 is the newer, preferred form.
         Add-MsixManifestNamespace -Manifest $manifest -Prefix 'desktop4'
@@ -538,7 +537,7 @@ function Add-MsixFileExplorerContextMenu {
         Set-MsixManifestMaxVersionTested -Manifest $manifest -MinBuild 17763
 
         # Locate the Application (windows.fileExplorerContextMenus lives at
-        # Applications/Application/Extensions per the TMEditX-verified
+        # Applications/Application/Extensions per the field-verified
         # working manifest — the schema permits Package level too but the
         # Application-level form is what Explorer actually wires up).
         $app    = Get-MsixManifestApplication -Manifest $manifest -AppId $AppId

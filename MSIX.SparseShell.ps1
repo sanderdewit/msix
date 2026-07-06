@@ -96,6 +96,12 @@ function Import-MsixSparseShellExtension {
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
     $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-sparse"
+    # NOTE: normalized to long-form below after creation — $env:TEMP can carry
+    # an 8.3 short segment (SANDER~1) while Get-ChildItem returns long-form
+    # FullNames, and the payload-copy step computes relative paths by
+    # Substring($inner.Length). A short/long mismatch chops the wrong number of
+    # characters, which mis-filed the inner AppxManifest.xml under a corrupt
+    # 'NN\AppxManifest.xml' path inside the outer VFS (0.73.0 nested-package bug).
     $inner     = Join-Path -Path $env:TEMP -ChildPath ("msix-inner-{0}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)))
 
     try {
@@ -145,9 +151,21 @@ function Import-MsixSparseShellExtension {
         Write-MsixLog -Level Info -Message "Sparse merge: inner='$NestedPackagePath' basePath='$basePath'"
 
         # ── Unpack inner ──────────────────────────────────────────────────
+        # NOT MakeAppx: it VALIDATES the manifest during unpack, and a sparse
+        # inner package legitimately references files outside itself (e.g.
+        # NppShell's Application Executable="notepad++.exe" lives in the OUTER
+        # package) — MakeAppx rejects that with 0x80080204 "file ... doesn't
+        # exist in the package". We only READ the inner package (manifest +
+        # payload copy), so plain zip extraction is exactly equivalent and
+        # cannot trip over validation.
         New-Item -ItemType Directory -Path $inner -Force | Out-Null
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $innerPkg, '/d', $inner, '/o')
-        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack (inner)'
+        $inner = (Get-Item -LiteralPath $inner).FullName   # long-form (see note above)
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        try {
+            [IO.Compression.ZipFile]::ExtractToDirectory($innerPkg, $inner)
+        } catch {
+            throw "Extracting the nested package '$NestedPackagePath' failed: $($_.Exception.Message)"
+        }
 
         # ── Load both manifests via the XML-safe helper ──────────────────
         $outerManifestPath = Join-Path -Path $workspace -ChildPath 'AppxManifest.xml'

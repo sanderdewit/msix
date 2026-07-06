@@ -47,7 +47,9 @@ function _MsixResolveScanWorkspace {
         [Parameter(Mandatory)][string]$Label
     )
     if ($WorkspacePath) {
-        return @{ Path = $WorkspacePath; Owned = $false }
+        # Long-form normalize: a caller-supplied path may carry an 8.3 short
+        # segment, which corrupts relative-path Substring math in scanners.
+        return @{ Path = (Get-Item -LiteralPath $WorkspacePath).FullName; Owned = $false }
     }
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath

@@ -266,8 +266,20 @@ function Get-MsixManifest {
         try {
             $zip = [System.IO.Compression.ZipFile]::OpenRead($item.FullName)
             try {
-                $entry = $zip.Entries | Where-Object { $_.Name -eq 'AppxManifest.xml' } |
+                # The PACKAGE manifest is the AppxManifest.xml at the archive
+                # ROOT. Match FullName, never Name — a package can legitimately
+                # carry a nested AppxManifest.xml under VFS (e.g. a bundled
+                # sub-package's leftover manifest), and a bare Name match with
+                # -First 1 could return that instead of the real one.
+                $entry = $zip.Entries | Where-Object { $_.FullName -eq 'AppxManifest.xml' } |
                          Select-Object -First 1
+                if (-not $entry) {
+                    # Fall back to a basename match only when there is no root
+                    # manifest (unusual layouts), preferring the shallowest path.
+                    $entry = $zip.Entries | Where-Object { $_.Name -eq 'AppxManifest.xml' } |
+                             Sort-Object { ($_.FullName -split '[\\/]').Count } |
+                             Select-Object -First 1
+                }
                 if (-not $entry) {
                     throw "AppxManifest.xml not found inside $($item.Name) (is this a bundle? open the inner .msix instead)."
                 }

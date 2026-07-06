@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.72.0'
+    ModuleVersion     = '0.73.0'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, deployment-script templates, heuristic heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -29,6 +29,7 @@
         'Add-MsixProtocolHandler',
         'Add-MsixPsfV2',
         'Remove-MsixPsf',
+        'Add-MsixRuntimeDependency',
         'Add-MsixService',
         'Add-MsixShareTarget',
         'Add-MsixShellHandlerExtension',
@@ -47,6 +48,7 @@
         'ConvertFrom-MsixYamlAccelerator',
         'ConvertTo-MsixFinding',
         'ConvertTo-MsixLegacyFinding',
+        'ConvertTo-MsixModificationPackage',
         'ConvertTo-MsixSarif',
         'ConvertTo-MsixReportHtml',
         'Copy-MsixHostAppDataIntoPackage',
@@ -57,6 +59,7 @@
         'Get-MsixAliasCandidate',
         'Get-MsixAppRuntimeVersion',
         'Get-MsixBundleInfo',
+        'Get-MsixBundledRuntime',
         'Get-MsixCapabilityHint',
         'Get-MsixCompatibilityReport',
         'Get-MsixComServerEntry',
@@ -135,6 +138,7 @@
         'New-MsixBundle',
         'New-MsixAppInstallerFile',
         'New-MsixFinding',
+        'New-MsixFrameworkPackage',
         'New-MsixManifestDocument',
         'New-MsixModificationPackage',
         'New-MsixRemediationPlan',
@@ -211,6 +215,7 @@
         'Get-MsixDesktopShortcutCandidates',
         'Get-MsixFontCandidates',
         'Get-MsixHeuristicFindings',
+        'Get-MsixBundledRuntimes',
         'Get-MsixIsolationCapabilities',
         'Get-MsixKnownCapabilities',
         'Get-MsixLimitations',
@@ -251,38 +256,34 @@
                             'Enterprise','CICD','Pester')
             ProjectUri  = 'https://github.com/microsoft/MSIX-PackageSupportFramework'
             ReleaseNotes = @'
-## v0.72.0
+## v0.73.0
 
-### .msixbundle handling (#125)
-- New-MsixBundle / Expand-MsixBundle / Get-MsixBundleInfo (MakeAppx wrappers +
-  inner-package inventory).
-- Invoke-MsixBundleOperation: unbundle -> run any mutator per inner package
-  (optionally -Architecture filtered) -> rebundle -> sign, atomically. Gives
-  every existing mutator bundle support without per-cmdlet changes.
+### Shared runtime framework packages (#130)
+- New-MsixFrameworkPackage: build a Framework=true package from a runtime
+  folder (JRE/.NET/Python/shared libs) - one servicing point for N apps.
+- Add-MsixRuntimeDependency: PackageDependency + optional env wiring
+  (-Runtime Java -> JAVA_HOME, DotNet -> DOTNET_ROOT, custom vars with the
+  {frameworkRoot} token) against the computed WindowsApps root. DLL-based
+  runtimes need no wiring (package-graph DLL search).
+- Get-MsixBundledRuntime (new scanner): trait-based detection of private
+  JRE/.NET/Python copies with size accounting; BundledRuntime findings;
+  autofix strips + wires via opt-in -DeduplicateBundledRuntime with an
+  EXPLICIT framework identity (never guessed).
 
-### resources.pri regeneration (#124)
-- Update-MsixResourcePri: regenerates resources.pri via makepri
-  (Authenticode-verified), repacks + signs.
-- Set-MsixBrandMetadata -RegeneratePri: replaces the ms-resource: reference
-  with the literal AND rebuilds PRI so the displayed value actually changes
-  (root-cause fix for the #109 warning).
+### Modification packages, completed (#131)
+- New-MsixModificationPackage -RegistryContent: layer SETTINGS, not just
+  files - HKLM/HKCU key/value hashtables become Registry.dat / User.dat via
+  the offline-registry helpers.
+- ConvertTo-MsixModificationPackage: productize the golden-image delta -
+  diff vendor vs customized copy, stage added/changed files, emit the
+  uap4:MainPackageDependency package.
+- Test-MsixDeployment -ModificationPackagePaths: the runtime loop installs
+  modification packages after the main app and reports
+  ModificationsInstalled on the verdict.
 
-### Runtime deployment testing
-- Test-MsixDeployment: deploy a signed package into a clean Hyper-V VM via
-  PowerShell Direct, launch via shell:AppsFolder, probe liveness (process
-  alive, no WER crash, no AppXDeployment errors, optional -RequireWindow),
-  optional checkpoint restore. Verdict object (Passed + Reasons + event-log
-  artifacts) that feeds the analyze -> autofix loop. VM seam is mockable;
-  orchestration unit-tested.
-
-### In-process signing (#17 / #126)
-- Invoke-MsixSigning -Signer SignerSignEx implemented: the password loads the
-  cert in-process into an ephemeral CurrentUser\My entry and signtool signs by
-  thumbprint (public) - the PFX password/path never hit a command line. Temp
-  store entry removed afterward. Explicit -Signer always wins over the
-  SignToolPfx parameter-set inference (#77 contract extended).
-
-Full history: CHANGELOG.md.
+(0.72.0 was source-only; this release also carries its features: msixbundle
+handling, resources.pri regeneration, Test-MsixDeployment, and the
+in-process SignerSignEx signing backend. Full history: CHANGELOG.md.)
 '@
         }
     }

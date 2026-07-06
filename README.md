@@ -398,6 +398,19 @@ settings/plugins onto a vendor MSIX without touching it.
 via makepri, and `Set-MsixBrandMetadata -RegeneratePri` makes brand edits on
 `ms-resource:`-localized packages actually take effect at runtime.
 
+**Shared runtime frameworks:** stop bundling a JRE into every app.
+`New-MsixFrameworkPackage` packages a runtime once as a `<Framework>` package;
+`Add-MsixRuntimeDependency` wires each consumer (`<PackageDependency>` +
+optional `JAVA_HOME`/`DOTNET_ROOT` env wiring). `Get-MsixBundledRuntime`
+detects private runtime copies in captures, and autofix can strip + rewire
+them (opt-in, explicit framework identity).
+
+**Modification packages:** `New-MsixModificationPackage` layers files AND
+settings (`-RegistryContent` builds `Registry.dat`/`User.dat`) onto a vendor
+MSIX without touching it; `ConvertTo-MsixModificationPackage` productizes the
+delta between a vendor package and a customized copy automatically.
+
+
 ## Runtime deployment testing
 
 Static analysis says whether a package *should* work; `Test-MsixDeployment`

@@ -281,6 +281,7 @@ function Invoke-MsixAutoFixFromAnalysis {
           ManifestFix:PackagedService          -> Add-MsixService
           ManifestFix:ShellHandlerExtension    -> Add-MsixShellHandlerExtension
           ManifestFix:PackageCertificate       -> Add-MsixPackageCertificate (opt-in via -DeclarePackageCertificates)
+          BundledRuntime                       -> strip + Add-MsixRuntimeDependency (opt-in via -DeduplicateBundledRuntime + framework identity)
           ManifestFix:FileSystemWriteVirt..    -> Set-MsixFileSystemWriteVirtualization
           ManifestFix:RegistryWriteVirt..      -> Set-MsixRegistryWriteVirtualization
           ManifestFix:StartupTask              -> Add-MsixStartupTask  (needs -StartupTaskAppId / -StartupTaskName)
@@ -312,6 +313,20 @@ function Invoke-MsixAutoFixFromAnalysis {
     .PARAMETER PackageCertificateStore
         Store for -DeclarePackageCertificates: Root, CA, TrustedPeople
         (default) or TrustedPublisher.
+
+    .PARAMETER DeduplicateBundledRuntime
+        Opt in to stripping detected bundled runtimes (JRE/.NET/Python) and
+        wiring the app to a shared framework package instead. Destructive -
+        requires the three RuntimeFramework* identity parameters.
+
+    .PARAMETER RuntimeFrameworkName
+        Identity Name of the framework package (New-MsixFrameworkPackage).
+
+    .PARAMETER RuntimeFrameworkMinVersion
+        Minimum framework version to depend on.
+
+    .PARAMETER RuntimeFrameworkPublisher
+        Publisher DN of the framework package.
 
     .PARAMETER VcRuntimeSourceFolder
         VS Redist folder; required when a VcRuntime finding is in the report.
@@ -419,6 +434,15 @@ function Invoke-MsixAutoFixFromAnalysis {
         [switch]$DeclarePackageCertificates,
         [ValidateSet('Root', 'CA', 'TrustedPeople', 'TrustedPublisher')]
         [string]$PackageCertificateStore = 'TrustedPeople',
+        # Bundled-runtime deduplication (issue #130): destructive (strips the
+        # private runtime folder), so it needs BOTH the opt-in switch and the
+        # explicit framework identity - never guessed.
+        [switch]$DeduplicateBundledRuntime,
+        [string]$RuntimeFrameworkName,
+        [ValidatePattern('^\d+\.\d+\.\d+\.\d+$')]
+        [string]$RuntimeFrameworkMinVersion,
+        [string]$RuntimeFrameworkPublisher,
+
         # Confidence threshold below which a finding is NOT auto-fixed.
         # Findings between [MinConfidenceReport, MinConfidence) still
         # appear in the printed plan as "recommendation only".
@@ -580,6 +604,58 @@ function Invoke-MsixAutoFixFromAnalysis {
         }
     }
 
+    # Stage 2b'' - bundled-runtime deduplication (issue #130). Destructive:
+    # strips the private runtime folder and wires the framework dependency.
+    # Requires the opt-in switch AND the explicit framework identity.
+    if ($byCat.ContainsKey('BundledRuntime')) {
+        if ($DeduplicateBundledRuntime -and $RuntimeFrameworkName -and $RuntimeFrameworkMinVersion -and $RuntimeFrameworkPublisher) {
+            $runtimeEntries = @($Report.Findings |
+                Where-Object Category -eq 'BundledRuntime' |
+                ForEach-Object { @($_.RuntimeEntries) } |
+                Where-Object { $_ -and $_.CanAutoFix })
+            if ($runtimeEntries) {
+                $capturedRuntimes    = $runtimeEntries
+                $capturedFwName      = $RuntimeFrameworkName
+                $capturedFwVersion   = $RuntimeFrameworkMinVersion
+                $capturedFwPublisher = $RuntimeFrameworkPublisher
+                $plan.Add([pscustomobject]@{
+                    Stage  = 'DeduplicateBundledRuntime'
+                    Reason = "Strip $($capturedRuntimes.Count) bundled runtime(s) and depend on framework $capturedFwName >= $capturedFwVersion"
+                    Action = {
+                        # 1) Strip each detected runtime folder from the payload.
+                        $capturedStripRoots = @($capturedRuntimes | ForEach-Object { $_.RuntimeRoot })
+                        $null = _MsixMutatePackage -PackagePath $current -Operation 'strip-runtime' `
+                            -SkipSigning -NoChangeMessage 'No bundled runtime folders found to strip.' `
+                            -Mutator {
+                                param($workspace)
+                                $removed = 0
+                                foreach ($root in $capturedStripRoots) {
+                                    $full = Join-Path -Path $workspace -ChildPath $root
+                                    if (Test-Path -LiteralPath $full) {
+                                        [IO.Directory]::Delete($full, $true)
+                                        $removed++
+                                        Write-MsixLog -Level Info -Message "Stripped bundled runtime: $root"
+                                    }
+                                }
+                                if ($removed -eq 0) { return $null }
+                                @{ RuntimesStripped = $removed }
+                            }.GetNewClosure()
+                        # 2) Wire the framework dependency (+ env preset per Kind).
+                        $kind = @($capturedRuntimes | Select-Object -First 1).Kind
+                        $runtimePreset = 'None'
+                        if ($kind -in 'Java', 'DotNet') { $runtimePreset = $kind }
+                        Add-MsixRuntimeDependency -PackagePath $current `
+                            -FrameworkName $capturedFwName `
+                            -FrameworkMinVersion $capturedFwVersion `
+                            -FrameworkPublisher $capturedFwPublisher `
+                            -Runtime $runtimePreset -SkipSigning
+                    }
+                })
+            }
+        } else {
+            Write-MsixLog -Level Info -Message 'Bundled runtime(s) detected. To deduplicate automatically, pass -DeduplicateBundledRuntime with -RuntimeFrameworkName/-RuntimeFrameworkMinVersion/-RuntimeFrameworkPublisher (build the framework first with New-MsixFrameworkPackage).'
+        }
+    }
     # Stage 2.5 — plugin/theme/extension directories.
     # Modern path: enable desktop6:FileSystemWriteVirtualization + add each
     # plugin dir to <virtualization:ExcludedDirectories> so writes there

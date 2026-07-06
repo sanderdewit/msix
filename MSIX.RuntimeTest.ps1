@@ -118,11 +118,16 @@ function Test-MsixDeployment {
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'phase',
+        Justification = 'Phase marker consumed by the mockable _MsixInvokeInVM seam to discriminate calls, not by the remote scriptblocks themselves.')]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
         [Parameter(Mandatory)] [string]$VMName,
         [Parameter(Mandatory)] [pscredential]$Credential,
         [string]$CertPath,
+        # Modification packages (#131) installed AFTER the main package so the
+        # layered content/settings are part of the probed run.
+        [string[]]$ModificationPackagePaths,
         [string]$Checkpoint,
         [ValidatePattern('^[A-Za-z_][A-Za-z0-9_.-]*$')]
         [string]$AppId,
@@ -152,6 +157,7 @@ function Test-MsixDeployment {
         VMName            = $VMName
         PackageFullName   = $null
         Installed         = $false
+        ModificationsInstalled = 0
         Launched          = $false
         ProcessAlive      = $false
         WindowAppeared    = $null
@@ -166,7 +172,7 @@ function Test-MsixDeployment {
         _MsixRestoreVMCheckpoint -VMName $VMName -Checkpoint $Checkpoint
     }
 
-    # Stage the package (and cert) into the VM.
+    # Stage the package (and cert, and modification packages) into the VM.
     $vmPkg = "C:\Windows\Temp\$([IO.Path]::GetFileName($PackagePath))"
     _MsixCopyToVM -VMName $VMName -Credential $Credential -Path $PackagePath -Destination $vmPkg
     $vmCert = $null
@@ -174,11 +180,19 @@ function Test-MsixDeployment {
         $vmCert = "C:\Windows\Temp\$([IO.Path]::GetFileName($CertPath))"
         _MsixCopyToVM -VMName $VMName -Credential $Credential -Path $CertPath -Destination $vmCert
     }
+    $vmMods = @()
+    foreach ($mod in @($ModificationPackagePaths | Where-Object { $_ })) {
+        $vmMod = "C:\Windows\Temp\$([IO.Path]::GetFileName($mod))"
+        _MsixCopyToVM -VMName $VMName -Credential $Credential -Path $mod -Destination $vmMod
+        $vmMods += $vmMod
+    }
 
-    # Install (trust cert first if supplied) and capture the PackageFullName.
-    $install = _MsixInvokeInVM -VMName $VMName -Credential $Credential -ArgumentList @($vmPkg, $vmCert, $identityName) -ScriptBlock {
-        param($pkgPath, $certPath, $idName)
-        $r = [ordered]@{ Installed = $false; PackageFullName = $null; Error = $null }
+    # Install (trust cert first if supplied), then any modification packages,
+    # and capture the PackageFullName. The first ArgumentList element is a
+    # phase marker so the mockable seam can discriminate the calls.
+    $install = _MsixInvokeInVM -VMName $VMName -Credential $Credential -ArgumentList @('install', $vmPkg, $vmCert, $identityName, $vmMods) -ScriptBlock {
+        param($phase, $pkgPath, $certPath, $idName, $modPaths)
+        $r = [ordered]@{ Installed = $false; PackageFullName = $null; ModificationsInstalled = 0; Error = $null }
         try {
             if ($certPath) {
                 Import-Certificate -FilePath $certPath -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null
@@ -188,6 +202,10 @@ function Test-MsixDeployment {
             $pkg = Get-AppxPackage -Name $idName | Select-Object -First 1
             $r.PackageFullName = $pkg.PackageFullName
             $r.Installed = [bool]$pkg
+            foreach ($modPath in @($modPaths | Where-Object { $_ })) {
+                Add-AppxPackage -Path $modPath -ErrorAction Stop
+                $r.ModificationsInstalled++
+            }
         } catch {
             $r.Error = $_.Exception.Message
         }
@@ -195,6 +213,7 @@ function Test-MsixDeployment {
     }
 
     $result.Installed = [bool]$install.Installed
+    $result.ModificationsInstalled = [int]$install.ModificationsInstalled
     $result.PackageFullName = $install.PackageFullName
     if (-not $install.Installed) {
         $null = $reasons.Add("Add-AppxPackage failed: $($install.Error)")
@@ -203,8 +222,8 @@ function Test-MsixDeployment {
     }
 
     # Launch via the AppsFolder AUMID and probe liveness inside the VM.
-    $probe = _MsixInvokeInVM -VMName $VMName -Credential $Credential -ArgumentList @($install.PackageFullName, $launchAppId, $SettleSeconds, [bool]$RequireWindow) -ScriptBlock {
-        param($pfn, $appId, $settle, $requireWindow)
+    $probe = _MsixInvokeInVM -VMName $VMName -Credential $Credential -ArgumentList @('probe', $install.PackageFullName, $launchAppId, $SettleSeconds, [bool]$RequireWindow) -ScriptBlock {
+        param($phase, $pfn, $appId, $settle, $requireWindow)
         $r = [ordered]@{ Launched = $false; ProcessAlive = $false; WindowAppeared = $null; CrashDetected = $false; Events = @(); Error = $null }
         try {
             $family = ($pfn -split '_')[0] + '_' + ($pfn -split '_')[-1]
@@ -250,8 +269,8 @@ function Test-MsixDeployment {
     $result.Reasons = @($reasons)
 
     if (-not $KeepInstalled) {
-        _MsixInvokeInVM -VMName $VMName -Credential $Credential -ArgumentList @($identityName) -ScriptBlock {
-            param($idName)
+        _MsixInvokeInVM -VMName $VMName -Credential $Credential -ArgumentList @('cleanup', $identityName) -ScriptBlock {
+            param($phase, $idName)
             Get-AppxPackage -Name $idName | Remove-AppxPackage -ErrorAction SilentlyContinue
         } | Out-Null
         if ($Checkpoint) {

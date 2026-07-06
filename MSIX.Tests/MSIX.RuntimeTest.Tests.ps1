@@ -11,9 +11,9 @@
         return $secure
     }
 
-    # Mock replies keyed on the -ArgumentList shape: 3 args = install call
-    # (vmPkg, vmCert, identityName); 4 args = launch/probe call; else = cleanup.
-    function script:New-RtInstall { param([bool]$Ok, [string]$Err) [pscustomobject]@{ Installed = $Ok; PackageFullName = if ($Ok) { 'App_1.0.0.0_x64__abc' } else { $null }; Error = $Err } }
+    # Mock replies keyed on the phase marker in ArgumentList[0]:
+    # 'install' / 'probe' / 'cleanup'.
+    function script:New-RtInstall { param([bool]$Ok, [string]$Err, [int]$Mods = 0) [pscustomobject]@{ Installed = $Ok; PackageFullName = if ($Ok) { 'App_1.0.0.0_x64__abc' } else { $null }; ModificationsInstalled = $Mods; Error = $Err } }
     function script:New-RtProbe   { param([bool]$Alive, [bool]$Crash, [object]$Window, [string[]]$Events) [pscustomobject]@{ Launched = $true; ProcessAlive = $Alive; WindowAppeared = $Window; CrashDetected = $Crash; Events = @($Events); Error = $null } }
 }
 AfterAll { Remove-Module MSIX -ErrorAction SilentlyContinue }
@@ -45,8 +45,8 @@ Describe 'Test-MsixDeployment verdict logic (mocked VM)' -Tag 'RuntimeTest' {
         Mock -ModuleName MSIX _MsixCopyToVM {}
         Mock -ModuleName MSIX _MsixInvokeInVM {
             param($ArgumentList)
-            if ($ArgumentList.Count -eq 3) { return New-RtInstall -Ok $true }
-            if ($ArgumentList.Count -eq 4) { return New-RtProbe -Alive $true -Crash $false -Window $null -Events @() }
+            if ($ArgumentList[0] -eq 'install') { return New-RtInstall -Ok $true }
+            if ($ArgumentList[0] -eq 'probe') { return New-RtProbe -Alive $true -Crash $false -Window $null -Events @() }
             return $null
         }
         $r = Test-MsixDeployment -PackagePath $script:Fixture -VMName 'vm' -Credential $script:Cred
@@ -71,8 +71,8 @@ Describe 'Test-MsixDeployment verdict logic (mocked VM)' -Tag 'RuntimeTest' {
         Mock -ModuleName MSIX _MsixCopyToVM {}
         Mock -ModuleName MSIX _MsixInvokeInVM {
             param($ArgumentList)
-            if ($ArgumentList.Count -eq 3) { return New-RtInstall -Ok $true }
-            if ($ArgumentList.Count -eq 4) { return New-RtProbe -Alive $false -Crash $false -Window $null -Events @() }
+            if ($ArgumentList[0] -eq 'install') { return New-RtInstall -Ok $true }
+            if ($ArgumentList[0] -eq 'probe') { return New-RtProbe -Alive $false -Crash $false -Window $null -Events @() }
             return $null
         }
         $r = Test-MsixDeployment -PackagePath $script:Fixture -VMName 'vm' -Credential $script:Cred -SettleSeconds 1
@@ -84,8 +84,8 @@ Describe 'Test-MsixDeployment verdict logic (mocked VM)' -Tag 'RuntimeTest' {
         Mock -ModuleName MSIX _MsixCopyToVM {}
         Mock -ModuleName MSIX _MsixInvokeInVM {
             param($ArgumentList)
-            if ($ArgumentList.Count -eq 3) { return New-RtInstall -Ok $true }
-            if ($ArgumentList.Count -eq 4) { return New-RtProbe -Alive $false -Crash $true -Window $null -Events @('2026 [WER] app.exe faulted') }
+            if ($ArgumentList[0] -eq 'install') { return New-RtInstall -Ok $true }
+            if ($ArgumentList[0] -eq 'probe') { return New-RtProbe -Alive $false -Crash $true -Window $null -Events @('2026 [WER] app.exe faulted') }
             return $null
         }
         $r = Test-MsixDeployment -PackagePath $script:Fixture -VMName 'vm' -Credential $script:Cred -SettleSeconds 1
@@ -99,20 +99,41 @@ Describe 'Test-MsixDeployment verdict logic (mocked VM)' -Tag 'RuntimeTest' {
         Mock -ModuleName MSIX _MsixRestoreVMCheckpoint {}
         Mock -ModuleName MSIX _MsixInvokeInVM {
             param($ArgumentList)
-            if ($ArgumentList.Count -eq 3) { return New-RtInstall -Ok $true }
-            if ($ArgumentList.Count -eq 4) { return New-RtProbe -Alive $true -Crash $false -Window $null -Events @() }
+            if ($ArgumentList[0] -eq 'install') { return New-RtInstall -Ok $true }
+            if ($ArgumentList[0] -eq 'probe') { return New-RtProbe -Alive $true -Crash $false -Window $null -Events @() }
             return $null
         }
         Test-MsixDeployment -PackagePath $script:Fixture -VMName 'vm' -Credential $script:Cred -Checkpoint 'clean' | Out-Null
         Should -Invoke -ModuleName MSIX _MsixRestoreVMCheckpoint -Times 2
     }
 
+    It 'installs modification packages after the main package (#131)' {
+        Mock -ModuleName MSIX _MsixCopyToVM {}
+        Mock -ModuleName MSIX _MsixInvokeInVM {
+            param($ArgumentList)
+            if ($ArgumentList[0] -eq 'install') {
+                # The install call must carry the staged modification paths.
+                @($ArgumentList[4]).Count | Should -Be 2
+                return New-RtInstall -Ok $true -Mods 2
+            }
+            if ($ArgumentList[0] -eq 'probe') { return New-RtProbe -Alive $true -Crash $false -Window $null -Events @() }
+            return $null
+        }
+        $mod1 = Join-Path $script:Dir 'settings.msix';  Set-Content -LiteralPath $mod1 -Value 'stub' -Encoding ascii
+        $mod2 = Join-Path $script:Dir 'plugins.msix';   Set-Content -LiteralPath $mod2 -Value 'stub' -Encoding ascii
+        $r = Test-MsixDeployment -PackagePath $script:Fixture -VMName 'vm' -Credential $script:Cred `
+                -ModificationPackagePaths $mod1, $mod2
+        $r.Passed                 | Should -BeTrue
+        $r.ModificationsInstalled | Should -Be 2
+        # main pkg + 2 mods copied in
+        Should -Invoke -ModuleName MSIX _MsixCopyToVM -Times 3
+    }
     It 'requires a window only when -RequireWindow is set' {
         Mock -ModuleName MSIX _MsixCopyToVM {}
         Mock -ModuleName MSIX _MsixInvokeInVM {
             param($ArgumentList)
-            if ($ArgumentList.Count -eq 3) { return New-RtInstall -Ok $true }
-            if ($ArgumentList.Count -eq 4) { return New-RtProbe -Alive $true -Crash $false -Window $false -Events @() }
+            if ($ArgumentList[0] -eq 'install') { return New-RtInstall -Ok $true }
+            if ($ArgumentList[0] -eq 'probe') { return New-RtProbe -Alive $true -Crash $false -Window $false -Events @() }
             return $null
         }
         (Test-MsixDeployment -PackagePath $script:Fixture -VMName 'vm' -Credential $script:Cred).Passed | Should -BeTrue

@@ -5,7 +5,50 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.73.0 - 2026-07-06 — Shared runtime frameworks, settings-capable modification packages
+
+The "one Java, patched once, used by forty apps" release (#130) plus the
+modification-package completion (#131).
+
+### Shared runtime framework packages (#130)
+
+- **`New-MsixFrameworkPackage`** — builds a `<Framework>true</Framework>`
+  package from a runtime folder (JRE, private .NET, Python, shared libraries):
+  one servicing point instead of a bundled copy per app.
+- **`Add-MsixRuntimeDependency`** — wires a consumer app in one call:
+  `<PackageDependency>` plus optional environment wiring (`-Runtime Java` →
+  `JAVA_HOME`, `-Runtime DotNet` → `DOTNET_ROOT`, or custom variables with the
+  `{frameworkRoot}` token) via PSF EnvVarFixup against the computed
+  `WindowsApps` install root (publisher-hash derived; warns that env wiring
+  pins the framework version). DLL-based runtimes need no wiring at all —
+  the package graph is on the packaged process's DLL search path.
+- **`Get-MsixBundledRuntime`** (new scanner, + plural alias) — trait-based
+  detection of private JRE/JDK (`bin\java.exe`), .NET (`hostfxr.dll`) and
+  Python (`python3*.dll` + `python.exe`) copies, with size accounting.
+  Surfaces as a `BundledRuntime` finding; autofix strips the bundled copy and
+  wires the framework via the opt-in `-DeduplicateBundledRuntime` +
+  `-RuntimeFrameworkName/-MinVersion/-Publisher` (destructive — identity is
+  never guessed).
+
+### Modification packages, completed (#131)
+
+- **`New-MsixModificationPackage -RegistryContent`** — modification packages
+  now layer SETTINGS, not just files: `HKLM\...`/`HKCU\...` key/value
+  hashtables are built into `Registry.dat` / `User.dat` with the module's
+  offline-registry (offreg) helpers (REG_SZ / REG_DWORD).
+- **`ConvertTo-MsixModificationPackage`** — productize the golden-image
+  delta: diffs a vendor package against a customized copy (SHA-256, footprint
+  files excluded), stages added/changed files (customized registry hives are
+  carried with a review warning), and emits the `uap4:MainPackageDependency`
+  package. Returns null with a warning when nothing differs.
+- **`Test-MsixDeployment -ModificationPackagePaths`** — the runtime test loop
+  installs modification packages after the main app so the layered
+  content/settings are part of the probed run (`ModificationsInstalled` on
+  the verdict object).
 ## v0.72.0 - 2026-07-05 — Bundles, resource-PRI regeneration, runtime deployment testing, in-process signing
+
+> *(Source-only: merged to `main` but never published to PSGallery — the
+> gallery went 0.71.4 → 0.73.0, which includes everything below.)*
 
 The first feature release beyond post-processing: multi-arch bundles,
 localization repair, an automated runtime verification loop, and safe local

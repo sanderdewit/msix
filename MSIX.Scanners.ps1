@@ -1179,6 +1179,21 @@ function Get-MsixHeuristicFinding {
         }
     } catch { Write-MsixLog -Level Debug -Message "Package-certificate heuristic skipped: $_" }
 
+    # Bundled runtimes (JRE/.NET/Python) - dedupe candidates (issue #130).
+    try {
+        foreach ($rt in (Get-MsixBundledRuntime -PackagePath $PackagePath -WorkspacePath $shared)) {
+            $out.Add([pscustomobject]@{
+                Severity       = 'Info'
+                Category       = 'BundledRuntime'
+                Symptom        = "Package bundles a private $($rt.Kind) runtime ($($rt.SizeMB) MB at $($rt.RuntimeRoot)) - its own servicing point on every update."
+                Recommendation = "Package the runtime ONCE with New-MsixFrameworkPackage, then wire this app to it: Add-MsixRuntimeDependency -PackagePath '$PackagePath' -FrameworkName <name> -FrameworkMinVersion <ver> -FrameworkPublisher <publisher> -Runtime $($rt.Kind)  (autofix: pass -DeduplicateBundledRuntime + the framework identity to Invoke-MsixAutoFixFromAnalysis)"
+                Evidence       = $rt.RuntimeRoot
+                AppId          = $null
+                RuntimeEntries = @($rt)
+            })
+        }
+    } catch { Write-MsixLog -Level Debug -Message "Bundled-runtime heuristic skipped: $_" }
+
     # Plugin / extension-point directories. Default fix path is
     # selective FileSystemWriteVirtualization (Win10 19041+); operators on
     # older fleets can opt into PSF FileRedirection via -LegacyPluginFix on
@@ -1560,6 +1575,7 @@ Set-Alias Get-MsixRunKeyEntries            Get-MsixRunKeyEntry
 Set-Alias Get-MsixShellContextMenuEntries  Get-MsixShellContextMenuEntry
 Set-Alias Get-MsixServiceEntries           Get-MsixServiceEntry
 Set-Alias Get-MsixPackageCertificateCandidates Get-MsixPackageCertificateCandidate
+Set-Alias Get-MsixBundledRuntimes          Get-MsixBundledRuntime
 Set-Alias Get-MsixShellHandlerEntries      Get-MsixShellHandlerEntry
 Set-Alias Get-MsixComServerEntries         Get-MsixComServerEntry
 Set-Alias Get-MsixAliasCandidates          Get-MsixAliasCandidate
@@ -1626,6 +1642,102 @@ function Get-MsixPackageCertificateCandidate {
                 SizeBytes       = $file.Length
                 AlreadyDeclared = $isDeclared
                 CanAutoFix      = -not $isDeclared
+            }
+        }
+        return @($results)
+    } finally {
+        if ($ws.Owned) { Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+#endregion
+
+
+#region Bundled runtime candidates (issue #130) ------------------------------
+
+function Get-MsixBundledRuntime {
+    <#
+    .SYNOPSIS
+        Detects full runtimes (JRE/JDK, private .NET, Python) bundled inside a
+        package payload - candidates for deduplication into a shared framework
+        package (New-MsixFrameworkPackage + Add-MsixRuntimeDependency).
+
+    .DESCRIPTION
+        Each bundled copy bloats the package and becomes its own servicing
+        point when the runtime needs patching. The MSIX-native alternative is
+        ONE framework package that any number of apps depend on.
+
+        Detection is trait-based (never app-specific):
+          Java   - a bin\java.exe anywhere in the payload; the runtime root is
+                   the folder containing bin\.
+          DotNet - hostfxr.dll (a privately deployed .NET host).
+          Python - python3*.dll next to a python.exe.
+
+    .PARAMETER PackagePath
+        The .msix file to inspect.
+
+    .PARAMETER WorkspacePath
+        Optional already-unpacked workspace to reuse (analysis pipelines).
+
+    .OUTPUTS
+        [pscustomobject[]] with Kind, RuntimeRoot (package-relative), Evidence,
+        SizeMB, CanAutoFix.
+    .EXAMPLE
+        # Is this app hauling its own Java?
+        Get-MsixBundledRuntime -PackagePath app.msix
+
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [string]$WorkspacePath
+    )
+
+    $ws = _MsixResolveScanWorkspace -PackagePath $PackagePath -WorkspacePath $WorkspacePath -Label 'runtimes'
+    $workspace = (Get-Item -LiteralPath $ws.Path).FullName
+    try {
+        $results = [System.Collections.Generic.List[object]]::new()
+        $seenRoots = @{}
+
+        function script:_AddRuntime {
+            param([string]$Kind, [string]$RootFull, [string]$Evidence)
+            $rootRel = $RootFull.Substring($workspace.Length + 1)
+            $dedupeKey = "$Kind|$rootRel"
+            if ($seenRoots[$dedupeKey]) { return }
+            $seenRoots[$dedupeKey] = $true
+            $size = [math]::Round((@(Get-ChildItem -LiteralPath $RootFull -Recurse -File -ErrorAction SilentlyContinue) |
+                Measure-Object -Property Length -Sum).Sum / 1MB, 1)
+            $results.Add([pscustomobject]@{
+                Kind        = $Kind
+                RuntimeRoot = $rootRel
+                Evidence    = $Evidence
+                SizeMB      = $size
+                CanAutoFix  = $true
+            })
+        }
+
+        foreach ($file in (Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue)) {
+            $name = $file.Name.ToLowerInvariant()
+            if ($name -eq 'java.exe' -and (Split-Path -Path $file.DirectoryName -Leaf) -eq 'bin') {
+                $root = Split-Path -Path $file.DirectoryName -Parent
+                _AddRuntime -Kind 'Java' -RootFull $root -Evidence $file.FullName.Substring($workspace.Length + 1)
+            }
+            elseif ($name -eq 'hostfxr.dll') {
+                # host\fxr\<ver>\hostfxr.dll (private deploy) or next to the app.
+                $root = $file.DirectoryName
+                $parent = Split-Path -Path $root -Parent
+                if ($parent -and (Split-Path -Path $parent -Leaf) -eq 'fxr') {
+                    $root = Split-Path -Path (Split-Path -Path $parent -Parent) -Parent
+                    if (-not $root -or $root.Length -le $workspace.Length) { $root = $file.DirectoryName }
+                }
+                _AddRuntime -Kind 'DotNet' -RootFull $root -Evidence $file.FullName.Substring($workspace.Length + 1)
+            }
+            elseif ($name -match '^python3\d*\.dll$') {
+                $hasExe = Test-Path -LiteralPath (Join-Path -Path $file.DirectoryName -ChildPath 'python.exe')
+                if ($hasExe) {
+                    _AddRuntime -Kind 'Python' -RootFull $file.DirectoryName -Evidence $file.FullName.Substring($workspace.Length + 1)
+                }
             }
         }
         return @($results)

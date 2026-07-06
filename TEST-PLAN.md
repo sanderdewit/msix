@@ -592,3 +592,59 @@ Before tagging a release:
 - [ ] `CHANGELOG.md` updated.
 - [ ] `MSIX.psd1` `ModuleVersion` bumped per SemVer.
 - [ ] PSGallery publish dry-run (`Publish-Module -WhatIf`) clean.
+
+---
+
+## Scenario 14 — Runtime deployment verification (Hyper-V)
+
+Validates the real (non-mocked) `Test-MsixDeployment` path: PowerShell Direct,
+cert trust, install, launch, probe, verdict, checkpoint restore.
+
+### Setup
+
+- A Hyper-V host with the module installed.
+- A golden VM (e.g. `Win11-24H2`): Windows 11, **sideloading/Developer Mode
+  enabled**, local admin account, a checkpoint named `clean` taken while idle.
+- A signed test package + its `.cer` (e.g. from `Invoke-MsixSelfSign`).
+
+### Steps
+
+```powershell
+$cred = Get-Credential   # VM local admin
+
+$r = Test-MsixDeployment -PackagePath 'C:\lab\App.msix' -VMName 'Win11-24H2' `
+        -Credential $cred -CertPath 'C:\lab\App.cer' -Checkpoint 'clean' `
+        -SettleSeconds 15
+
+$r | Format-List Passed, Reasons, PackageFullName, ProcessAlive, CrashDetected
+```
+
+Optionally layer a modification package into the same run:
+
+```powershell
+Test-MsixDeployment -PackagePath 'C:\lab\App.msix' -VMName 'Win11-24H2' `
+    -Credential $cred -CertPath 'C:\lab\App.cer' -Checkpoint 'clean' `
+    -ModificationPackagePaths 'C:\lab\App-settings.msix'
+```
+
+### Expected
+
+- `Installed` = true, `PackageFullName` populated.
+- `Launched` = true; `ProcessAlive` = true after the settle window; the process
+  path is under `...\WindowsApps\...`.
+- `CrashDetected` = false; `EventLogArtifacts` empty on a healthy run.
+- `Passed` = true.
+- With `-ModificationPackagePaths`: `ModificationsInstalled` matches the count
+  and the layered content is visible in the container
+  (`Invoke-MsixContainerCommand`).
+- After the run (without `-KeepInstalled`): the package is removed and the VM
+  is back at the `clean` checkpoint.
+
+### Failure-mode checks (deliberate)
+
+- Unsigned package → `Installed` = false, `Reasons` carries the
+  `Add-AppxPackage` error (0x800B0100-class).
+- Package whose exe exits immediately → `ProcessAlive` = false,
+  `Passed` = false, reason "No packaged process alive".
+- On any failure, feed `EventLogArtifacts` (and a ProcMon capture) into
+  `Invoke-MsixAutoFixFromAnalysis` and re-run — the loop should converge.

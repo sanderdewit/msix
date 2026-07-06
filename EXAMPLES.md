@@ -15,7 +15,7 @@ Import-Module C:\temp\msix\MSIX\MSIX.psd1
 1. [Inspect a package without unpacking](#1-inspect-a-package-without-unpacking)
 2. [Update the Publisher and re-sign](#2-update-the-publisher-and-re-sign)
 3. [Inject a PSF FileRedirection fixup](#3-inject-a-psf-fileredirection-fixup)
-4. [Add a legacy IContextMenu shell extension (desktop9)](#4-add-a-legacy-icontextmenu-shell-extension-desktop9)
+4. [Add a legacy IContextMenu shell extension](#4-add-a-legacy-icontextmenu-shell-extension-com--desktop4desktop5)
 5. [Add a modern IExplorerCommand context menu (desktop4)](#5-add-a-modern-iexplorercommand-context-menu-desktop4)
 6. [Add an AppExecutionAlias](#6-add-an-appexecutionalias)
 7. [Enable / configure FileSystem write virtualization](#7-enable--configure-filesystem-write-virtualization)
@@ -30,7 +30,14 @@ Import-Module C:\temp\msix\MSIX\MSIX.psd1
 16. [App Attach VHDX for multi-session hosts](#16-app-attach-vhdx-for-multi-session-hosts)
 17. [Full pipeline: publisher + PSF + signing in one call](#17-full-pipeline-publisher--psf--signing-in-one-call)
 18. [Standard scripts (PSADT-flavoured, parameterised)](#18-standard-scripts-psadt-flavoured-parameterised)
-19. [Win32 App Isolation (opt-in)](#19-win32-app-isolation-opt-in)
+19. [App isolation (opt-in)](#19-app-isolation-opt-in-appcontainer--appsilo)
+20. [Packaged Windows services, shell handlers, toast activators](#20-packaged-windows-services-shell-handlers-toast-activators)
+21. [Work with .msixbundle files](#21-work-with-msixbundle-files)
+22. [Shared runtime framework packages (one Java for all apps)](#22-shared-runtime-framework-packages-one-java-for-all-apps)
+23. [Modification packages: settings + golden-image deltas](#23-modification-packages-settings--golden-image-deltas)
+24. [Runtime verification in a Hyper-V VM](#24-runtime-verification-in-a-hyper-v-vm)
+25. [Regenerate resources.pri after brand edits](#25-regenerate-resourcespri-after-brand-edits)
+26. [Distribute with a .appinstaller (auto-update)](#26-distribute-with-a-appinstaller-auto-update)
 
 ---
 
@@ -97,7 +104,7 @@ array to `-Fixups`.
 
 ---
 
-## 4. Add a legacy IContextMenu shell extension (desktop9)
+## 4. Add a legacy IContextMenu shell extension (com + desktop4/desktop5)
 
 Classic shell extension DLLs (the kind that fail to load if Explorer can't
 find the DLL via registry). MSIX hosts them in a surrogate process.
@@ -116,7 +123,10 @@ Add-MsixLegacyContextMenu `
 
 Notes:
 
-- Requires Windows 11 21H2 (build 22000). `MaxVersionTested` is auto-bumped.
+- Works from Windows 10 1809 (build 17763) with the default schema;
+  `MaxVersionTested` is auto-bumped. Pass `-Schema desktop9` (or `Both`) for
+  the classic-handler registration (Win11 21H2+, classic "Show more options"
+  menu).
 - CLSID can be passed with or without curly braces — the cmdlet normalises.
 - `-FileTypes '*'` registers the handler for all files; `.log` is type-specific;
   `Directory` matches folders; `Drive` matches drive roots.
@@ -596,6 +606,203 @@ checking the running process for an `S-1-15-2` AppContainer SID — see
 > `AppIsolation = @{ Mode = 'AppContainer'|'AppSilo'; Capabilities = @(...) }`
 > to your `Invoke-MsixPipeline` config alongside `PSF` and `Signing`; it applies
 > the same model in one unpack/repack/sign pass.
+
+---
+
+## 20. Packaged Windows services, shell handlers, toast activators
+
+The manifest features the capture's installer used to configure imperatively.
+
+```powershell
+$pw = Read-Host -AsSecureString
+
+# Windows service that installs/starts with the package (agents, licensing)
+Add-MsixService -PackagePath app.msix `
+    -Executable 'VFS\ProgramFilesX64\App\agent.exe' -Name 'ContosoAgent' `
+    -StartupType auto -StartAccount localService `
+    -Pfx cert.pfx -PfxPassword $pw
+
+# Preview / thumbnail / property shell handlers (registry-free COM + FTA)
+Add-MsixShellHandlerExtension -PackagePath app.msix -Kind Preview `
+    -Clsid '{D7E6F1A2-3B4C-4D5E-9F00-112233445566}' `
+    -Dll 'VFS\ProgramFilesX64\App\PreviewHandler.dll' -FileTypes '.contoso' -SkipSigning
+
+# Toast clicks re-activate the app
+Add-MsixToastActivator -PackagePath app.msix `
+    -Clsid '{ff1a2b3c-4d5e-6f70-8899-aabbccddeeff}' `
+    -Executable 'VFS\ProgramFilesX64\App\app.exe' -Arguments '-ToastActivated' -SkipSigning
+
+# Framework dependency instead of bundling DLLs (well-known MS publishers auto-filled)
+Add-MsixPackageDependency -PackagePath app.msix `
+    -Name Microsoft.VCLibs.140.00.UWPDesktop -MinVersion 14.0.33321.0 -SkipSigning
+
+# Ship + install a certificate with the package (replaces the certutil step)
+Add-MsixPackageCertificate -PackagePath app.msix `
+    -CertificatePath .\internal-ca.cer -StoreName CA -SkipSigning
+```
+
+The scanners feed all of these into `Invoke-MsixInvestigation` findings, and
+`Invoke-MsixAutoFixFromAnalysis` plans them automatically (certificates are
+opt-in via `-DeclarePackageCertificates` — installing a cert is a trust
+decision).
+
+---
+
+## 21. Work with .msixbundle files
+
+Every mutator works on bundles through `Invoke-MsixBundleOperation` — no
+per-cmdlet bundle support needed.
+
+```powershell
+$pw = Read-Host -AsSecureString
+
+# What's inside?
+Get-MsixBundleInfo -BundlePath app.msixbundle | Format-Table
+
+# Apply any mutator to every inner package (unbundle -> mutate -> rebundle -> sign)
+Invoke-MsixBundleOperation -BundlePath app.msixbundle -Operation {
+    param($pkg)
+    Add-MsixCapability -PackagePath $pkg -Names runFullTrust -SkipSigning
+} -Pfx cert.pfx -PfxPassword $pw
+
+# Only the x64 package; arm64/resource packages pass through untouched
+Invoke-MsixBundleOperation -BundlePath app.msixbundle -Architecture x64 -Operation {
+    param($pkg)
+    Add-MsixAppIsolation -PackagePath $pkg -SkipSigning
+} -SkipSigning
+
+# Build a bundle from per-arch packages
+New-MsixBundle -PackagePaths .\app-x64.msix, .\app-arm64.msix `
+    -OutputPath .\app.msixbundle -Pfx cert.pfx -PfxPassword $pw
+```
+
+---
+
+## 22. Shared runtime framework packages (one Java for all apps)
+
+Stop bundling a JRE into every app: package the runtime once, patch it once.
+
+```powershell
+$pw = Read-Host -AsSecureString
+
+# 1. Package the runtime ONCE as a framework package
+New-MsixFrameworkPackage -RuntimeFolder C:\runtimes\jre-17 `
+    -Name 'Contoso.Java.17' -Version 17.0.11.0 `
+    -Publisher 'CN=Contoso Ltd' -Pfx cert.pfx -PfxPassword $pw
+
+# 2. Wire each app to it: dependency + JAVA_HOME (via PSF EnvVarFixup)
+Add-MsixRuntimeDependency -PackagePath app.msix `
+    -FrameworkName 'Contoso.Java.17' -FrameworkMinVersion 17.0.11.0 `
+    -FrameworkPublisher 'CN=Contoso Ltd' -Runtime Java `
+    -Pfx cert.pfx -PfxPassword $pw
+
+# DLL-based runtimes need no env wiring at all — the package graph is on the
+# packaged process's DLL search path:
+Add-MsixRuntimeDependency -PackagePath app.msix `
+    -FrameworkName 'Contoso.SharedLibs' -FrameworkMinVersion 1.0.0.0 `
+    -FrameworkPublisher 'CN=Contoso Ltd' -SkipSigning
+
+# Find apps that still haul their own runtime
+Get-MsixBundledRuntime -PackagePath app.msix
+# ...and let autofix strip + rewire them (explicit identity required):
+$report = Invoke-MsixInvestigation -PackagePath app.msix
+Invoke-MsixAutoFixFromAnalysis -Report $report `
+    -DeduplicateBundledRuntime `
+    -RuntimeFrameworkName 'Contoso.Java.17' `
+    -RuntimeFrameworkMinVersion 17.0.11.0 `
+    -RuntimeFrameworkPublisher 'CN=Contoso Ltd' `
+    -Pfx cert.pfx -PfxPassword $pw
+```
+
+Note: env wiring pins the framework install path to the exact MinVersion —
+re-run `Add-MsixRuntimeDependency` after servicing the framework.
+
+---
+
+## 23. Modification packages: settings + golden-image deltas
+
+Customize a vendor MSIX without touching it — files AND registry settings.
+
+```powershell
+$pw = Read-Host -AsSecureString
+
+# Settings + license files layered onto the vendor app
+New-MsixModificationPackage -MainPackagePath vendor.msix `
+    -ContentPath .\customization `
+    -RegistryContent @{
+        'HKLM\SOFTWARE\Vendor\App' = @{ LicenseServer = 'lic01.contoso.com'; Port = 27000 }
+        'HKCU\Software\Vendor\App' = @{ Theme = 'dark' }
+    } `
+    -Pfx cert.pfx -PfxPassword $pw
+
+# Or productize an existing customization: diff vendor vs customized copy
+ConvertTo-MsixModificationPackage `
+    -MainPackagePath vendor.msix `
+    -CustomizedPackagePath vendor-customized.msix `
+    -OutputPath vendor-settings.msix `
+    -Pfx cert.pfx -PfxPassword $pw
+```
+
+Install order on the endpoint: main package first, then the modification
+package — Windows layers them into one container view.
+
+---
+
+## 24. Runtime verification in a Hyper-V VM
+
+Static analysis says a package *should* work; this proves it *does*.
+Needs a golden VM (sideloading enabled) and PowerShell Direct — no VM network.
+
+```powershell
+$cred = Get-Credential   # VM local admin
+
+$result = Test-MsixDeployment -PackagePath app.msix -VMName 'Win11-24H2' `
+    -Credential $cred -CertPath app.cer -Checkpoint 'clean' `
+    -ModificationPackagePaths .\vendor-settings.msix
+
+$result.Passed          # bottom line
+$result.Reasons         # why it failed, if it did
+$result.EventLogArtifacts  # WER / AppXDeployment errors -> feed the autofix loop
+```
+
+The verdict object is shaped like the other `Test-Msix*` results; on failure
+the artifacts flow into `Invoke-MsixAutoFixFromAnalysis` so the loop closes:
+test → analyze → autofix → retest.
+
+---
+
+## 25. Regenerate resources.pri after brand edits
+
+On `ms-resource:`-localized packages, editing the manifest alone changes
+nothing at runtime — the displayed strings come from `resources.pri`.
+
+```powershell
+$pw = Read-Host -AsSecureString
+
+# One call: replace the ms-resource reference AND rebuild the PRI
+Set-MsixBrandMetadata -PackagePath app.msix `
+    -DisplayName 'Contoso Expenses (Managed)' `
+    -RegeneratePri -Pfx cert.pfx -PfxPassword $pw
+
+# Or regenerate standalone (after any resource-affecting edits)
+Update-MsixResourcePri -PackagePath app.msix -Pfx cert.pfx -PfxPassword $pw
+```
+
+---
+
+## 26. Distribute with a .appinstaller (auto-update)
+
+Native sideload distribution with an update policy — no MDM required
+(and if you use Intune, upload the .msix directly; it's a native app type).
+
+```powershell
+New-MsixAppInstallerFile -PackagePath .\app.msix `
+    -PackageUri 'https://dist.contoso.com/app.msix' `
+    -OnLaunch -ShowPrompt -HoursBetweenUpdateChecks 12
+
+# Users install by opening the .appinstaller (or:)
+# Add-AppxPackage -AppInstallerFile https://dist.contoso.com/app.appinstaller
+```
 
 ---
 

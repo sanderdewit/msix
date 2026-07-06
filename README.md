@@ -1,4 +1,4 @@
-# MSIX PowerShell Module — v0.71.0
+# MSIX PowerShell Module — v0.73.0
 
 Enterprise-grade MSIX packaging automation for mission-critical environments.
 Covers the full conversion lifecycle: static + runtime investigation, PSF
@@ -34,8 +34,8 @@ suite.
 - [Debug & sandbox](#debug--sandbox)
 - [CI/CD](#cicd)
 - [Tests](#tests)
-- [What's new in v0.71](#whats-new-in-v071)
-- [What's new in v0.70](#whats-new-in-v070)
+- [What's new in v0.73](#whats-new-in-v073)
+- [Release history](#release-history)
 - [License](#license)
 
 ---
@@ -100,7 +100,7 @@ Skip individual components: `Initialize-MsixToolchain -Skip Sdk,Procmon,MsixMgr`
 
 ```
 MSIX\
-├── MSIX.psd1                  Module manifest (v0.71.0)
+├── MSIX.psd1                  Module manifest (v0.73.0)
 ├── MSIX.psm1                  Root module — dot-sources all sub-modules
 ├── MSIX.Logging.ps1           Write-MsixLog + log-level / file controls
 ├── MSIX.Core.ps1              Workspace, process runner, tools resolution
@@ -128,12 +128,16 @@ MSIX\
 ├── MSIX.MFR.ps1               Modern File Redirection (TMurgent fork)
 ├── MSIX.VcRuntime.ps1         VC++ runtime detection + bundling
 ├── MSIX.Compare.ps1           Compare-MsixPackage (manifest + file + signing diff)
+├── MSIX.OfflineRegistry.ps1   Offreg (offline hive) read/write helpers
+├── MSIX.Distribution.ps1      .appinstaller, modification + framework packages
+├── MSIX.Bundle.ps1            .msixbundle: bundle/unbundle + mutate-through-bundle
+├── MSIX.RuntimeTest.ps1       Test-MsixDeployment (Hyper-V runtime verification)
 ├── templates/                 .ps1.tmpl files for standard scripts
-├── MSIX.Tests/                Pester v5 test suite (200+ tests)
+├── MSIX.Tests/                Pester v5 test suite (700+ tests)
 ├── docs/                      Per-fixup reference, limitations, know-your-installer
 ├── CONTRIBUTING.md            Coding standards and security guidelines
-├── EXAMPLES.md                19 copy-paste recipes for all major use cases
-└── TEST-PLAN.md               13 manual / integration test scenarios + release checklist
+├── EXAMPLES.md                26 copy-paste recipes for all major use cases
+└── TEST-PLAN.md               14 manual / integration test scenarios + release checklist
 ```
 
 All logging uses `Write-Information` (stream 6) — fully capturable in CI
@@ -571,84 +575,45 @@ CI runs PSScriptAnalyzer (Error + Warning) and Pester on every push / PR via
 
 ---
 
-## What's new in v0.71
+## What's new in v0.73
 
-### Win32 App Isolation — now actually isolates
+**Shared runtime frameworks (#130)** — package a JRE/.NET/Python runtime ONCE
+as a `<Framework>` package (`New-MsixFrameworkPackage`) and wire any number of
+apps to it (`Add-MsixRuntimeDependency`: dependency + optional
+`JAVA_HOME`/`DOTNET_ROOT` env wiring). `Get-MsixBundledRuntime` finds private
+runtime copies in captures; autofix can strip + rewire them (opt-in, explicit
+framework identity).
 
-`Add-MsixAppIsolation` was previously a no-op for isolation: it added an
-`isolatedWin32-*` capability but none of the attributes that switch isolation
-on. It now writes the full `uap18` attribute set, raises MinVersion to 26100,
-keeps `runFullTrust` (required by the entry point), auto-adds
-`isolatedWin32-shellExtensionContextMenu` for comServer menus, and warns when a
-PSF-launcher package (which can't be isolated) is passed. `Remove-MsixAppIsolation`
-reverses all of it. `Get-MsixIsolationCapability` was rebuilt against the MS Learn
-supported-capabilities page (rich objects + device caps), and a runtime
-`OrderedDictionary.ContainsKey` error was fixed. (#85, #86, #91, #92, #93)
-See the [Win32 App Isolation](#win32-app-isolation) section for the preview-feature
-runtime caveat.
+**Modification packages completed (#131)** — `New-MsixModificationPackage
+-RegistryContent` layers HKLM/HKCU settings (built into
+`Registry.dat`/`User.dat`), and `ConvertTo-MsixModificationPackage`
+productizes the delta between a vendor package and a customized copy.
+`Test-MsixDeployment -ModificationPackagePaths` probes main + mods together.
 
-### Security hardening (post code-security review)
+**From 0.72 (source-only, first published here):**
 
-| Area | Change |
-|---|---|
-| **P1 findings** | Template injection, XXE, Zip-Slip, and a TLS floor fixed across the analysis + accelerator paths (#49–#52). |
-| **AzureSignTool secret** | Client secret delivered via environment variable, never the command line (#53). |
-| **Tool verification** | Resolved SDK tools are Authenticode-verified before use, not just freshly-downloaded ones (#54). |
-| **Download integrity** | Opt-in SHA-256 + per-publisher thumbprint pinning closes the CN-prefix-only gap (#55). |
-| **Snippet escaping** | Package-derived values are escaped in scanner recommendation snippets (#60). |
+- **`.msixbundle` support** — `New-MsixBundle` / `Expand-MsixBundle` /
+  `Get-MsixBundleInfo`, and `Invoke-MsixBundleOperation` to run any mutator
+  against each inner package (unbundle → mutate → rebundle → sign, atomic).
+- **resources.pri regeneration** — `Update-MsixResourcePri` +
+  `Set-MsixBrandMetadata -RegeneratePri` make brand edits on
+  `ms-resource:`-localized packages actually take effect.
+- **Runtime deployment testing** — `Test-MsixDeployment` deploys into a clean
+  Hyper-V VM over PowerShell Direct, launches, probes, and returns a verdict
+  whose artifacts feed the analyze → autofix loop.
+- **In-process signing** — `Invoke-MsixSigning -Signer SignerSignEx` signs by
+  thumbprint with the certificate loaded in-process: no PFX password or path
+  on any command line.
 
-### Scanning, reliability & quality
+**Earlier in the 0.71 line:** the App Isolation rework (partial-trust
+AppContainer/AppSilo that provably isolates), the isolation toolkit
+(`Remove-MsixPsf`, `Test-MsixIsolation`, `Get-MsixIsolationAdvice`), packaged
+services, shell handlers, toast activators, package dependencies/certificates,
+distribution (.appinstaller), and the module-wide Get-Help repair.
 
-| Area | Change |
-|---|---|
-| **offreg Run-key scan** | Run-key detection parses the hive via offreg instead of raw strings; fixed empty value-name enumeration (#56, #59). |
-| **Mutator scope** | Mutator scriptblocks are bound to module session state so private offreg helpers resolve at invocation (#83). |
-| **Folder context menus** | Scanner walks the `Folder`/`Drive` shell classes and `DragDropHandlers`; install-dir plugin folders route via PSF rather than an invalid `ExcludedDirectory` (#80, #81, #84). |
-| **Perf / correctness** | Package unpacked once per analysis run (#58); multi-TDF + short-version `MaxVersionTested` (#57); full `-LiteralPath` + named-parameter sweep (#46–#48). |
+## Release history
 
-### Test infrastructure
-
-| Area | Change |
-|---|---|
-| **Real-MSIX integration** | `Build-MsixTestFixture` packs genuine `.msix` fixtures via MakeAppx; end-to-end integration tests for the mutating cmdlets + a dedicated CI job (#61, #87). |
-| **Suite restructure** | Tests grouped by cmdlet-family + cross-cutting contract; issue/version-named files dissolved; a coverage-map guardrail fails the build when a mutator has no test that invokes it (#88, #89). |
-| **Repo hygiene** | `.gitignore` for test artifacts; `actions/checkout` v6 (Node 24); CI parse-check gate (#90). |
-
----
-
-## What's new in v0.70
-
-### Security hardening (PRs #15 / #16)
-
-| Area | Change |
-|---|---|
-| **Authenticode verification** | All toolchain downloads verified against the `signers.json` trusted-publisher allowlist before use. Failed verification throws and rolls back the install. |
-| **SecureString throughout** | `PfxPassword` is `[SecureString]` on every function that accepts it. `ConvertTo-SecureString -AsPlainText -Force` is banned (see CONTRIBUTING.md). |
-| **Secret non-leakage** | `Get-MsixDebugRecommendation` emits a `Read-Host -AsSecureString` placeholder — the actual `SecureString` value is never interpolated into output or written to disk. |
-| **SignTool warning** | `Invoke-MsixSigning -Signer SignTool -Pfx` emits `Write-Warning` about cmdline exposure before any I/O — capturable via `-WarningVariable` in CI. |
-| **XML hardening** | All manifest loading uses `_MsixLoadXmlSecure` (`DtdProcessing=Prohibit`, `XmlResolver=$null`, `MaxCharactersFromEntities=1MB`). XXE and billion-laughs payloads are rejected. |
-| **YAML safety** | `powershell-yaml` dependency removed entirely. A restricted value-only parser handles scalars, inline lists, nested maps, and block lists without type tags or .NET object instantiation. |
-
-### Reliability & architecture (PRs #15 / #16)
-
-| Area | Change |
-|---|---|
-| **Atomic pack-sign-move** | `Invoke-MsixPipeline` packs to a scratch path, signs at the scratch, then `Move-Item` to the target only on success. `UnsignedOutputPath` preserves the scratch when signing fails. |
-| **WhatIf consistency** | `_MsixMutateManifest` gains `-WhatIfPreview`; all wrapper cmdlets forward `$isWhatIf`. `New-MsixAppAttachImage` gates the entire VHDX + mount + format + unpack block under one `ShouldProcess`. |
-| **Pure manifest transforms** | `Invoke-MsixManifestTransform`, `Set-MsixManifestPublisher`, `Set-MsixManifestIdentity` — in-memory XML only, no pack/sign. |
-| **Signing backends** | `Invoke-MsixSigning -Signer` accepts `SignTool` (default), `TrustedSigning`, or `AzureSignTool`. |
-| **CLSID normalisation** | `com:Class Id` (bare GUID) vs `desktop9:ExtensionHandler Clsid` (braced) correctly separated. |
-| **desktop9 MinBuild** | Corrected `MaxVersionTested` minimum to 22000 (Win 11 21H2). Previous value (21301) caused pre-Win11 compat shims that prevented desktop9 extension activation. |
-
-### Documentation & testing (PR #22)
-
-| Area | Change |
-|---|---|
-| **EXAMPLES.md** | 19 copy-paste recipes covering all major use cases including Standard Scripts and Win32 App Isolation. |
-| **TEST-PLAN.md** | 13 manual / integration scenarios + release checklist. |
-| **CONTRIBUTING.md** | Coding standards: SecureString hygiene, XML loading, error handling, WhatIf semantics, Authenticode requirements. |
-| **200+ Pester tests** | New suites: `SecretLeakage`, `XmlSecurity`, `Accelerator`, `InputValidation`, `Idempotency`, `PureTransforms`, `WhatIf`, `ModuleContract`. All import via `.psd1`. |
-| **CI fixed** | Pester path corrected to `./MSIX.Tests`; failing tests were silently skipped previously. |
+The full per-version history lives in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

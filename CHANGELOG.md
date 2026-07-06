@@ -5,6 +5,31 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.73.1 - 2026-07-06 — Bugfix: nested / sparse package handling
+
+Fixes three latent bugs surfaced by `Invoke-MsixAutoFixFromAnalysis` on a
+package with a nested sparse shell-extension package (Notepad++-8.9.4.msix),
+where the run crashed unless `-IgnoreNestedPackages` was passed.
+
+- **Crash on inner unpack.** `Import-MsixSparseShellExtension` unpacked the
+  inner sparse package with MakeAppx, which VALIDATES the manifest during
+  unpack. A sparse inner package legitimately references an executable in the
+  OUTER package (NppShell's `Executable="notepad++.exe"`), so MakeAppx rejected
+  it with `0x80080204`. The inner package is only read, so extraction now uses
+  plain zip (no validation gate).
+- **8.3 short-path corruption.** The inner temp directory and the shared scan
+  workspace were created via `Join-Path` against `$env:TEMP`, which can carry an
+  8.3 short segment (`SANDER~1`) while `Get-ChildItem` returns long-form paths.
+  The payload-copy relative-path `Substring` then chopped the wrong count and
+  mis-filed the inner `AppxManifest.xml` under a corrupt `NN\AppxManifest.xml`
+  path inside the outer VFS. `New-MsixWorkspace`, `_MsixResolveScanWorkspace`,
+  and the sparse inner dir are now normalized to long-form.
+- **Wrong manifest returned.** `Get-MsixManifest` matched `AppxManifest.xml` by
+  basename with `-First 1`, so a package carrying a nested manifest could return
+  the wrong one. It now matches the archive-ROOT `AppxManifest.xml`, with a
+  shallowest-path basename fallback only when no root manifest exists.
+
+Regression coverage in `MSIX.NestedPackage.Tests.ps1`.
 ## v0.73.0 - 2026-07-06 — Shared runtime frameworks, settings-capable modification packages
 
 The "one Java, patched once, used by forty apps" release (#130) plus the

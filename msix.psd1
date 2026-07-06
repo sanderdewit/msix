@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.73.0'
+    ModuleVersion     = '0.73.1'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, deployment-script templates, heuristic heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -256,34 +256,21 @@
                             'Enterprise','CICD','Pester')
             ProjectUri  = 'https://github.com/microsoft/MSIX-PackageSupportFramework'
             ReleaseNotes = @'
-## v0.73.0
+## v0.73.1 (bugfix)
 
-### Shared runtime framework packages (#130)
-- New-MsixFrameworkPackage: build a Framework=true package from a runtime
-  folder (JRE/.NET/Python/shared libs) - one servicing point for N apps.
-- Add-MsixRuntimeDependency: PackageDependency + optional env wiring
-  (-Runtime Java -> JAVA_HOME, DotNet -> DOTNET_ROOT, custom vars with the
-  {frameworkRoot} token) against the computed WindowsApps root. DLL-based
-  runtimes need no wiring (package-graph DLL search).
-- Get-MsixBundledRuntime (new scanner): trait-based detection of private
-  JRE/.NET/Python copies with size accounting; BundledRuntime findings;
-  autofix strips + wires via opt-in -DeduplicateBundledRuntime with an
-  EXPLICIT framework identity (never guessed).
+Nested / sparse package handling (crash reproduced by Notepad++-8.9.4.msix
+via Invoke-MsixAutoFixFromAnalysis without -IgnoreNestedPackages):
 
-### Modification packages, completed (#131)
-- New-MsixModificationPackage -RegistryContent: layer SETTINGS, not just
-  files - HKLM/HKCU key/value hashtables become Registry.dat / User.dat via
-  the offline-registry helpers.
-- ConvertTo-MsixModificationPackage: productize the golden-image delta -
-  diff vendor vs customized copy, stage added/changed files, emit the
-  uap4:MainPackageDependency package.
-- Test-MsixDeployment -ModificationPackagePaths: the runtime loop installs
-  modification packages after the main app and reports
-  ModificationsInstalled on the verdict.
+- Import-MsixSparseShellExtension no longer crashes unpacking a sparse inner
+  package whose Application references an executable in the OUTER package -
+  MakeAppx validates on unpack, so extraction now uses plain zip.
+- Fixed an 8.3 short-path (SANDER~1) corruption that mis-filed the inner
+  AppxManifest.xml under a bad 'NN\AppxManifest.xml' path in the outer VFS;
+  workspace/inner temp dirs are normalized to long-form.
+- Get-MsixManifest now returns the archive-ROOT AppxManifest.xml, not a nested
+  one it happened to enumerate first.
 
-(0.72.0 was source-only; this release also carries its features: msixbundle
-handling, resources.pri regeneration, Test-MsixDeployment, and the
-in-process SignerSignEx signing backend. Full history: CHANGELOG.md.)
+Regression tests added. Full history: CHANGELOG.md.
 '@
         }
     }

@@ -250,6 +250,12 @@ function New-MsixWorkspace {
     $id   = [guid]::NewGuid().ToString('N').Substring(0, 8)
     $path = Join-Path -Path $env:TEMP -ChildPath "msix-$PackageName-$id"
     New-Item -ItemType Directory -Path $path -Force | Out-Null
+    # Return the LONG-form path. $env:TEMP can carry an 8.3 short segment
+    # (SANDER~1 vs SanderdeWit) while Get-ChildItem returns long-form
+    # FullNames; any relative-path Substring against a short-form workspace
+    # then chops the wrong number of characters (this shipped as the
+    # '08\VFS\...' nested-package corruption in Import-MsixSparseShellExtension).
+    $path = (Get-Item -LiteralPath $path).FullName
     Write-MsixLog -Level Debug -Message "Workspace created: $path"
     return $path
 }

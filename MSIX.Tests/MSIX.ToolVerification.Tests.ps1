@@ -18,7 +18,7 @@ Describe '_MsixSetVerifiedToolsRoot (#54)' -Tag 'Toolchain', 'Security' {
     It 'verifies a resolved tool and caches the root on success' {
         $result = InModuleScope MSIX {
             $script:verified = @()
-            Mock Test-Path { $true } -ParameterFilter { $LiteralPath -like '*signtool.exe' -or $LiteralPath -like '*MakeAppx.exe' }
+            Mock Test-Path { $true } -ParameterFilter { $LiteralPath -like '*signtool.exe' -or $LiteralPath -like '*MakeAppx.exe' -or $LiteralPath -like '*makepri.exe' }
             Mock _MsixVerifyAuthenticode { $script:verified += $Path }
             $r = _MsixSetVerifiedToolsRoot -Root 'C:\fake\root'
             [pscustomobject]@{ Returned = $r; Cached = $script:ToolsRoot; VerifiedCount = $script:verified.Count }
@@ -30,7 +30,7 @@ Describe '_MsixSetVerifiedToolsRoot (#54)' -Tag 'Toolchain', 'Security' {
 
     It 'is fail-closed: a verification failure propagates and the root is NOT cached' {
         InModuleScope MSIX {
-            Mock Test-Path { $true } -ParameterFilter { $LiteralPath -like '*signtool.exe' -or $LiteralPath -like '*MakeAppx.exe' }
+            Mock Test-Path { $true } -ParameterFilter { $LiteralPath -like '*signtool.exe' -or $LiteralPath -like '*MakeAppx.exe' -or $LiteralPath -like '*makepri.exe' }
             Mock _MsixVerifyAuthenticode { throw 'Authenticode verification FAILED (planted binary)' }
             { _MsixSetVerifiedToolsRoot -Root 'C:\evil\root' } | Should -Throw '*Authenticode verification FAILED*'
             $script:ToolsRoot | Should -BeNullOrEmpty

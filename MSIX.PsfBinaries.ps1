@@ -639,9 +639,37 @@ function Install-MsixPsfBinary {
             _MsixDownloadFile -Url $asset.browser_download_url -Destination $zip
             _MsixExpandZip -ArchivePath $zip -DestinationPath $tmp
 
+            # Newer TMurgent releases (v2026.07.01+) ship a zip-OF-zips: the outer
+            # asset contains only ReleasePsf.zip + DebugPsf.zip, and the actual
+            # PsfLauncher*/PsfRuntime*/fixup binaries live INSIDE those. Older
+            # releases shipped the binaries directly. Detect the nested form (no
+            # PsfLauncher*.exe surfaced by the outer extract, but nested .zip(s)
+            # present) and expand the Release payload in place so the copy below
+            # finds real binaries instead of nested archives.
+            $hasLauncher = @(Get-ChildItem -LiteralPath $tmp -Recurse -File -Filter 'PsfLauncher*.exe' -ErrorAction SilentlyContinue).Count -gt 0
+            if (-not $hasLauncher) {
+                $nested = @(Get-ChildItem -LiteralPath $tmp -Recurse -File -Filter '*.zip' -ErrorAction SilentlyContinue |
+                    Where-Object { $_.FullName -ne $zip })
+                # Prefer the Release payload; fall back to any nested zip that
+                # isn't a Debug build if no explicit "Release" name is present.
+                $payload = $nested | Where-Object { $_.Name -match 'Release' } | Select-Object -First 1
+                if (-not $payload) { $payload = $nested | Where-Object { $_.Name -notmatch 'Debug' } | Select-Object -First 1 }
+                if ($payload) {
+                    Write-MsixLog -Level Info -Message "PSF release is a nested archive; expanding payload: $($payload.Name)"
+                    _MsixExpandZip -ArchivePath $payload.FullName -DestinationPath $tmp
+                    # Drop the nested archives so they aren't flat-copied into the
+                    # toolchain (and don't trip Authenticode verification on a zip).
+                    $nested | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+                }
+            }
+
             # H1: verify Authenticode signer on every .exe/.dll before we copy
             # any of them into the toolchain root.
             _MsixVerifyAuthenticodeFolder -Folder $tmp -ToolName 'PSF'
+
+            if (-not (@(Get-ChildItem -LiteralPath $tmp -Recurse -File -Filter 'PsfLauncher*.exe' -ErrorAction SilentlyContinue).Count -gt 0)) {
+                throw "PSF release $tag did not yield any PsfLauncher*.exe after extraction (asset: $($asset.name)). The release layout may have changed again."
+            }
 
             if (-not (Test-Path -LiteralPath $Destination)) {
                 New-Item -Path $Destination -ItemType Directory -Force | Out-Null

@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.73.3'
+    ModuleVersion     = '0.73.4'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, deployment-script templates, heuristic heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -257,6 +257,16 @@
             ProjectUri  = 'https://github.com/sanderdewit/msix'
             LicenseUri  = 'https://github.com/sanderdewit/msix/blob/main/LICENSE.md'
             ReleaseNotes = @'
+## v0.73.4 (diagnostic: surface scanner failures)
+
+- Get-MsixHeuristicFinding no longer swallows a failing scanner at Debug level.
+  Each scanner catch now emits a Warning-level ScannerError finding naming the
+  scanner + error, so a report missing a finding category is never mistaken for
+  a clean package (issue #140). Registry-derived scanners defer to the single
+  OfflineRegistryUnavailable finding when offreg.dll is absent (no double-report).
+- The Run-key scanner (offreg-dependent) was previously unwrapped and could
+  abort the whole analysis on a host without offreg.dll; it is now guarded.
+
 ## v0.73.3 (Windows container / Server Core support)
 
 - offreg.dll availability is now probed once per session via

@@ -189,6 +189,26 @@ Describe 'PSF-dependent mutators from the coverage allowlist (real package + PSF
             [xml]$m = Get-MsixManifest -Path $out
             $m.Package.Applications.Application.Executable | Should -Match 'PsfLauncher'
         }
+
+        It 'merges into an existing config on re-injection (already-PSF package)' {
+            # Regression: the merge branch keys process entries in an
+            # [ordered]@{} (OrderedDictionary), whose key-lookup method is
+            # .Contains() - NOT .ContainsKey(). A second injection is the only
+            # path that reaches it, so injecting twice guards the crash
+            # "does not contain a method named 'ContainsKey'".
+            $fx    = New-MsixTestFixture -OutputPath (Join-Path $script:Dir 'psf-merge-base.msix')
+            $once  = Join-Path $script:Dir 'psf-merge-1.msix'
+            $twice = Join-Path $script:Dir 'psf-merge-2.msix'
+            $frf   = New-MsixPsfFileRedirectionConfig -Base 'VFS/ProgramFilesX64/App/' -Patterns '.*\.log'
+            $envfx = New-MsixPsfEnvVarConfig -Variables @{ MSIX_MERGE_PROBE = '1' }
+            Add-MsixPsfV2 -PackagePath $fx.PackagePath -Fixups @($frf) -OutputPath $once -SkipSigning
+            # Second pass runs against an already-PSF'd package => merge mode.
+            { Add-MsixPsfV2 -PackagePath $once -Fixups @($envfx) -OutputPath $twice -SkipSigning } |
+                Should -Not -Throw
+            Test-Path -LiteralPath $twice | Should -BeTrue
+            [xml]$m = Get-MsixManifest -Path $twice
+            $m.Package.Applications.Application.Executable | Should -Match 'PsfLauncher'
+        }
     }
 
     Context 'Add-MsixDiagnosticTrace' {

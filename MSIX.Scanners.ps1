@@ -1110,6 +1110,24 @@ function Get-MsixHeuristicFinding {
 
     $out = [System.Collections.Generic.List[object]]::new()
 
+    # HONESTY: many findings below (ShellExt/ShellVerb, services, preview/property/
+    # thumbnail handlers, uninstall keys, run keys, COM servers) come from parsing
+    # the package's Registry.dat via offreg.dll. That DLL is absent from Windows
+    # Server Core containers, where those scans would otherwise throw
+    # DllNotFoundException and be swallowed at Debug level — silently dropping
+    # shell extensions and their AddLegacyContextMenu fix. Surface it loudly so a
+    # report that omits registry-derived findings is never mistaken for a clean one.
+    if (-not (_MsixTestOffregAvailable)) {
+        $out.Add([pscustomobject]@{
+            Severity       = 'Warning'
+            Category       = 'OfflineRegistryUnavailable'
+            Symptom        = 'offreg.dll (Offline Registry API) is unavailable on this host, so the package Registry.dat could not be parsed. Shell extensions / context menus, Windows services, preview/property/thumbnail handlers and uninstall-key artefacts were NOT analyzed, and any fixes they would have triggered (e.g. AddLegacyContextMenu) were skipped.'
+            Recommendation = 'Run the analysis on Windows 10/11 (offreg.dll ships in System32), or provision offreg.dll into the environment. Windows Server Core containers lack it: COPY offreg.dll into C:\Windows\System32 in the image.'
+            Evidence       = 'DllNotFound: offreg.dll'
+            AppId          = $null
+        })
+    }
+
     # PERFORMANCE (#58): unpack the package ONCE here and hand the shared
     # workspace to every read-only scanner via -WorkspacePath, instead of each
     # scanner unpacking independently (~14 unpacks per analysis run before this).

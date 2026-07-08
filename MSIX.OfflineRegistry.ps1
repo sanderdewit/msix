@@ -62,6 +62,13 @@ public static class MsixOffReg {
         uint   dwFlagsAndAttributes,
         IntPtr hTemplateFile);
 
+    // Used to probe whether offreg.dll can be resolved at all (it is ABSENT from
+    // Windows Server Core containers) and to pre-load a module-bundled copy.
+    // Returns NULL on failure instead of throwing, so availability can be tested
+    // without triggering a DllNotFoundException from a lazy-bound OR* P/Invoke.
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern IntPtr LoadLibraryW(string lpFileName);
+
     [DllImport("offreg.dll", ExactSpelling = true, SetLastError = true)]
     public static extern int OROpenHiveByHandle(
         SafeFileHandle FileHandle,
@@ -141,6 +148,54 @@ public static class MsixOffReg {
         uint     cbData);
 }
 "@
+}
+
+$script:MsixOffregAvailable = $null
+function _MsixTestOffregAvailable {
+    <#
+    .SYNOPSIS
+        Returns $true if offreg.dll (the Offline Registry API) can be loaded in
+        this process; $false otherwise. Memoized for the session.
+
+    .DESCRIPTION
+        offreg.dll ships in C:\Windows\System32 on client Windows 10/11 but is
+        NOT present in Windows Server Core containers. Every offline-hive scanner
+        (ShellExt/ShellVerb, services, preview/property/thumbnail handlers,
+        uninstall keys, run keys, COM servers) P/Invokes offreg.dll; when it is
+        missing those calls throw DllNotFoundException, which the heuristic
+        aggregator otherwise swallows at Debug level — silently dropping shell
+        extensions and the AddLegacyContextMenu autofix. Callers use this to
+        surface an honest warning instead of a silent no-op.
+
+        If the module ships a bundled copy (native\offreg.dll, e.g. to make it
+        self-sufficient inside Server Core containers) it is pre-loaded by full
+        path so the subsequent unqualified [DllImport("offreg.dll")] binds to it.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param()
+
+    if ($null -ne $script:MsixOffregAvailable) { return $script:MsixOffregAvailable }
+
+    # Pre-load a module-bundled copy if one is shipped alongside the module, so
+    # the module works on hosts that lack offreg.dll in the DLL search path.
+    $bundled = Join-Path $PSScriptRoot 'native\offreg.dll'
+    if (Test-Path -LiteralPath $bundled) {
+        # Best-effort: if the bundled copy can't be loaded (wrong arch, blocked
+        # file, corrupt), fall through to the standard-search probe below.
+        try { [void][MsixOffReg]::LoadLibraryW($bundled) }
+        catch { Write-MsixLog -Level Debug -Message "Bundled offreg.dll at '$bundled' could not be pre-loaded: $($_.Exception.Message)" }
+    }
+
+    # LoadLibraryW searches the standard order (app dir, System32, PATH …) and
+    # returns NULL (not an exception) when the DLL cannot be found.
+    $handle = [IntPtr]::Zero
+    try { $handle = [MsixOffReg]::LoadLibraryW('offreg.dll') } catch { $handle = [IntPtr]::Zero }
+    $script:MsixOffregAvailable = ($handle -ne [IntPtr]::Zero)
+    if (-not $script:MsixOffregAvailable) {
+        Write-MsixLog -Level Warning -Message 'offreg.dll (Offline Registry API) is not available on this host; package Registry.dat cannot be parsed. Shell extensions/context menus, services and other registry-derived findings will NOT be detected. On Windows Server Core, provision offreg.dll into System32.'
+    }
+    return $script:MsixOffregAvailable
 }
 
 function _MsixAssertValidHiveFile {

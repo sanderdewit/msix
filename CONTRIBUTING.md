@@ -5,6 +5,17 @@ Thanks for contributing. This module is used in mission-critical IT environments
 making the module safe to extend without introducing security or reliability
 regressions.
 
+## Licensing of contributions
+
+This project is licensed under [PolyForm Shield 1.0.0](LICENSE.md). By
+submitting a contribution (a pull request, patch, or any other work) you agree
+that your contribution is licensed to the project and its users under those same
+terms — the license is **inbound = outbound**. You also confirm you have the
+right to contribute the code (it's your own work, or you're authorised to submit
+it). This keeps the licensing clean and lets the maintainer grant separate
+commercial licenses where appropriate, without having to track down every
+contributor for permission.
+
 ## File encoding (UTF-8 BOM — non-negotiable)
 
 **Every `.ps1`, `.psm1`, and `.psd1` file in this repo MUST be saved as

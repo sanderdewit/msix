@@ -1500,15 +1500,23 @@ function Get-MsixHeuristicFinding {
         $manifestFile = Join-Path -Path $shared -ChildPath 'AppxManifest.xml'
         if (Test-Path -LiteralPath $manifestFile) {
                 [xml]$mf = Get-MsixManifest -Path $manifestFile
-                $exts    = @($mf.Package.Extensions.Extension)
-                $appExts = @($mf.Package.Applications.Application.Extensions.Extension)
+                # A package with no <Extensions> element makes $mf.Package.Extensions
+                # $null, and @($null.Extension) yields an array holding a single
+                # $null. Iterating that and calling .SelectSingleNode on the $null
+                # NRE'd and aborted this whole block (dropping every manifest-fix
+                # finding) for the very common no-package-Extensions case. Strip nulls.
+                $exts    = @($mf.Package.Extensions.Extension | Where-Object { $null -ne $_ })
+                $appExts = @($mf.Package.Applications.Application.Extensions.Extension | Where-Object { $null -ne $_ })
 
                 # FileSystem/RegistryWriteVirtualization live in <Properties> (desktop6 namespace),
                 # NOT in <Extensions>. Check for the flag element by local name + namespace-uri.
+                # <Properties> is required in a valid manifest but can be absent in a
+                # malformed/minimal one; guard so its absence doesn't NRE the block.
                 $d6Uri      = 'http://schemas.microsoft.com/appx/manifest/desktop/windows10/6'
-                $hasFsVirt  = [bool]($mf.Package.Properties.SelectSingleNode(
+                $props      = $mf.Package.Properties
+                $hasFsVirt  = [bool]($props -and $props.SelectSingleNode(
                     "*[local-name()='FileSystemWriteVirtualization' and namespace-uri()='$d6Uri']"))
-                $hasRegVirt = [bool]($mf.Package.Properties.SelectSingleNode(
+                $hasRegVirt = [bool]($props -and $props.SelectSingleNode(
                     "*[local-name()='RegistryWriteVirtualization' and namespace-uri()='$d6Uri']"))
                 $hasInstVirt = ($exts.Category -contains 'windows.installedLocationVirtualization')
                 # LoaderSearchPathOverride can be at Package-level OR Application-level

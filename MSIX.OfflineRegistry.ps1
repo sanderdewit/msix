@@ -179,20 +179,42 @@ function _MsixTestOffregAvailable {
 
     # Pre-load a module-bundled copy if one is shipped alongside the module, so
     # the module works on hosts that lack offreg.dll in the DLL search path.
+    # Guarded: LoadLibraryW is a newer method on MsixOffReg, and an OLDER type
+    # may be cached in the session (a .NET type can't be redefined once loaded),
+    # so the call itself may not exist — swallow that.
     $bundled = Join-Path $PSScriptRoot 'native\offreg.dll'
     if (Test-Path -LiteralPath $bundled) {
-        # Best-effort: if the bundled copy can't be loaded (wrong arch, blocked
-        # file, corrupt), fall through to the standard-search probe below.
         try { [void][MsixOffReg]::LoadLibraryW($bundled) }
         catch { Write-MsixLog -Level Debug -Message "Bundled offreg.dll at '$bundled' could not be pre-loaded: $($_.Exception.Message)" }
     }
 
-    # LoadLibraryW searches the standard order (app dir, System32, PATH …) and
-    # returns NULL (not an exception) when the DLL cannot be found.
-    $handle = [IntPtr]::Zero
-    try { $handle = [MsixOffReg]::LoadLibraryW('offreg.dll') }
-    catch { $handle = [IntPtr]::Zero; Write-MsixLog -Level Debug -Message "LoadLibraryW('offreg.dll') threw while probing availability: $($_.Exception.Message)" }
-    $script:MsixOffregAvailable = ($handle -ne [IntPtr]::Zero)
+    # Probe by exercising ORCreateHive (create + close an in-memory hive) rather
+    # than LoadLibraryW. ORCreateHive is an OR* import that has existed since the
+    # first version of this wrapper, so this:
+    #   1. tests the EXACT P/Invoke binding the scanners rely on, and
+    #   2. still works when an OLDER MsixOffReg type (lacking newer methods like
+    #      LoadLibraryW) is already cached in the session — the failure mode that
+    #      made a Win11 host with offreg.dll present wrongly report it missing.
+    # A missing DLL surfaces as DllNotFoundException on first bind; any other
+    # error means offreg.dll DID bind, so treat that as available.
+    $script:MsixOffregAvailable = $false
+    try {
+        $hive = [IntPtr]::Zero
+        $null = [MsixOffReg]::ORCreateHive([ref]$hive)
+        $script:MsixOffregAvailable = $true
+        if ($hive -ne [IntPtr]::Zero) { [void][MsixOffReg]::ORCloseHive($hive) }
+    } catch {
+        $ex = $_.Exception
+        while ($ex.InnerException) { $ex = $ex.InnerException }
+        if ($ex -is [System.DllNotFoundException]) {
+            $script:MsixOffregAvailable = $false
+        } else {
+            # offreg.dll bound but the call failed for another reason; the API is
+            # present, which is all this probe needs to establish.
+            $script:MsixOffregAvailable = $true
+            Write-MsixLog -Level Debug -Message "offreg.dll probe (ORCreateHive) bound but errored: $($ex.Message)"
+        }
+    }
     if (-not $script:MsixOffregAvailable) {
         Write-MsixLog -Level Warning -Message 'offreg.dll (Offline Registry API) is not available on this host; package Registry.dat cannot be parsed. Shell extensions/context menus, services and other registry-derived findings will NOT be detected. On Windows Server Core, provision offreg.dll into System32.'
     }

@@ -266,6 +266,13 @@
   OfflineRegistryUnavailable finding when offreg.dll is absent (no double-report).
 - The Run-key scanner (offreg-dependent) was previously unwrapped and could
   abort the whole analysis on a host without offreg.dll; it is now guarded.
+- Fix: the offreg availability probe no longer depends on the newer LoadLibraryW
+  method (which an older MsixOffReg type cached in the session lacks, making a
+  Win11 host with offreg.dll present wrongly report it missing). It now probes
+  via ORCreateHive, which every version of the wrapper exposes.
+- Fix: the manifest-fix block no longer NREs (and drops all manifest-fix
+  findings) on packages with no <Properties> or no package-level <Extensions> -
+  a very common shape.
 
 ## v0.73.3 (Windows container / Server Core support)
 

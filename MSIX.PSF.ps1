@@ -699,7 +699,11 @@ function Add-MsixPsfV2 {
             # and append any new fixups that are not already present (deduplicate by dll name)
             foreach ($appEntry in $existingApps) {
                 $exeName = ($appEntry.executable -split '[/\\]')[-1] -replace '\.exe$', ''
-                if (-not $procMap.ContainsKey($exeName)) {
+                # $procMap is [ordered]@{} = OrderedDictionary, which has .Contains()
+                # for key lookup — NOT .ContainsKey() (that's Hashtable/Dictionary).
+                # This branch only runs when the package ALREADY has PSF (merge
+                # mode), which is why non-PSF packages never hit it.
+                if (-not $procMap.Contains($exeName)) {
                     $procMap[$exeName] = [System.Collections.Generic.List[object]]::new()
                 }
                 $existingDlls = @($procMap[$exeName] | ForEach-Object { $_.dll })

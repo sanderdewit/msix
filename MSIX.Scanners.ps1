@@ -1094,6 +1094,63 @@ function Get-MsixAliasCandidate {
 #endregion
 #region Static analysis adapter --------------------------------------------
 
+function _MsixAddScannerError {
+    <#
+    .SYNOPSIS
+        Records that a heuristic scanner threw, as BOTH a Warning log line and a
+        low-severity 'ScannerError' finding, so an analysis that could not run a
+        scanner is never mistaken for one that ran and found nothing (issue #140).
+
+    .DESCRIPTION
+        Get-MsixHeuristicFinding runs each read-only scanner in its own
+        try/catch so one broken scanner can't abort the whole analysis. Before
+        issue #140 the catch swallowed the failure at Debug level, which silently
+        dropped an entire finding category when a scanner failed for an
+        environmental reason (a missing DLL, an absent tool, or a denied path in
+        a headless image). A report with a category missing then looked identical
+        to a genuinely clean package. This helper makes the failure visible.
+    #>
+    [OutputType([void])]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[object]]$Findings,
+        [Parameter(Mandatory)][string]$Scanner,
+        [Parameter(Mandatory)]$ErrorRecord
+    )
+    $msg = [string]$ErrorRecord
+    Write-MsixLog -Level Warning -Message "Heuristic scanner '$Scanner' failed; its finding category was NOT analyzed: $msg"
+    $Findings.Add([pscustomobject]@{
+        Severity       = 'Warning'
+        Category       = 'ScannerError'
+        Symptom        = "The '$Scanner' scanner failed to run, so its finding category was NOT analyzed. This report may be missing findings that scanner would have produced."
+        Recommendation = "Re-run the analysis where the scanner's dependency is available (see Evidence for the underlying error), or report it if the package is well-formed. This is a diagnostic about the analysis run, not a package defect."
+        Evidence       = $msg
+        AppId          = $null
+    })
+}
+
+function _MsixAddOffregScannerError {
+    <#
+    .SYNOPSIS
+        Catch-handler for the registry-derived scanners (issue #140). When
+        offreg.dll IS available a failure is a genuine ScannerError; when it is
+        NOT available the single OfflineRegistryUnavailable umbrella finding
+        already covers every registry scanner, so this only Debug-logs to avoid
+        emitting one redundant ScannerError per offreg scanner.
+    #>
+    [OutputType([void])]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[object]]$Findings,
+        [Parameter(Mandatory)][string]$Scanner,
+        [Parameter(Mandatory)]$ErrorRecord,
+        [Parameter(Mandatory)][bool]$OffregAvailable
+    )
+    if ($OffregAvailable) {
+        _MsixAddScannerError -Findings $Findings -Scanner $Scanner -ErrorRecord $ErrorRecord
+    } else {
+        Write-MsixLog -Level Debug -Message "Registry scanner '$Scanner' skipped: offreg.dll unavailable ($ErrorRecord)"
+    }
+}
+
 function Get-MsixHeuristicFinding {
     <#
     .SYNOPSIS
@@ -1117,7 +1174,8 @@ function Get-MsixHeuristicFinding {
     # DllNotFoundException and be swallowed at Debug level — silently dropping
     # shell extensions and their AddLegacyContextMenu fix. Surface it loudly so a
     # report that omits registry-derived findings is never mistaken for a clean one.
-    if (-not (_MsixTestOffregAvailable)) {
+    $offregAvailable = _MsixTestOffregAvailable
+    if (-not $offregAvailable) {
         $out.Add([pscustomobject]@{
             Severity       = 'Warning'
             Category       = 'OfflineRegistryUnavailable'
@@ -1139,16 +1197,18 @@ function Get-MsixHeuristicFinding {
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
     # Uninstaller artefacts
-    foreach ($u in Get-MsixUninstallerCandidate -PackagePath $PackagePath -WorkspacePath $shared) {
-        $out.Add([pscustomobject]@{
-            Severity = 'Warning'
-            Category = 'UninstallerArtifact'
-            Symptom  = "Looks like a leftover installer artefact: $($u.Name)"
-            Recommendation = "Remove-MsixUninstallerArtifact -PackagePath '$PackagePath'"
-            Evidence = $u.Path
-            AppId    = $null
-        })
-    }
+    try {
+        foreach ($u in Get-MsixUninstallerCandidate -PackagePath $PackagePath -WorkspacePath $shared) {
+            $out.Add([pscustomobject]@{
+                Severity = 'Warning'
+                Category = 'UninstallerArtifact'
+                Symptom  = "Looks like a leftover installer artefact: $($u.Name)"
+                Recommendation = "Remove-MsixUninstallerArtifact -PackagePath '$PackagePath'"
+                Evidence = $u.Path
+                AppId    = $null
+            })
+        }
+    } catch { _MsixAddScannerError -Findings $out -Scanner 'UninstallerArtifact' -ErrorRecord $_ }
 
     # Auto-updater artefacts (binaries + scheduled-task XMLs)
     try {
@@ -1162,7 +1222,7 @@ function Get-MsixHeuristicFinding {
                 AppId    = $null
             })
         }
-    } catch { Write-MsixLog -Level Debug -Message "Updater heuristic skipped: $_" }
+    } catch { _MsixAddScannerError -Findings $out -Scanner 'UpdaterArtifact' -ErrorRecord $_ }
 
     # Windows service registry entries (now fixable via desktop6:Service).
     try {
@@ -1181,7 +1241,7 @@ function Get-MsixHeuristicFinding {
                 ServiceEntries = @($svc)
             })
         }
-    } catch { Write-MsixLog -Level Debug -Message "Service heuristic skipped: $_" }
+    } catch { _MsixAddOffregScannerError -Findings $out -Scanner 'PackagedService' -ErrorRecord $_ -OffregAvailable $offregAvailable }
 
     # Bundled-but-undeclared certificates (windows.certificates fix, issue #120).
     try {
@@ -1197,7 +1257,7 @@ function Get-MsixHeuristicFinding {
                 CertificateEntries = @($cert)
             })
         }
-    } catch { Write-MsixLog -Level Debug -Message "Package-certificate heuristic skipped: $_" }
+    } catch { _MsixAddScannerError -Findings $out -Scanner 'PackageCertificate' -ErrorRecord $_ }
 
     # Bundled runtimes (JRE/.NET/Python) - dedupe candidates (issue #130).
     try {
@@ -1212,7 +1272,7 @@ function Get-MsixHeuristicFinding {
                 RuntimeEntries = @($rt)
             })
         }
-    } catch { Write-MsixLog -Level Debug -Message "Bundled-runtime heuristic skipped: $_" }
+    } catch { _MsixAddScannerError -Findings $out -Scanner 'BundledRuntime' -ErrorRecord $_ }
 
     # Plugin / extension-point directories. Default fix path is
     # selective FileSystemWriteVirtualization (Win10 19041+); operators on
@@ -1229,32 +1289,37 @@ function Get-MsixHeuristicFinding {
                 AppId    = $null
             })
         }
-    } catch { Write-MsixLog -Level Debug -Message "Plugin extension-point heuristic skipped: $_" }
+    } catch { _MsixAddScannerError -Findings $out -Scanner 'PluginDirectory' -ErrorRecord $_ }
 
-    # Run keys
-    foreach ($r in Get-MsixRunKeyEntry -PackagePath $PackagePath -WorkspacePath $shared) {
-        $out.Add([pscustomobject]@{
-            Severity = 'Info'
-            Category = 'RunKey'
-            Symptom  = "Package's $($r.Hive) ships an autostart Run entry."
-            Recommendation = "Use a PSF startScript or an HKCU Run entry instead — packaged HKLM Run keys do not fire."
-            Evidence = $r.Match
-            AppId    = $null
-        })
-    }
+    # Run keys (offreg-dependent; previously unwrapped, so on a host without
+    # offreg.dll it threw DllNotFoundException and aborted the WHOLE analysis).
+    try {
+        foreach ($r in Get-MsixRunKeyEntry -PackagePath $PackagePath -WorkspacePath $shared) {
+            $out.Add([pscustomobject]@{
+                Severity = 'Info'
+                Category = 'RunKey'
+                Symptom  = "Package's $($r.Hive) ships an autostart Run entry."
+                Recommendation = "Use a PSF startScript or an HKCU Run entry instead — packaged HKLM Run keys do not fire."
+                Evidence = $r.Match
+                AppId    = $null
+            })
+        }
+    } catch { _MsixAddOffregScannerError -Findings $out -Scanner 'RunKey' -ErrorRecord $_ -OffregAvailable $offregAvailable }
 
     # Alias suggestions
-    foreach ($a in Get-MsixAliasCandidate -PackagePath $PackagePath -WorkspacePath $shared) {
-        if ($a.AlreadyHasAlias) { continue }
-        $out.Add([pscustomobject]@{
-            Severity = 'Info'
-            Category = 'AppExecutionAlias'
-            Symptom  = "$($a.AppId) has no AppExecutionAlias."
-            Recommendation = "Add-MsixAlias -PackagePath '$PackagePath' -AppIds '$(_MsixEscapeSingleQuote $a.AppId)' (suggested alias: $($a.SuggestAlias))"
-            Evidence = $a.Executable
-            AppId    = $a.AppId
-        })
-    }
+    try {
+        foreach ($a in Get-MsixAliasCandidate -PackagePath $PackagePath -WorkspacePath $shared) {
+            if ($a.AlreadyHasAlias) { continue }
+            $out.Add([pscustomobject]@{
+                Severity = 'Info'
+                Category = 'AppExecutionAlias'
+                Symptom  = "$($a.AppId) has no AppExecutionAlias."
+                Recommendation = "Add-MsixAlias -PackagePath '$PackagePath' -AppIds '$(_MsixEscapeSingleQuote $a.AppId)' (suggested alias: $($a.SuggestAlias))"
+                Evidence = $a.Executable
+                AppId    = $a.AppId
+            })
+        }
+    } catch { _MsixAddScannerError -Findings $out -Scanner 'AppExecutionAlias' -ErrorRecord $_ }
 
     # VC runtime missing
     try {
@@ -1269,7 +1334,7 @@ function Get-MsixHeuristicFinding {
                 AppId    = $null
             })
         }
-    } catch { Write-MsixLog -Level Debug -Message "VC runtime heuristic skipped: $_" }
+    } catch { _MsixAddScannerError -Findings $out -Scanner 'VcRuntime' -ErrorRecord $_ }
 
     # ── Fonts inside the package (suggest uap4:SharedFonts) ────────────────
     try {
@@ -1284,7 +1349,7 @@ function Get-MsixHeuristicFinding {
                 AppId    = $null
             })
         }
-    } catch { Write-MsixLog -Level Debug -Message "Font heuristic skipped: $_" }
+    } catch { _MsixAddScannerError -Findings $out -Scanner 'SharedFonts' -ErrorRecord $_ }
 
     # ── Desktop shortcuts inside the package (suggest removal) ──────────────
     try {
@@ -1299,7 +1364,7 @@ function Get-MsixHeuristicFinding {
                 AppId    = $null
             })
         }
-    } catch { Write-MsixLog -Level Debug -Message "Desktop shortcut heuristic skipped: $_" }
+    } catch { _MsixAddScannerError -Findings $out -Scanner 'DesktopShortcuts' -ErrorRecord $_ }
 
     # ── Capability hints from PE imports (suggest Add-MsixCapability) ───────
     try {
@@ -1314,7 +1379,7 @@ function Get-MsixHeuristicFinding {
                 AppId    = $null
             })
         }
-    } catch { Write-MsixLog -Level Debug -Message "Capability hints heuristic skipped: $_" }
+    } catch { _MsixAddScannerError -Findings $out -Scanner 'CapabilityHints' -ErrorRecord $_ }
 
     # ── Uninstall registry leftovers ────────────────────────────────────────
     try {
@@ -1329,7 +1394,7 @@ function Get-MsixHeuristicFinding {
                 AppId    = $null
             })
         }
-    } catch { Write-MsixLog -Level Debug -Message "Uninstall registry heuristic skipped: $_" }
+    } catch { _MsixAddOffregScannerError -Findings $out -Scanner 'UninstallRegistry' -ErrorRecord $_ -OffregAvailable $offregAvailable }
 
     # ── Shell context-menu entries invisible outside the MSIX container ───────
     try {
@@ -1369,7 +1434,7 @@ function Get-MsixHeuristicFinding {
             })
         }
     } catch {
-        Write-MsixLog -Level Debug -Message "Shell context-menu heuristic failed: $_"
+        _MsixAddOffregScannerError -Findings $out -Scanner 'ShellContextMenu' -ErrorRecord $_ -OffregAvailable $offregAvailable
     }
 
     # ── Shell preview/property/thumbnail handlers ───────────────────────────
@@ -1388,7 +1453,7 @@ function Get-MsixHeuristicFinding {
             })
         }
     } catch {
-        Write-MsixLog -Level Debug -Message "Shell handler heuristic failed: $_"
+        _MsixAddOffregScannerError -Findings $out -Scanner 'ShellHandler' -ErrorRecord $_ -OffregAvailable $offregAvailable
     }
 
     # ── COM server registrations in Registry.dat ──────────────────────────────
@@ -1409,7 +1474,7 @@ function Get-MsixHeuristicFinding {
             })
         }
     } catch {
-        Write-MsixLog -Level Debug -Message "COM server heuristic failed: $_"
+        _MsixAddOffregScannerError -Findings $out -Scanner 'ComServer' -ErrorRecord $_ -OffregAvailable $offregAvailable
     }
 
     # ── Nested installer packages inside the package ─────────────────────────
@@ -1426,7 +1491,7 @@ function Get-MsixHeuristicFinding {
             })
         }
     } catch {
-        Write-MsixLog -Level Debug -Message "Nested package heuristic failed: $_"
+        _MsixAddScannerError -Findings $out -Scanner 'NestedPackage' -ErrorRecord $_
     }
 
     # ── Manifest-level findings (alternatives to PSF) ───────────────────────
@@ -1570,7 +1635,7 @@ function Get-MsixHeuristicFinding {
                 }
         }
     } catch {
-        Write-MsixLog -Level Debug -Message "Manifest-fix heuristic failed: $_"
+        _MsixAddScannerError -Findings $out -Scanner 'ManifestFix' -ErrorRecord $_
     }
 
     } finally {

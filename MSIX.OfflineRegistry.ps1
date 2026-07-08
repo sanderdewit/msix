@@ -190,7 +190,8 @@ function _MsixTestOffregAvailable {
     # LoadLibraryW searches the standard order (app dir, System32, PATH …) and
     # returns NULL (not an exception) when the DLL cannot be found.
     $handle = [IntPtr]::Zero
-    try { $handle = [MsixOffReg]::LoadLibraryW('offreg.dll') } catch { $handle = [IntPtr]::Zero }
+    try { $handle = [MsixOffReg]::LoadLibraryW('offreg.dll') }
+    catch { $handle = [IntPtr]::Zero; Write-MsixLog -Level Debug -Message "LoadLibraryW('offreg.dll') threw while probing availability: $($_.Exception.Message)" }
     $script:MsixOffregAvailable = ($handle -ne [IntPtr]::Zero)
     if (-not $script:MsixOffregAvailable) {
         Write-MsixLog -Level Warning -Message 'offreg.dll (Offline Registry API) is not available on this host; package Registry.dat cannot be parsed. Shell extensions/context menus, services and other registry-derived findings will NOT be detected. On Windows Server Core, provision offreg.dll into System32.'

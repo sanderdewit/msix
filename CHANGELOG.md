@@ -5,6 +5,35 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.73.4 - 2026-07-08 — Diagnostic: surface heuristic scanner failures (#140)
+
+Generalizes the 0.73.3 offreg honesty fix to the whole scanner pipeline.
+`Get-MsixHeuristicFinding` runs each read-only scanner in its own try/catch so
+one broken scanner can't abort the analysis — but the catch swallowed the
+failure at **Debug** level, so a scanner that failed for an environmental reason
+(missing DLL, absent tool, denied path in a headless image) silently dropped an
+entire finding category, and the report looked identical to a clean package.
+
+- **`_MsixAddScannerError`** — new helper: on a scanner throw it logs at Warning
+  and appends a low-severity `ScannerError` finding naming the scanner + the
+  underlying error, so an incomplete analysis is visible. `[AllowEmptyCollection()]`
+  so it works even when the first scanner fails before any finding is added.
+- **`_MsixAddOffregScannerError`** — the registry-derived scanners (ShellExt/
+  ShellVerb, services, preview/property/thumbnail handlers, uninstall keys, run
+  keys, COM servers) defer to the single `OfflineRegistryUnavailable` umbrella
+  finding when `offreg.dll` is absent, rather than emitting one redundant
+  `ScannerError` each; a genuine failure while offreg IS present still surfaces.
+- Every `catch { Write-MsixLog -Level Debug … }` in `Get-MsixHeuristicFinding`
+  now routes through these helpers.
+- The **Run-key** scanner (offreg-dependent) was previously *unwrapped*, so on a
+  host without `offreg.dll` it threw `DllNotFoundException` that aborted the
+  whole analysis; it is now wrapped and gated. The Uninstaller and Alias loops
+  were likewise wrapped for consistency.
+- Minor: the availability-probe `catch` in `_MsixTestOffregAvailable` now
+  Debug-logs, for symmetry.
+
+Regression coverage in `MSIX.ScannerError.Tests.ps1`.
+
 ## v0.73.3 - 2026-07-08 — Windows container / Server Core: honest offreg.dll handling
 
 `offreg.dll` (the Offline Registry API) parses a package's `Registry.dat` from

@@ -5,6 +5,29 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.73.3 - 2026-07-08 — Windows container / Server Core: honest offreg.dll handling
+
+`offreg.dll` (the Offline Registry API) parses a package's `Registry.dat` from
+disk without mounting it, and every registry-derived scanner P/Invokes it:
+ShellExt / ShellVerb handlers, Windows services, preview / property / thumbnail
+handlers, uninstall keys, run keys, and COM servers. It ships in `System32` on
+client Windows 10/11 but is **absent from Windows Server Core containers**,
+where those calls threw `DllNotFoundException` that the heuristic aggregator
+swallowed at Debug level — silently dropping shell extensions (and their
+`AddLegacyContextMenu` autofix) with no indication the report was incomplete.
+
+- **`_MsixTestOffregAvailable`** — new memoized probe that `LoadLibraryW`s
+  `offreg.dll` and returns whether the Offline Registry API can be resolved in
+  this process, without triggering a `DllNotFoundException` from a lazy-bound
+  `OR*` import. Logs a one-time Warning when it is missing.
+- **`Get-MsixHeuristicFinding`** now surfaces a loud `OfflineRegistryUnavailable`
+  Warning finding (with remediation: run on Windows 10/11, or provision
+  `offreg.dll` into the Server Core image's `System32`) instead of returning a
+  registry-blind report that looks clean. On hosts where `offreg.dll` is present
+  (client Windows, GitHub `windows-latest` CI) behaviour is unchanged.
+- If the module ships a bundled `native\offreg.dll`, it is pre-loaded by full
+  path so the unqualified `OR*` imports bind to it.
+
 ## v0.73.2 - 2026-07-08 — Bugfix: PSF re-injection merge + new PSF release layout
 
 Two PSF fixes surfaced by `Invoke-MsixAutoFixFromAnalysis` in the field, plus

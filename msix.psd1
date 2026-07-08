@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.73.2'
+    ModuleVersion     = '0.73.3'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, deployment-script templates, heuristic heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -257,21 +257,20 @@
             ProjectUri  = 'https://github.com/sanderdewit/msix'
             LicenseUri  = 'https://github.com/sanderdewit/msix/blob/main/LICENSE.md'
             ReleaseNotes = @'
-## v0.73.2 (bugfix)
+## v0.73.3 (Windows container / Server Core support)
 
-- Add-MsixPsfV2 no longer crashes when re-injecting PSF into a package that
-  already has it (autofix merge mode). The merge branch keyed process entries
-  in an OrderedDictionary and probed it with .ContainsKey(), which only exists
-  on Hashtable/Dictionary; switched to .Contains(). Regression test injects
-  PSF twice to guard the merge path.
-- Install-MsixPsfBinary now handles the new TMurgent PSF release layout
-  (v2026.07.01+), a nested "zip-of-zips" (ReleasePsf.zip + DebugPsf.zip) rather
-  than launcher binaries directly. The Release payload is expanded, nested
-  archives are cleaned up, and a fail-fast throw fires if no PsfLauncher*.exe
-  ever surfaces. The old flat layout still works.
-
-Also in this line: the project is now licensed under PolyForm Shield 1.0.0
-(source-available; free to use/contribute, no competing products).
+- offreg.dll availability is now probed once per session via
+  _MsixTestOffregAvailable. offreg.dll (the Offline Registry API used to parse
+  a package's Registry.dat) is absent from Windows Server Core containers; the
+  OR* P/Invokes previously threw DllNotFoundException that the heuristic
+  aggregator swallowed at Debug level, silently dropping shell-extension /
+  service / uninstall-key findings and their fixes.
+- Get-MsixHeuristicFinding now emits a loud "OfflineRegistryUnavailable"
+  Warning finding when offreg.dll is missing, so a report that omits
+  registry-derived findings is never mistaken for a clean one. On Windows
+  10/11 (offreg.dll present) behaviour is unchanged.
+- If a module-bundled native\offreg.dll is present it is pre-loaded so the OR*
+  imports bind to it.
 
 Full history: CHANGELOG.md.
 '@

@@ -34,6 +34,28 @@ entire finding category, and the report looked identical to a clean package.
 
 Regression coverage in `MSIX.ScannerError.Tests.ps1`.
 
+Also in this release, two fixes to the offreg / scanner work above (both found
+by running `Invoke-MsixInvestigation` on a real package on a Win11 host):
+
+- **offreg probe robustness.** `_MsixTestOffregAvailable` probed via the newer
+  `LoadLibraryW` method added to `MsixOffReg` in 0.73.3. A .NET type cannot be
+  redefined once loaded, so a session that had imported an *older* module
+  version (whose `MsixOffReg` predates `LoadLibraryW`) kept the old type; the
+  probe then threw "method not found", was caught, and reported offreg.dll
+  **missing on a Win11 host that has it** — silently dropping every
+  registry-derived finding (shell extensions, services, …). The probe now
+  exercises `ORCreateHive` (present in every version of the wrapper), so it
+  tests the exact P/Invoke binding the scanners use and survives a stale cached
+  type. `DllNotFoundException` => unavailable; any other error => the DLL bound,
+  so available.
+- **Manifest-fix NRE.** The manifest-level block in `Get-MsixHeuristicFinding`
+  called `.SelectSingleNode` on `$mf.Package.Properties` (null when a package
+  has no `<Properties>`) and iterated `@($mf.Package.Extensions.Extension)`
+  which is `@($null)` — an array holding one `$null` — when there is no
+  package-level `<Extensions>`. Both NRE'd and aborted the block, dropping every
+  manifest-fix finding for those very common shapes. `<Properties>` access is
+  now guarded and the extension lists are null-stripped.
+
 ## v0.73.3 - 2026-07-08 — Windows container / Server Core: honest offreg.dll handling
 
 `offreg.dll` (the Offline Registry API) parses a package's `Registry.dat` from

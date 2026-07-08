@@ -68,3 +68,43 @@ Describe '_MsixAddOffregScannerError' -Tag 'Scanners' {
         @($r).Count | Should -Be 0
     }
 }
+
+Describe "Get-MsixHeuristicFinding manifest-fix block is null-safe" -Tag 'Scanners' {
+
+    # Regression: a manifest with NO <Properties> element (so $mf.Package.Properties
+    # is $null) and NO package-level <Extensions> (so @($mf.Package.Extensions.Extension)
+    # is @($null) — an array holding one $null) NRE'd the manifest-fix block, which
+    # aborted it and dropped every manifest-fix finding. On a Win11 host this
+    # surfaced as "ManifestFix failed; ... You cannot call a method on a null-valued
+    # expression". Both shapes are common in real packages.
+    It 'does not emit a ManifestFix ScannerError for a manifest without <Properties> or package <Extensions>' {
+        $seen = InModuleScope MSIX {
+            Mock Get-MsixToolsRoot { 'C:\fake-tools' }
+            Mock New-MsixWorkspace {
+                $d = Join-Path ([IO.Path]::GetTempPath()) ("hfnull-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+                New-Item -ItemType Directory -Path $d -Force | Out-Null
+                $d
+            }
+            Mock Invoke-MsixProcess {
+                if ($ArgumentList -contains 'unpack') {
+                    $idx  = [array]::IndexOf($ArgumentList, '/d')
+                    $dest = $ArgumentList[$idx + 1]
+                    Set-Content -LiteralPath "$dest\AppxManifest.xml" -Encoding utf8 -Value @'
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
+  <Identity Name="X" Publisher="CN=X" Version="1.0.0.0" />
+  <Applications><Application Id="A" Executable="a.exe" /></Applications>
+</Package>
+'@
+                }
+                [pscustomobject]@{ ExitCode = 0; StdOut = ''; StdErr = '' }
+            }
+            $pkg = Join-Path ([IO.Path]::GetTempPath()) ("hfnull-" + [guid]::NewGuid().ToString('N').Substring(0,8) + '.msix')
+            Set-Content -LiteralPath $pkg -Value 'stub' -Encoding utf8
+            $findings = Get-MsixHeuristicFinding -PackagePath $pkg
+            Remove-Item -LiteralPath $pkg -Force -ErrorAction SilentlyContinue
+            @($findings | Where-Object { $_.Category -eq 'ScannerError' -and $_.Symptom -match 'ManifestFix' })
+        }
+        @($seen).Count | Should -Be 0
+    }
+}

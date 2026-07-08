@@ -254,7 +254,8 @@
                             'AppData','AppAttach','VHDX','CIM','AppIsolation',
                             'Sandbox','TMurgent','MFR','VcRuntime','Compare',
                             'Enterprise','CICD','Pester')
-            ProjectUri  = 'https://github.com/microsoft/MSIX-PackageSupportFramework'
+            ProjectUri  = 'https://github.com/sanderdewit/msix'
+            LicenseUri  = 'https://github.com/sanderdewit/msix/blob/main/LICENSE.md'
             ReleaseNotes = @'
 ## v0.73.1 (bugfix)
 

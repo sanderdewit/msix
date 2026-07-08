@@ -619,7 +619,24 @@ The full per-version history lives in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-Same as upstream PSF tooling. PSF binaries fetched at runtime are the
+This module is **free to use, modify, and build on** — including
+commercially, inside your own organisation, and as part of your own
+packaging workflows. It is licensed under the
+[PolyForm Shield 1.0.0](LICENSE.md) license.
+
+In plain English: do whatever you like with it, with **one** exception —
+you may not use it to build a product that **competes** with this module
+(for example, folding it into a rival MSIX-packaging tool or service).
+If that's what you're after, get in touch and we'll talk about a separate
+commercial license.
+
+PolyForm Shield is a [source-available](https://polyformproject.org/)
+license, not an OSI open-source license — that single competitive carve-out
+is the only difference from a permissive license like Apache-2.0.
+Contributions are welcome under the same terms (see
+[CONTRIBUTING.md](CONTRIBUTING.md)).
+
+**Third-party binaries:** PSF binaries fetched at runtime remain the
 property of their respective owners (Microsoft / Tim Mangan / TMurgent
 Technologies). This module does not redistribute any binaries — it downloads
 them on demand from the authors' official release channels and verifies

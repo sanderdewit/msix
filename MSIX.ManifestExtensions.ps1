@@ -671,8 +671,7 @@ function Add-MsixLoaderSearchPathOverride {
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
         [ValidatePattern(
-            '^[A-Za-z_][A-Za-z0-9_.-]*$',
-            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+            '^[A-Za-z_][A-Za-z0-9_.-]*$'
         )]
         [string]$AppId,
         [Parameter(Mandatory)]
@@ -796,8 +795,7 @@ function Add-MsixFirewallRule {
         [Parameter(Mandatory)] [string]$PackagePath,
         [Parameter(Mandatory)]
         [ValidatePattern(
-            '^[A-Za-z_][A-Za-z0-9_.-]*$',
-            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+            '^[A-Za-z_][A-Za-z0-9_.-]*$'
         )]
         [string]$AppId,
         [Parameter(Mandatory)] [string]$Executable,
@@ -916,14 +914,12 @@ function Add-MsixProtocolHandler {
         [Parameter(Mandatory)] [string]$PackagePath,
         [Parameter(Mandatory)]
         [ValidatePattern(
-            '^[A-Za-z_][A-Za-z0-9_.-]*$',
-            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+            '^[A-Za-z_][A-Za-z0-9_.-]*$'
         )]
         [string]$AppId,
         [Parameter(Mandatory)]
         [ValidatePattern(
-            '^[A-Za-z_][A-Za-z0-9_.-]*$',
-            ErrorMessage = 'Protocol Name must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen (no spaces).'
+            '^[A-Za-z_][A-Za-z0-9_.-]*$'
         )]
         [string]$Name,
         [string]$DisplayName,
@@ -1031,14 +1027,12 @@ function Add-MsixFileTypeAssociation {
         [Parameter(Mandatory)] [string]$PackagePath,
         [Parameter(Mandatory)]
         [ValidatePattern(
-            '^[A-Za-z_][A-Za-z0-9_.-]*$',
-            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+            '^[A-Za-z_][A-Za-z0-9_.-]*$'
         )]
         [string]$AppId,
         [Parameter(Mandatory)]
         [ValidatePattern(
-            '^[A-Za-z_][A-Za-z0-9_.-]*$',
-            ErrorMessage = 'FTA Name must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+            '^[A-Za-z_][A-Za-z0-9_.-]*$'
         )]
         [string]$Name,
         [Parameter(Mandatory)]
@@ -1184,14 +1178,12 @@ function Add-MsixStartupTask {
         [Parameter(Mandatory)] [string]$PackagePath,
         [Parameter(Mandatory)]
         [ValidatePattern(
-            '^[A-Za-z_][A-Za-z0-9_.-]*$',
-            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+            '^[A-Za-z_][A-Za-z0-9_.-]*$'
         )]
         [string]$AppId,
         [Parameter(Mandatory)]
         [ValidatePattern(
-            '^[A-Za-z_][A-Za-z0-9_.-]*$',
-            ErrorMessage = 'TaskId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+            '^[A-Za-z_][A-Za-z0-9_.-]*$'
         )]
         [string]$TaskId,
         [Parameter(Mandatory)] [string]$DisplayName,
@@ -1507,14 +1499,12 @@ function Add-MsixShellVerbExtension {
         [Parameter(Mandatory)] [string]$PackagePath,
         [Parameter(Mandatory)]
         [ValidatePattern(
-            '^[A-Za-z_][A-Za-z0-9_.-]*$',
-            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+            '^[A-Za-z_][A-Za-z0-9_.-]*$'
         )]
         [string]$AppId,
         [Parameter(Mandatory)] [string]$VerbDisplayName,
         [ValidatePattern(
-            '^[A-Za-z_][A-Za-z0-9_.-]*$',
-            ErrorMessage = 'VerbId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+            '^[A-Za-z_][A-Za-z0-9_.-]*$'
         )]
         [string]$VerbId,
         [string]$Parameters = '"%1"',
@@ -1653,8 +1643,7 @@ function Add-MsixComServerExtension {
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
         [ValidatePattern(
-            '^[A-Za-z_][A-Za-z0-9_.-]*$',
-            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+            '^[A-Za-z_][A-Za-z0-9_.-]*$'
         )]
         [string]$AppId,
         [Parameter(Mandatory)]

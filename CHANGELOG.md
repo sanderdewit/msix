@@ -55,6 +55,21 @@ by running `Invoke-MsixInvestigation` on a real package on a Win11 host):
   package-level `<Extensions>`. Both NRE'd and aborted the block, dropping every
   manifest-fix finding for those very common shapes. `<Properties>` access is
   now guarded and the extension lists are null-stripped.
+- **Windows PowerShell 5.1 compatibility (#142).** The module declares
+  `PowerShellVersion = '5.1'` but decorated ~20 parameters across five files
+  with the `ErrorMessage` named argument on `[ValidatePattern]` — a property
+  added in PowerShell 6.0. Under Windows PowerShell 5.1 that threw
+  `Property 'ErrorMessage' cannot be found for type ValidatePatternAttribute`
+  at parameter binding, so affected functions (e.g. `Add-MsixLegacyContextMenu`,
+  hit via an `AddLegacyContextMenu` autofix on a Server Core worker) were
+  unusable on 5.1 despite the advertised floor. Every `ErrorMessage =` argument
+  was removed; the `ValidatePattern` regex still enforces the rule (only the
+  custom message text is lost). **Why CI missed it:** every job ran under
+  `pwsh` 7, where the argument is valid — the 5.1-only binding failure was never
+  exercised. A new **Windows PowerShell 5.1 CI lane** (`compat-ps51`) now imports
+  the module under `powershell` and forces every exported function's parameter
+  attributes to instantiate via `Get-Command -Syntax`, plus a fast static guard
+  in `MSIX.Ps51Compat.Tests.ps1`.
 
 ## v0.73.3 - 2026-07-08 — Windows container / Server Core: honest offreg.dll handling
 

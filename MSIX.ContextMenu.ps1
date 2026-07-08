@@ -128,16 +128,14 @@
         [Parameter(Mandatory)]
         [string]$PackagePath,
         [ValidatePattern(
-            '^[A-Za-z_][A-Za-z0-9_.-]*$',
-            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+            '^[A-Za-z_][A-Za-z0-9_.-]*$'
         )]
         [string]$AppId,
         [Parameter(Mandatory)]
         [string]$ShellExtDll,
         [Parameter(Mandatory)]
         [ValidatePattern(
-            '^(\{)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\})?$',
-            ErrorMessage = 'CLSID must be a GUID like 12345678-1234-1234-1234-123456789abc (curly braces optional).'
+            '^(\{)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\})?$'
         )]
         [string]$Clsid,
         [Parameter(Mandatory)]
@@ -481,20 +479,17 @@ function Add-MsixFileExplorerContextMenu {
         [string]$PackagePath,
         [Parameter(Mandatory)]
         [ValidatePattern(
-            '^[A-Za-z_][A-Za-z0-9_.-]*$',
-            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+            '^[A-Za-z_][A-Za-z0-9_.-]*$'
         )]
         [string]$AppId,
         [Parameter(Mandatory)]
         [ValidatePattern(
-            '^[A-Za-z_][A-Za-z0-9_.-]*$',
-            ErrorMessage = 'VerbId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+            '^[A-Za-z_][A-Za-z0-9_.-]*$'
         )]
         [string]$VerbId,
         [Parameter(Mandatory)]
         [ValidatePattern(
-            '^(\{)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\})?$',
-            ErrorMessage = 'CLSID must be a GUID like 12345678-1234-1234-1234-123456789abc (curly braces optional).'
+            '^(\{)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\})?$'
         )]
         [string]$VerbClsid,
         [Parameter(Mandatory)]

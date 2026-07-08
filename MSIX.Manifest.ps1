@@ -586,8 +586,7 @@ function Set-MsixManifestIdentity {
         [Parameter(Mandatory)] [xml]$Manifest,
         [string]$Name,
         [string]$Publisher,
-        [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$',
-            ErrorMessage = 'Version must be a 4-part dotted-decimal like 1.2.3.4.')]
+        [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')]
         [string]$Version
     )
     if ($PSBoundParameters.ContainsKey('Name'))      { $Manifest.Package.Identity.Name      = $Name }

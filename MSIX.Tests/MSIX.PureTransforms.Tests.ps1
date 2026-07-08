@@ -51,7 +51,10 @@ Describe 'Set-MsixManifestIdentity (pure transform)' -Tag 'Manifest' {
 
     It 'Rejects 3-part version' {
         [xml]$m = $script:Sample
+        # The ValidatePattern's custom ErrorMessage was dropped for Windows
+        # PowerShell 5.1 compatibility (#142); the regex still rejects the value,
+        # so match the default "does not match ... pattern" validation error.
         { Set-MsixManifestIdentity -Manifest $m -Version '1.2.3' } |
-            Should -Throw '*4-part dotted-decimal*'
+            Should -Throw '*does not match*'
     }
 }

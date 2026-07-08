@@ -273,6 +273,12 @@
 - Fix: the manifest-fix block no longer NREs (and drops all manifest-fix
   findings) on packages with no <Properties> or no package-level <Extensions> -
   a very common shape.
+- PS 5.1 compatibility (#142): removed the PS7-only ErrorMessage argument from
+  every [ValidatePattern] (added in PS 6.0) - it threw "Property 'ErrorMessage'
+  cannot be found" at parameter binding under Windows PowerShell 5.1, making
+  affected functions (e.g. Add-MsixLegacyContextMenu) unusable on 5.1 despite
+  the declared 5.1 floor. The regex validation is unchanged. A new
+  Windows-PowerShell-5.1 CI lane now guards against regressions.
 
 ## v0.73.3 (Windows container / Server Core support)
 

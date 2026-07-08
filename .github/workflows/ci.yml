@@ -84,6 +84,42 @@ jobs:
             throw "No test directory found (expected MSIX.Tests/ or tests/)."
           }
 
+  compat-ps51:
+    name: Windows PowerShell 5.1 compatibility
+    runs-on: windows-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v6
+
+      # The module declares PowerShellVersion 5.1, but every other job runs
+      # under pwsh 7. PS7-only constructs that only fail at PARAMETER-BINDING
+      # time under Windows PowerShell 5.1 — e.g. the ErrorMessage named arg on
+      # [ValidatePattern]/[ValidateSet], added in PS 6.0 (issue #142) — parse
+      # and bind fine under 7, so they sailed through CI and only broke on a
+      # 5.1 host. This job runs under Windows PowerShell 5.1 (shell: powershell)
+      # and forces every exported function's parameter attributes to be
+      # instantiated via `Get-Command -Syntax`, which is exactly what trips the
+      # "Property 'ErrorMessage' cannot be found" error — without having to
+      # invoke each function with valid arguments.
+      - name: Import module + instantiate all parameter attributes under 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          "Runner PowerShell: $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition))"
+          Import-Module ./MSIX.psd1 -Force
+          $cmds = Get-Command -Module MSIX -CommandType Function
+          $fail = @()
+          foreach ($c in $cmds) {
+            try { $null = Get-Command $c.Name -Syntax }
+            catch { $fail += "$($c.Name): $($_.Exception.Message.Split([char]10)[0])" }
+          }
+          "Checked $($cmds.Count) exported functions."
+          if ($fail) {
+            $fail | ForEach-Object { Write-Host "::error::$_" }
+            throw "$($fail.Count) function(s) use PS7-only constructs that break under Windows PowerShell 5.1."
+          }
+          Write-Host 'All exported functions instantiate cleanly under Windows PowerShell 5.1.'
+
   integration:
     name: Integration Tests (real MSIX)
     runs-on: windows-latest

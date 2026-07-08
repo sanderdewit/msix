@@ -816,8 +816,7 @@ function Add-MsixSplashScreen {
         [Parameter(Mandatory)] [string]$ImagePath,
         [Parameter(Mandatory)]
         [ValidatePattern(
-            '^[A-Za-z_][A-Za-z0-9_.-]*$',
-            ErrorMessage = 'AppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+            '^[A-Za-z_][A-Za-z0-9_.-]*$'
         )]
         [string]$AppId,
         [string]$OutputPath,
@@ -905,8 +904,7 @@ function Update-MsixPackageVersion {
         [string]$Component = 'Build',
         [bool]$KeepLastZero,
         [ValidatePattern(
-            '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$',
-            ErrorMessage = 'Version must be a 4-part dotted-decimal like 1.2.3.4.'
+            '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'
         )]
         [string]$NewVersion,
         [string]$OutputPath,

@@ -126,8 +126,7 @@ function Invoke-MsixAutoFix {
         # Optional stage
         [string]$SplashImagePath,
         [ValidatePattern(
-            '^[A-Za-z_][A-Za-z0-9_.-]*$',
-            ErrorMessage = 'SplashAppId must be an XML NCName: start with a letter or underscore, then letters, digits, underscore, dot, or hyphen.'
+            '^[A-Za-z_][A-Za-z0-9_.-]*$'
         )]
         [string]$SplashAppId,
 

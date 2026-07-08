@@ -5,6 +5,33 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.73.2 - 2026-07-08 — Bugfix: PSF re-injection merge + new PSF release layout
+
+Two PSF fixes surfaced by `Invoke-MsixAutoFixFromAnalysis` in the field, plus
+a licensing change.
+
+- **Crash re-injecting PSF (merge mode).** `Add-MsixPsfV2` merges new fixups
+  into an existing `config.json` when the package already carries a
+  PsfLauncher. The merge branch keyed process entries in an `[ordered]@{}`
+  (`OrderedDictionary`) and probed key existence with `.ContainsKey()` — a
+  method that only exists on `Hashtable`/`Dictionary`. The call threw
+  `[OrderedDictionary] does not contain a method named 'ContainsKey'`. Switched
+  to `.Contains()`. Only re-injection reaches this branch, so a regression test
+  in `MSIX.MutatorCoverage.Tests.ps1` now injects PSF twice (verified: fails on
+  the old code, passes on the fix).
+- **New TMurgent PSF release layout.** `Install-MsixPsfBinary` now handles the
+  v2026.07.01+ "zip-of-zips" asset (a `ReleasePsf.zip` + `DebugPsf.zip` nested
+  inside the downloaded archive) instead of launcher binaries directly. The
+  Release payload is expanded, nested archives are removed, the result is
+  Authenticode-verified, and a fail-fast `throw` fires if no `PsfLauncher*.exe`
+  surfaces. The old flat layout still works. Regression coverage in
+  `MSIX.PsfBinaries.Tests.ps1`.
+- **License.** The project moved to the source-available
+  [PolyForm Shield 1.0.0](LICENSE.md) license — free to use, modify, and
+  contribute to (including commercially and internally), with a single carve-out
+  against building a competing product. `LicenseUri` added to the manifest;
+  `ProjectUri` corrected to this repo.
+
 ## v0.73.1 - 2026-07-06 — Bugfix: nested / sparse package handling
 
 Fixes three latent bugs surfaced by `Invoke-MsixAutoFixFromAnalysis` on a

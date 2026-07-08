@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.73.1'
+    ModuleVersion     = '0.73.2'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, deployment-script templates, heuristic heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -257,21 +257,23 @@
             ProjectUri  = 'https://github.com/sanderdewit/msix'
             LicenseUri  = 'https://github.com/sanderdewit/msix/blob/main/LICENSE.md'
             ReleaseNotes = @'
-## v0.73.1 (bugfix)
+## v0.73.2 (bugfix)
 
-Nested / sparse package handling (crash reproduced by Notepad++-8.9.4.msix
-via Invoke-MsixAutoFixFromAnalysis without -IgnoreNestedPackages):
+- Add-MsixPsfV2 no longer crashes when re-injecting PSF into a package that
+  already has it (autofix merge mode). The merge branch keyed process entries
+  in an OrderedDictionary and probed it with .ContainsKey(), which only exists
+  on Hashtable/Dictionary; switched to .Contains(). Regression test injects
+  PSF twice to guard the merge path.
+- Install-MsixPsfBinary now handles the new TMurgent PSF release layout
+  (v2026.07.01+), a nested "zip-of-zips" (ReleasePsf.zip + DebugPsf.zip) rather
+  than launcher binaries directly. The Release payload is expanded, nested
+  archives are cleaned up, and a fail-fast throw fires if no PsfLauncher*.exe
+  ever surfaces. The old flat layout still works.
 
-- Import-MsixSparseShellExtension no longer crashes unpacking a sparse inner
-  package whose Application references an executable in the OUTER package -
-  MakeAppx validates on unpack, so extraction now uses plain zip.
-- Fixed an 8.3 short-path (SANDER~1) corruption that mis-filed the inner
-  AppxManifest.xml under a bad 'NN\AppxManifest.xml' path in the outer VFS;
-  workspace/inner temp dirs are normalized to long-form.
-- Get-MsixManifest now returns the archive-ROOT AppxManifest.xml, not a nested
-  one it happened to enumerate first.
+Also in this line: the project is now licensed under PolyForm Shield 1.0.0
+(source-available; free to use/contribute, no competing products).
 
-Regression tests added. Full history: CHANGELOG.md.
+Full history: CHANGELOG.md.
 '@
         }
     }

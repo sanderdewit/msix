@@ -41,26 +41,46 @@ function _MsixSetVerifiedToolsRoot {
         Write-Warning "MSIX: tool Authenticode verification BYPASSED (MSIX_SKIP_TOOL_VERIFICATION is set) for '$Root'."
         Write-MsixLog -Level Warning -Message "Tool Authenticode verification BYPASSED (MSIX_SKIP_TOOL_VERIFICATION is set). SDK tools under '$Root' are trusted without a signature check. Unset this variable to restore fail-closed verification."
     } elseif (Get-Command -Name _MsixVerifyAuthenticode -ErrorAction SilentlyContinue) {
-        # Verify EVERY executable payload in the resolved root, not just the three
-        # tools we invoke by name. SDK signtool.exe is side-by-side-manifest-bound
-        # to load wintrust.dll / mssign32.dll / AppxSip.dll from its OWN directory,
-        # so an attacker who can write that directory could keep the three genuine
-        # Microsoft-signed .exe files (passing the old check) and plant a trojaned
-        # dependency DLL beside them - executing their code inside the process that
-        # holds the organisation's code-signing key (issue #147).
-        $scanDirs = @($Root, (Join-Path -Path $Root -ChildPath 'Tools')) |
-                    Where-Object { Test-Path -LiteralPath $_ -PathType Container }
-        $payload = @($scanDirs | ForEach-Object {
-            Get-ChildItem -LiteralPath $_ -File -ErrorAction SilentlyContinue |
-                Where-Object { $_.Extension -in '.exe', '.dll' }
-        })
-        if (-not $payload) {
-            throw "Tool verification failed: no .exe/.dll found under '$Root'. Refusing to trust an empty or unexpected tools root."
-        }
-        foreach ($file in $payload) {
+        # Verify the tools we EXECUTE plus signtool's private side-by-side load
+        # surface (issue #147).
+        #
+        # Checking only signtool/MakeAppx/makepri was not enough: SDK signtool.exe
+        # is SxS-manifest-bound to load wintrust.dll / mssign32.dll / AppxSip.dll
+        # from its OWN directory, so an attacker able to write that directory could
+        # keep the three genuine Microsoft-signed executables (passing the check)
+        # and plant a trojaned dependency DLL beside them, running their code
+        # inside the process that holds the organisation's code-signing key.
+        #
+        # Verifying EVERY file in the root is NOT viable and was tried first:
+        # Microsoft itself ships unsigned binaries in these directories - 9 in the
+        # real Windows SDK bin\x64 (gamesaveutil.exe, SirepClient.dll,
+        # WinAppDeployCmd.exe, ...) and 5 in the NuGet BuildTools layout
+        # (PackageEditor.exe, Microsoft.Packaging.SDKUtils.dll, ...). That rejects
+        # every legitimate SDK install, so the check must be targeted.
+        #
+        # This list is deliberately the executables we invoke plus the documented
+        # signing load surface; it is not a claim that every other file in the
+        # folder is irrelevant, only that nothing else is loaded by the tools this
+        # module runs.
+        $verifyNames = @(
+            'signtool.exe', 'MakeAppx.exe', 'makepri.exe',   # executed directly
+            'wintrust.dll', 'mssign32.dll', 'AppxSip.dll',   # signtool SxS bindings
+            'msisip.dll', 'opcservices.dll'                  # SIP/OPC helpers
+        )
+        $toolsFound = 0
+        foreach ($name in $verifyNames) {
+            $candidate = @(
+                (Join-Path -Path $Root -ChildPath "Tools\$name"),
+                (Join-Path -Path $Root -ChildPath $name)
+            ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+            if (-not $candidate) { continue }
+            if ($name -like '*.exe') { $toolsFound++ }
             # Throws (fail-closed) if unsigned, untrusted, or the chain cannot be
             # validated.
-            $null = _MsixVerifyAuthenticode -Path $file.FullName -ToolName $file.Name
+            $null = _MsixVerifyAuthenticode -Path $candidate -ToolName $name
+        }
+        if ($toolsFound -eq 0) {
+            throw "Tool verification failed: none of signtool.exe / MakeAppx.exe / makepri.exe were found under '$Root'. Refusing to trust an empty or unexpected tools root."
         }
     } else {
         # Fail CLOSED. Previously this branch silently cached and trusted the root

@@ -78,6 +78,31 @@ Describe '_MsixSetVerifiedToolsRoot (#54, #147)' -Tag 'Toolchain', 'Security' {
         } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
     }
 
+    It 'tolerates the unsigned binaries Microsoft ships in real SDK layouts (#147)' {
+        # Verifying EVERY file was tried first and is not viable: the real Windows
+        # SDK bin\x64 ships 9 unsigned binaries (gamesaveutil.exe, SirepClient.dll,
+        # WinAppDeployCmd.exe, ...) and the NuGet BuildTools layout ships 5. A
+        # blanket check rejects every legitimate SDK install, so verification is
+        # scoped to the tools we execute plus signtool's SxS load surface.
+        $root = New-FakeToolsRoot -Files @('signtool.exe', 'MakeAppx.exe', 'gamesaveutil.exe', 'SirepClient.dll')
+        try {
+            $verified = InModuleScope MSIX -Parameters @{ Root = $root } {
+                param($Root)
+                $script:verified = @()
+                Mock _MsixVerifyAuthenticode {
+                    if ($ToolName -in 'gamesaveutil.exe', 'SirepClient.dll') {
+                        throw "Authenticode verification FAILED for $ToolName. Status: NotSigned."
+                    }
+                    $script:verified += $Path
+                }
+                $null = _MsixSetVerifiedToolsRoot -Root $Root
+                @($script:verified)
+            }
+            ($verified | Where-Object { $_ -like '*signtool.exe' }) | Should -Not -BeNullOrEmpty
+            ($verified | Where-Object { $_ -like '*gamesaveutil*' }) | Should -BeNullOrEmpty
+        } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+
     It 'refuses a tools root containing no verifiable payload (#147)' {
         $root = New-FakeToolsRoot -Files @()
         try {
@@ -85,7 +110,7 @@ Describe '_MsixSetVerifiedToolsRoot (#54, #147)' -Tag 'Toolchain', 'Security' {
                 param($Root)
                 $rootPath = $Root
                 Mock _MsixVerifyAuthenticode {}
-                { _MsixSetVerifiedToolsRoot -Root $rootPath } | Should -Throw '*no .exe/.dll found*'
+                { _MsixSetVerifiedToolsRoot -Root $rootPath } | Should -Throw '*none of signtool.exe*'
                 $script:ToolsRoot | Should -BeNullOrEmpty
             }
         } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }

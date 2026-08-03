@@ -144,7 +144,7 @@ function Find-MsixPlaybook {
     [xml]$manifest = Get-MsixManifest -Path $PackagePath
     $identityName    = $manifest.Package.Identity.GetAttribute('Name')
     $publisherSubj   = $manifest.Package.Identity.GetAttribute('Publisher')
-    $firstApp        = @($manifest.Package.Applications.Application) | Select-Object -First 1
+    $firstApp        = @($manifest.Package.Applications.Application | Where-Object { $null -ne $_ }) | Select-Object -First 1
     $exeAttr         = if ($firstApp) { $firstApp.GetAttribute('Executable') } else { $null }
     $exeLeaf         = if ($exeAttr) { $exeAttr.Split('\')[-1] } else { $null }
 

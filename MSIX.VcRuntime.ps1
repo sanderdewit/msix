@@ -256,11 +256,25 @@ function Add-MsixVcRuntimeBundle {
         [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
         $apps          = @(Get-MsixManifestApplication $manifest)
 
-        # Determine architecture if auto
+        # Determine architecture if auto.
+        # Do NOT silently fall back to x86 (issue #153): an unreadable PE header
+        # or a genuine arm64 binary both used to be coerced to 'x86' while the log
+        # claimed the value was "auto-detected", so x86 runtime DLLs were bundled
+        # into an x64 or arm64 package and the app failed at launch. Fail with an
+        # actionable message instead and let the caller pass -Architecture.
         if ($Architecture -eq 'auto') {
+            if (-not $apps -or -not $apps[0]) {
+                throw 'Cannot auto-detect architecture: the manifest declares no Application. Pass -Architecture explicitly.'
+            }
             $sample = Join-Path -Path $workspace -ChildPath $apps[0].GetAttribute('Executable')
-            $Architecture = if (Test-Path -LiteralPath $sample) { (_GetPeArchitecture -Path $sample) } else { 'x86' }
-            if ($Architecture -notin 'x86','x64') { $Architecture = 'x86' }
+            if (-not (Test-Path -LiteralPath $sample)) {
+                throw "Cannot auto-detect architecture: the application executable '$sample' is not in the package. Pass -Architecture explicitly."
+            }
+            $detected = _GetPeArchitecture -Path $sample
+            if ($detected -notin 'x86', 'x64') {
+                throw "Cannot auto-detect a supported architecture from '$sample' (read: '$detected'). VC runtime bundling supports x86 and x64; pass -Architecture explicitly if you know which applies."
+            }
+            $Architecture = $detected
             Write-MsixLog -Level Info -Message "Architecture auto-detected: $Architecture"
         }
 
@@ -276,7 +290,8 @@ function Add-MsixVcRuntimeBundle {
         }
 
         # Locate each DLL under SourceFolder. Heuristic search.
-        $copied = @()
+        $copied  = @()
+        $missing = @()
         foreach ($name in $Names) {
             $hit = Get-ChildItem -LiteralPath $SourceFolder -Recurse -Filter $name -ErrorAction SilentlyContinue |
                    Where-Object {
@@ -284,6 +299,7 @@ function Add-MsixVcRuntimeBundle {
                    } | Select-Object -First 1
             if (-not $hit) {
                 Write-MsixLog -Level Warning -Message "$name not found under $SourceFolder for $Architecture"
+                $missing += $name
                 continue
             }
             # Copy into the same folder as the first executable
@@ -300,6 +316,14 @@ function Add-MsixVcRuntimeBundle {
         if ($copied.Count -eq 0) {
             Write-MsixLog -Level Warning -Message 'No VC runtime DLLs were copied; aborting.'
             return
+        }
+        # A PARTIAL bundle must not pack as success (issue #153). The abort above
+        # only caught total failure, so 2-of-3 DLLs produced a signed package
+        # still missing a runtime DLL, exit code 0, and an app that fails at
+        # launch on the end-user's machine - the exact failure this cmdlet exists
+        # to prevent. Pass the ones you do have via -Names to proceed knowingly.
+        if ($missing.Count -gt 0) {
+            throw "Only $($copied.Count) of $($copied.Count + $missing.Count) VC runtime DLL(s) were found under '$SourceFolder' for $Architecture. Missing: $($missing -join ', '). Packing now would ship a package that still fails at launch. Point -SourceFolder at a complete redist folder, or pass -Names with just the DLLs you intend to bundle."
         }
 
         # ── Atomic repack (issue #145) ────────────────────────────────────

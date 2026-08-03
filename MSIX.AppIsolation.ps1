@@ -296,7 +296,7 @@ function _MsixApplyAppIsolation {
         }
 
         # ── Locate target Application(s) ──────────────────────────────────────
-        $apps = @($manifest.Package.Applications.Application)
+        $apps = @($manifest.Package.Applications.Application | Where-Object { $null -ne $_ })
         if ($AppId) {
             $apps = @($apps | Where-Object { $_.GetAttribute('Id') -eq $AppId })
             if (-not $apps) { throw "Application '$AppId' not found in the manifest." }
@@ -496,7 +496,9 @@ function Remove-MsixAppIsolation {
         $uap18Uri  = Get-MsixManifestNamespaceUri -Prefix 'uap18'
         $hasCaps = @($preCheck.Package.Capabilities.ChildNodes) |
             Where-Object { $_.LocalName -eq 'Capability' -and $_.Name -like 'isolatedWin32-*' }
-        $hasAttrs = @($preCheck.Package.Applications.Application) | Where-Object {
+        # Null-strip (#153): no <Applications> makes this @($null), whose single
+        # element then throws on GetAttributeNode.
+        $hasAttrs = @($preCheck.Package.Applications.Application | Where-Object { $null -ne $_ }) | Where-Object {
             $_.GetAttributeNode('TrustLevel', $uap10Uri) -or $_.GetAttributeNode('RuntimeBehavior', $uap10Uri) -or
             $_.GetAttributeNode('TrustLevel', $uap18Uri) -or $_.GetAttributeNode('RuntimeBehavior', $uap18Uri)
         }
@@ -516,7 +518,7 @@ function Remove-MsixAppIsolation {
             $u10 = Get-MsixManifestNamespaceUri -Prefix 'uap10'
             $u18 = Get-MsixManifestNamespaceUri -Prefix 'uap18'
 
-            foreach ($app in @($manifest.Package.Applications.Application)) {
+            foreach ($app in @($manifest.Package.Applications.Application | Where-Object { $null -ne $_ })) {
                 # Strip uap10 + uap18 isolation attributes.
                 foreach ($ln in 'EntryPoint', 'TrustLevel', 'RuntimeBehavior') {
                     foreach ($uri in $u10, $u18) {
@@ -639,7 +641,7 @@ function Test-MsixIsolation {
         }
         $hasComServer = $null -ne $manifest.SelectSingleNode("//*[local-name()='Extension' and @Category='windows.comServer']")
 
-        foreach ($app in @($manifest.Package.Applications.Application)) {
+        foreach ($app in @($manifest.Package.Applications.Application | Where-Object { $null -ne $_ })) {
             $entry   = $app.GetAttribute('EntryPoint')
             $tl10    = $app.GetAttribute('TrustLevel', $uap10Uri)
             $rb10    = $app.GetAttribute('RuntimeBehavior', $uap10Uri)

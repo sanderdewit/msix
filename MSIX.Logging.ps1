@@ -89,6 +89,19 @@ function Write-MsixLog {
     Write-Information -MessageData $line -InformationAction Continue
 
     if ($script:LogFile) {
-        Add-Content -Path $script:LogFile -Value $line
+        # -Encoding utf8 and -LiteralPath both matter (issue #153):
+        #   * With no -Encoding, Windows PowerShell 5.1 writes the ANSI code page,
+        #     which destroys the non-ASCII this module emits constantly - the box
+        #     drawing in the AutoFix plan, the '->' in scanner evidence, ellipses -
+        #     and mojibakes non-ASCII package paths. '→' became a literal '?',
+        #     irrecoverably.
+        #   * -Path treats [ ] as wildcards, so a bracketed log path silently
+        #     matched nothing and the line was dropped.
+        # Best-effort: a log write must never fail the operation being logged.
+        try {
+            Add-Content -LiteralPath $script:LogFile -Value $line -Encoding utf8 -ErrorAction Stop
+        } catch {
+            Write-Debug "MSIX: could not append to the log file '$script:LogFile': $($_.Exception.Message)"
+        }
     }
 }

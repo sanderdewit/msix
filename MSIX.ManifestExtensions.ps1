@@ -909,8 +909,24 @@ function Add-MsixFirewallRule {
                 $rule.SetAttribute('LocalPortMax', $LocalPort)
             }
         }
-        $null = $rulesParent.AppendChild($rule)
-        Write-MsixLog -Level Info -Message "FirewallRule: $Direction $Protocol $LocalPort -> $Executable"
+        # IDEMPOTENCY (issue #153): the block was commented "Idempotent rule add"
+        # but only the CONTAINER and the capability were deduped - the Rule itself
+        # was appended every time, so each retry grew the manifest with a
+        # duplicate firewall entry. It passes schema validation, so it shipped
+        # silently. Compare the attributes that define the rule.
+        $ruleExists = @($rulesParent.SelectNodes("*[local-name()='Rule']")) | Where-Object {
+            $_.GetAttribute('Direction')    -eq $rule.GetAttribute('Direction')    -and
+            $_.GetAttribute('IPProtocol')   -eq $rule.GetAttribute('IPProtocol')   -and
+            $_.GetAttribute('Profile')      -eq $rule.GetAttribute('Profile')      -and
+            $_.GetAttribute('LocalPortMin') -eq $rule.GetAttribute('LocalPortMin') -and
+            $_.GetAttribute('LocalPortMax') -eq $rule.GetAttribute('LocalPortMax')
+        } | Select-Object -First 1
+        if ($ruleExists) {
+            Write-MsixLog -Level Info -Message "FirewallRule already present ($Direction $Protocol $LocalPort); leaving it unchanged."
+        } else {
+            $null = $rulesParent.AppendChild($rule)
+            Write-MsixLog -Level Info -Message "FirewallRule: $Direction $Protocol $LocalPort -> $Executable"
+        }
     }
 }
 
@@ -1107,6 +1123,27 @@ function Add-MsixFileTypeAssociation {
         $app   = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
         $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
         $uap    = Get-MsixManifestNamespaceUri -Prefix 'uap'
+
+        # IDEMPOTENCY (issue #153): this appended unconditionally, unlike its
+        # neighbours Add-MsixProtocolHandler and Add-MsixStartupTask. Running it
+        # twice - or replaying a playbook, which Invoke-MsixPlaybook does verbatim
+        # - produced duplicate FileTypeAssociation @Name entries, and a package
+        # with a conflicting FTA is rejected by Add-AppxPackage.
+        # Compare in PowerShell rather than embedding $Name in an XPath predicate:
+        # XPath string literals cannot escape their own quote character, so a
+        # value containing one would break the expression (or worse).
+        $ftaName = $Name.ToLower()
+        $existingFta = @($appExt.SelectNodes(
+                "*[local-name()='Extension']/*[local-name()='FileTypeAssociation']")) |
+            Where-Object { $_.GetAttribute('Name') -eq $ftaName } |
+            Select-Object -First 1
+        if ($existingFta) {
+            Write-MsixLog -Level Info -Message "FileTypeAssociation '$ftaName' already present for '$AppId'; leaving it unchanged."
+            # Bare return: 'return $null' would emit $null into the mutate block's
+            # output, and the transform then receives Object[] instead of the
+            # XmlDocument it expects.
+            return
+        }
 
         $ext  = $M.CreateElement('uap:Extension', $uap)
         $ext.SetAttribute('Category', 'windows.fileTypeAssociation')
@@ -1448,7 +1485,7 @@ function Set-MsixBrandMetadata {
         _SetChild -Parent $props -LocalName 'Logo'                  -Value $LogoPath              -Ns $M.Package.NamespaceURI
 
         if ($ApplyToApplications) {
-            foreach ($app in @($M.Package.Applications.Application)) {
+            foreach ($app in @($M.Package.Applications.Application | Where-Object { $null -ne $_ })) {
                 $vis = $app.SelectSingleNode("*[local-name()='VisualElements']")
                 if (-not $vis) { continue }
                 if ($DisplayName) { $vis.SetAttribute('DisplayName', $DisplayName) }
@@ -1588,6 +1625,20 @@ function Add-MsixShellVerbExtension {
         #   </uap:Extension>
         # NOTE: the EXTENSION element must be uap:Extension; uap3:Extension does NOT
         # support the windows.fileTypeAssociation category and causes a schema error.
+
+        # IDEMPOTENCY (issue #153): this appended unconditionally, so a second run
+        # - or Invoke-MsixPlaybook replaying a step list verbatim - produced
+        # duplicate FileTypeAssociation entries with the same Name.
+        $verbAssocSlug = $AssocName.ToLower() -replace '[^a-z0-9\-]', ''
+        $existingVerbFta = @($appExt.SelectNodes(
+                "*[local-name()='Extension']/*[local-name()='FileTypeAssociation']")) |
+            Where-Object { $_.GetAttribute('Name') -eq $verbAssocSlug } |
+            Select-Object -First 1
+        if ($existingVerbFta) {
+            Write-MsixLog -Level Info -Message "Shell verb association '$verbAssocSlug' already present for '$AppId'; leaving it unchanged."
+            return
+        }
+
         $ext = $M.CreateElement('uap:Extension', $uap)
         $ext.SetAttribute('Category', 'windows.fileTypeAssociation')
 

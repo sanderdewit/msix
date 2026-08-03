@@ -64,8 +64,11 @@ function _ComparePackageManifest {
     }
 
     # Application diff (by Id)
-    $leftApps  = @($LeftManifest.Package.Applications.Application)  | ForEach-Object { @{ Id=$_.Id; Exe=$_.Executable } }
-    $rightApps = @($RightManifest.Package.Applications.Application) | ForEach-Object { @{ Id=$_.Id; Exe=$_.Executable } }
+    # Null-strip (#153): a package with no <Applications> yields @($null), which
+    # produced a phantom @{Id=$null;Exe=$null} entry - so the comparison reported
+    # a difference that does not exist. Silently wrong rather than throwing.
+    $leftApps  = @($LeftManifest.Package.Applications.Application  | Where-Object { $null -ne $_ }) | ForEach-Object { @{ Id=$_.Id; Exe=$_.Executable } }
+    $rightApps = @($RightManifest.Package.Applications.Application | Where-Object { $null -ne $_ }) | ForEach-Object { @{ Id=$_.Id; Exe=$_.Executable } }
 
     foreach ($l in $leftApps) {
         $r = $rightApps | Where-Object { $_.Id -eq $l.Id } | Select-Object -First 1

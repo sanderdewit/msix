@@ -100,19 +100,24 @@ function Resolve-MsixProcMonPath {
     [CmdletBinding()]
     param()
 
-    if ($env:MSIX_PROCMON_PATH -and (Test-Path -LiteralPath $env:MSIX_PROCMON_PATH)) {
-        return (Resolve-Path -LiteralPath $env:MSIX_PROCMON_PATH).Path
-    }
-    $cmd = Get-Command -Name procmon.exe, procmon64.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($cmd) { return $cmd.Source }
-
+    # SECURITY (#147): Process Monitor needs a kernel driver, so it is run
+    # ELEVATED. Every candidate below is therefore verified before it is handed
+    # back to a caller that will execute it. 'C:\PSF\...' is the sharp edge: the
+    # root of C: grants Authenticated Users CreateDirectories, and C:\PSF does
+    # not exist by default - so any standard user could create it, own the
+    # contents, and have their binary run as SYSTEM. The same applies to the
+    # MSIX_PROCMON_PATH override, which is a plain user-settable variable.
     foreach ($p in @(
+        $(if ($env:MSIX_PROCMON_PATH -and (Test-Path -LiteralPath $env:MSIX_PROCMON_PATH)) { (Resolve-Path -LiteralPath $env:MSIX_PROCMON_PATH).Path }),
+        $((Get-Command -Name procmon.exe, procmon64.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source),
         'C:\PSF\ProcessMonitor\Procmon.exe',
         'C:\PSF\ProcessMonitor\Procmon64.exe',
         "${env:ProgramFiles}\SysInternals\Procmon.exe",
         "${env:ProgramFiles}\SysInternalsSuite\Procmon.exe"
     )) {
-        if (Test-Path -LiteralPath $p) { return $p }
+        if (-not $p) { continue }
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+        if (_MsixTestTrustedExecutable -Path $p -ToolName 'Process Monitor') { return $p }
     }
     return $null
 }
@@ -293,7 +298,7 @@ function Get-MsixStaticAnalysis {
 
         $null = Test-MsixManifest -Path "$workspace\AppxManifest.xml"
         [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
-        $apps = @($manifest.Package.Applications.Application)
+        $apps = @($manifest.Package.Applications.Application | Where-Object { $null -ne $_ })
 
         # Idempotency cross-check: if the manifest already declares the
         # desktop6 virtualization elements, suppress the corresponding

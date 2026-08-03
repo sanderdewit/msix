@@ -248,7 +248,7 @@ function Test-MsixAgainstLimitation {
         [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
 
         # cwd-system32 / install-dir-readonly: any executable in a subfolder + writable companions
-        foreach ($app in @($manifest.Package.Applications.Application)) {
+        foreach ($app in @($manifest.Package.Applications.Application | Where-Object { $null -ne $_ })) {
             if ($app.Executable -and $app.Executable.Contains('\')) {
                 $hits += (Get-MsixLimitation -Id 'cwd-system32')
                 $hits += (Get-MsixLimitation -Id 'install-dir-readonly')

@@ -191,7 +191,7 @@
     }
 
     $toolsRoot = Get-MsixToolsRoot
-    $signtool  = Join-Path -Path $toolsRoot -ChildPath 'Tools\signtool.exe'
+    $signtool  = _MsixToolPath -Name 'signtool.exe' -Root $toolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath
 
     Write-MsixLog -Level Info -Message "Signing: $($fileinfo.Name) (backend: $effectiveSigner)"

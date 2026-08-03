@@ -645,7 +645,7 @@ function Add-MsixPsfV2 {
 
     try {
         Write-MsixLog -Level Info -Message "Unpacking: $($fileinfo.FullName)"
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         $null = Test-MsixManifest -Path "$workspace\AppxManifest.xml"
@@ -859,7 +859,7 @@ function Add-MsixPsfV2 {
         Write-MsixLog -Level Info -Message "Repacking (via scratch): $repackTarget"
         $packOk = $false
         try {
-            $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+            $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
             Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack'
             $packOk = $true
             if ($SkipSigning) {

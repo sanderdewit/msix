@@ -22,7 +22,7 @@ function _MsixUnpackForCompare {
     # If the unpack fails the path is never returned, so NO caller can ever clean
     # it up - the workspace leaks permanently (issue #150).
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
     } catch {
         Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue

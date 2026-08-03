@@ -120,7 +120,7 @@ function Get-MsixToolsRoot {
     .EXAMPLE
         # First call resolves and caches; later calls are O(1)
         $root = Get-MsixToolsRoot
-        & "$root\Tools\MakeAppx.exe" /?
+        & (_MsixToolPath -Name 'MakeAppx.exe' -Root $root) /?
 
     .EXAMPLE
         # Force a one-shot install if nothing is found
@@ -176,7 +176,15 @@ function Get-MsixToolsRoot {
         }
     }
 
-    # 4) Windows SDK default paths — pick the highest-versioned bin dir
+    # 4) Windows SDK default paths — pick the highest-versioned bin dir.
+    #
+    #    This is a FALLBACK, not the intended workflow. It resolves to a FLAT
+    #    root (makeappx.exe directly, no Tools\ subfolder), which every call site
+    #    used to mishandle - so a machine with the SDK installed but no module
+    #    toolchain failed with "Executable not found: ...\x64\Tools\MakeAppx.exe".
+    #    _MsixToolPath now resolves both layouts (#151), but the toolchain version
+    #    then depends on whatever SDK that machine happens to have. Warn, so an
+    #    operator who wants reproducible builds knows to pin one.
     foreach ($arch in @('x64','x86')) {
         $kitBin = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
         if (Test-Path -LiteralPath $kitBin) {
@@ -185,11 +193,15 @@ function Get-MsixToolsRoot {
                          Where-Object { Test-Path "$($_.FullName)\$arch\makeappx.exe" } |
                          Sort-Object Name -Descending |
                          Select-Object -First 1
+            $sdkRoot = $null
             if ($candidate) {
-                return _MsixSetVerifiedToolsRoot -Root "$($candidate.FullName)\$arch"
+                $sdkRoot = "$($candidate.FullName)\$arch"
+            } elseif (Test-Path "$kitBin\$arch\makeappx.exe") {
+                $sdkRoot = "$kitBin\$arch"
             }
-            if (Test-Path "$kitBin\$arch\makeappx.exe") {
-                return _MsixSetVerifiedToolsRoot -Root "$kitBin\$arch"
+            if ($sdkRoot) {
+                Write-MsixLog -Level Warning -Message "Using the Windows SDK already installed on this machine ($sdkRoot). The toolchain version is therefore whatever this host has, which is not reproducible across build agents. Run Initialize-MsixToolchain (or Install-MsixSdkTool) to pin a downloaded toolchain under the module."
+                return _MsixSetVerifiedToolsRoot -Root $sdkRoot
             }
         }
     }
@@ -248,8 +260,16 @@ function Set-MsixToolsRoot {
         [Parameter(Mandatory)]
         [string]$Path
     )
-    if (-not (Test-Path "$Path\Tools\MakeAppx.exe")) {
-        throw "MakeAppx.exe not found under '$Path\Tools\'. Verify the path."
+    # Accept BOTH layouts, matching _MsixToolPath: <Path>\Tools\MakeAppx.exe
+    # (vendored / Install-MsixSdkTool) and <Path>\makeappx.exe (a system Windows
+    # SDK bin\<ver>\<arch> root). Requiring only the first rejected a perfectly
+    # usable SDK root (#151).
+    $probe = @(
+        (Join-Path -Path $Path -ChildPath 'Tools\MakeAppx.exe'),
+        (Join-Path -Path $Path -ChildPath 'MakeAppx.exe')
+    ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    if (-not $probe) {
+        throw "MakeAppx.exe not found under '$Path' (checked '$Path\Tools\' and the root). Verify the path."
     }
     # Authenticode-verify (fail-closed) before pinning — same gate as the
     # auto-discovery paths (#54).
@@ -309,6 +329,41 @@ function New-MsixWorkspace {
     $path = (Get-Item -LiteralPath $path).FullName
     Write-MsixLog -Level Debug -Message "Workspace created: $path"
     return $path
+}
+
+function _MsixToolPath {
+    <#
+    .SYNOPSIS
+        Resolves an SDK tool (MakeAppx / signtool / makepri) inside a tools root,
+        supporting BOTH layouts Get-MsixToolsRoot can return.
+
+    .DESCRIPTION
+        Get-MsixToolsRoot resolves a root from five sources. Two layouts result:
+
+          <root>\Tools\MakeAppx.exe   vendored / Install-MsixSdkTool
+          <root>\makeappx.exe         a system Windows SDK bin\<ver>\<arch>
+
+        Every call site used to hardcode the first form, so search path 4 (the
+        installed Windows SDK) returned a root the module could then never use -
+        "Executable not found: ...\bin\10.0.26100.0\x64\Tools\MakeAppx.exe". The
+        test-suite tooling gate happened to require the Tools\ form too, so on a
+        system-SDK host every integration test skipped and the defect stayed
+        invisible until the gate was corrected (#151).
+
+        When neither layout has the file, the Tools\ form is returned so callers
+        still produce the familiar "Executable not found" message.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [string]$Root
+    )
+    if (-not $Root) { $Root = Get-MsixToolsRoot }
+    $nested = Join-Path -Path $Root -ChildPath (Join-Path -Path 'Tools' -ChildPath $Name)
+    if (Test-Path -LiteralPath $nested -PathType Leaf) { return $nested }
+    $flat = Join-Path -Path $Root -ChildPath $Name
+    if (Test-Path -LiteralPath $flat -PathType Leaf) { return $flat }
+    return $nested
 }
 
 function _MsixWriteUtf8 {
@@ -425,14 +480,14 @@ function Invoke-MsixProcess {
 
     .EXAMPLE
         # Preferred: array form (each argument quoted correctly)
-        Invoke-MsixProcess -FilePath "$root\Tools\MakeAppx.exe" -ArgumentList @(
+        Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $root) -ArgumentList @(
             'unpack', '/p', $packagePath, '/d', $workspace, '/o'
         )
 
     .EXAMPLE
         # DEPRECATED legacy single-string form — emits a warning. New callers
         # MUST use -ArgumentList; this is retained only for older scripts.
-        Invoke-MsixProcess -FilePath "$root\Tools\MakeAppx.exe" `
+        Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $root) `
             -Arguments "unpack /p `"$packagePath`" /d `"$workspace`" /o"
     #>
     [CmdletBinding(DefaultParameterSetName = 'ArgumentList')]

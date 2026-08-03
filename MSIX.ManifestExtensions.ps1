@@ -87,7 +87,7 @@ function _MsixMutateManifest {
     # leak: 1,077 stale msix-* directories were found on one ordinary dev
     # machine, the oldest ~3 months old. Clean up and rethrow.
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         $null = Test-MsixManifest -Path "$workspace\AppxManifest.xml"
@@ -114,7 +114,7 @@ function _MsixMutateManifest {
     $signSucceeded = $false
     try {
         Write-MsixLog -Level Info -Message "$Activity -> $target"
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack','/p',$scratch,'/d',$workspace,'/o')
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('pack','/p',$scratch,'/d',$workspace,'/o')
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack'
         $packSucceeded = $true
 

@@ -106,7 +106,7 @@ function Import-MsixSparseShellExtension {
 
     try {
         # ── Unpack outer ──────────────────────────────────────────────────
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack (outer)'
 
         # ── Resolve the nested package path ──────────────────────────────
@@ -327,7 +327,7 @@ function Import-MsixSparseShellExtension {
         $scratch = Join-Path -Path $env:TEMP -ChildPath ("msix-sparse-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($target)))
         $packOk  = $false
         try {
-            $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+            $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
             Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack'
             $packOk = $true
             if (-not $SkipSigning) {

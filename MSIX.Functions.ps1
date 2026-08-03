@@ -230,7 +230,7 @@ function Update-MsixSigner {
 
         try {
             Write-MsixLog -Level Info -Message "Unpacking: $($fileinfo.FullName)"
-            $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+            $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
             Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
             [xml]$appinfo = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
@@ -258,7 +258,7 @@ function Update-MsixSigner {
             $scratch = Join-Path -Path $env:TEMP -ChildPath ("msix-resign-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([System.IO.Path]::GetExtension($outputPath)))
             $packOk = $false
             try {
-                $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+                $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
                 Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack'
                 $packOk = $true
                 Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword

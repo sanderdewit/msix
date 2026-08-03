@@ -1170,7 +1170,7 @@ function Update-MsixResourcePri {
 
             $toolsRoot = Get-MsixToolsRoot
             $makepri = @(
-                (Join-Path -Path $toolsRoot -ChildPath 'Tools\makepri.exe'),
+                (_MsixToolPath -Name 'makepri.exe' -Root $toolsRoot),
                 (Join-Path -Path $toolsRoot -ChildPath 'makepri.exe')
             ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
             if (-not $makepri) {

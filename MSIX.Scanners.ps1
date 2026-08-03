@@ -61,7 +61,7 @@ function _MsixResolveScanWorkspace {
     # If the unpack throws, the path is never returned and Owned never reaches a
     # caller, so nothing can clean it up (issue #150).
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
     } catch {
         Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
@@ -1210,7 +1210,7 @@ function Get-MsixHeuristicFinding {
     $fileinfo  = Get-Item -LiteralPath $PackagePath
     $shared    = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-scan"
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $shared, '/o')
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $shared, '/o')
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
     # Uninstaller artefacts

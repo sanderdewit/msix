@@ -249,7 +249,7 @@ function Add-MsixVcRuntimeBundle {
     $workspace = New-MsixWorkspace -PackageName $fileinfo.BaseName
 
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         $null = Test-MsixManifest -Path "$workspace\AppxManifest.xml"
@@ -311,7 +311,7 @@ function Add-MsixVcRuntimeBundle {
         $scratch = Join-Path -Path $env:TEMP -ChildPath ("msix-vcruntime-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([IO.Path]::GetExtension($target)))
         $packOk  = $false
         try {
-            $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+            $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
             Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack'
             $packOk = $true
             if (-not $SkipSigning) {

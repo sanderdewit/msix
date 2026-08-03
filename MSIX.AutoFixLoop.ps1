@@ -245,14 +245,15 @@ function Invoke-MsixAutoFixLoop {
         $finalReport = $report
 
         # Persist report for post-mortem
-        $report | ConvertTo-Json -Depth 10 -Compress |
-            Out-File -FilePath (Join-Path -Path $passDir -ChildPath 'report.json') -Encoding utf8
+        # No BOM on emitted JSON (issue #146).
+        _MsixWriteUtf8 -Path (Join-Path -Path $passDir -ChildPath 'report.json') `
+                       -Text ($report | ConvertTo-Json -Depth 10 -Compress)
 
         # ── 2. Plan ──
         $plan = Invoke-MsixAutoFixFromAnalysis -Report $report @fixArgs -DryRun
 
-        $plan | ConvertTo-Json -Depth 10 -Compress |
-            Out-File -FilePath (Join-Path -Path $passDir -ChildPath 'plan.json') -Encoding utf8
+        _MsixWriteUtf8 -Path (Join-Path -Path $passDir -ChildPath 'plan.json') `
+                       -Text ($plan | ConvertTo-Json -Depth 10 -Compress)
 
         $passSummary = [pscustomobject]@{
             Pass          = $pass
@@ -301,8 +302,8 @@ function Invoke-MsixAutoFixLoop {
 
             if ($prevTracePath -and (Test-Path -LiteralPath $tracePath)) {
                 $delta = Compare-MsixTrace -Baseline $prevTracePath -Candidate $tracePath
-                $delta | ConvertTo-Json -Depth 10 -Compress |
-                    Out-File -FilePath (Join-Path -Path $passDir -ChildPath 'trace-delta.json') -Encoding utf8
+                _MsixWriteUtf8 -Path (Join-Path -Path $passDir -ChildPath 'trace-delta.json') `
+                               -Text ($delta | ConvertTo-Json -Depth 10 -Compress)
                 $passSummary.TraceDelta = $delta.Summary
 
                 if ('NoRegressions' -in $StopOn -and $delta.Summary.IntroducedCount -eq 0) {

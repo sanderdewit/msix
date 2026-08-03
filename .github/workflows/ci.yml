@@ -120,6 +120,77 @@ jobs:
           }
           Write-Host 'All exported functions instantiate cleanly under Windows PowerShell 5.1.'
 
+      # The -Syntax pass above catches PS7-only ATTRIBUTE properties, but not
+      # PS7-only CMDLETS or PARAMETERS at call sites — that class shipped twice:
+      # Join-String (PS6+) silently swapped a real scanner finding for an error
+      # on 5.1, and Get-PfxCertificate -Password (PS6+) made two exported
+      # functions unusable there (issue #146). PSScriptAnalyzer's
+      # PSUseCompatibleCmdlets does NOT flag either. This resolves every command
+      # and parameter name in the module against this 5.1 host's real cmdlet
+      # metadata, so the whole class fails the build instead of a customer.
+      - name: Resolve every command + parameter against real 5.1 metadata
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = Get-ChildItem -Path . -Filter 'MSIX.*.ps1' -File |
+                   Where-Object { $_.Name -notlike '*.Tests.ps1' }
+
+          # Pass 1: collect every function the module defines anywhere, including
+          # nested/local helpers. Those cannot be resolved with Get-Command here.
+          $defined = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+          $asts = @{}
+          foreach ($f in $files) {
+            $errors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors)
+            $asts[$f.Name] = $ast
+            if ($errors) { continue }
+            foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+              # 'function script:_Foo' yields Name 'script:_Foo'; callers write '_Foo'.
+              [void]$defined.Add(($fn.Name -replace '^(script|global|local|private):', ''))
+            }
+          }
+          foreach ($f in $files) {
+            foreach ($m in [regex]::Matches((Get-Content -LiteralPath $f.FullName -Raw), '(?m)^\s*Set-Alias\s+(?:-Name\s+)?([A-Za-z0-9_\-]+)')) {
+              [void]$defined.Add($m.Groups[1].Value)
+            }
+          }
+
+          # Provider DYNAMIC parameters: real on 5.1, absent from static metadata.
+          $dynamicOk = @{ 'Set-ItemProperty' = @('Type'); 'New-ItemProperty' = @('Type'); 'Get-ChildItem' = @('Attributes') }
+
+          $fail = @()
+          foreach ($f in $files) {
+            $ast = $asts[$f.Name]
+            if (-not $ast) { continue }
+            foreach ($call in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+              $name = $call.GetCommandName()
+              if (-not $name) { continue }
+              if ($defined.Contains($name)) { continue }
+              $cmd = Get-Command -Name $name -ErrorAction SilentlyContinue
+              if (-not $cmd) {
+                $fail += "$($f.Name):$($call.Extent.StartLineNumber) command '$name' does not exist on Windows PowerShell 5.1"
+                continue
+              }
+              if ($cmd.CommandType -notin 'Cmdlet','Function') { continue }
+              $valid = @($cmd.Parameters.Keys) + @($cmd.Parameters.Values | ForEach-Object { $_.Aliases })
+              foreach ($el in $call.CommandElements) {
+                if ($el -isnot [System.Management.Automation.Language.CommandParameterAst]) { continue }
+                $p = $el.ParameterName
+                if ($dynamicOk.ContainsKey($cmd.Name) -and ($dynamicOk[$cmd.Name] -contains $p)) { continue }
+                # Prefix matching: PowerShell accepts unambiguous abbreviations.
+                if (-not ($valid | Where-Object { $_ -like "$p*" })) {
+                  $fail += "$($f.Name):$($el.Extent.StartLineNumber) '$name -$p' is not a parameter on Windows PowerShell 5.1"
+                }
+              }
+            }
+          }
+          "Scanned $($files.Count) module files; skipped $($defined.Count) module-defined names."
+          if ($fail) {
+            $fail | Sort-Object -Unique | ForEach-Object { Write-Host "::error::$_" }
+            throw "$($fail.Count) PS7-only command/parameter use(s) found."
+          }
+          Write-Host 'Every command and parameter resolves on Windows PowerShell 5.1.'
+
   integration:
     name: Integration Tests (real MSIX)
     runs-on: windows-latest

@@ -1467,7 +1467,11 @@ function Get-MsixHeuristicFinding {
                 Severity       = 'Info'
                 Category       = 'ComServer'
                 Symptom        = "Registry.dat registers $($inprocPkg.Count) in-process COM server(s) with DLLs inside the package. External COM clients cannot activate them without a com:Extension declaration in the manifest."
-                Recommendation = "Add-MsixComServerExtension -PackagePath '$PackagePath' -Servers @($($inprocPkg | ForEach-Object { "@{ Clsid='$(_MsixEscapeSingleQuote $_.Clsid)'; VfsDllPath='$(_MsixEscapeSingleQuote $_.VfsDllPath)'; ThreadingModel='$(_MsixEscapeSingleQuote $_.ThreadingModel)' }" } | Select-Object -First 2 | Join-String -Separator ', '))"
+                # -join, NOT Join-String: Join-String is PS6+ and does not exist
+                # on Windows PowerShell 5.1. It threw CommandNotFoundException,
+                # which this block's catch converted into a generic ScannerError -
+                # silently replacing the real ComServer finding on 5.1 (issue #146).
+                Recommendation = "Add-MsixComServerExtension -PackagePath '$PackagePath' -Servers @($((@($inprocPkg | ForEach-Object { "@{ Clsid='$(_MsixEscapeSingleQuote $_.Clsid)'; VfsDllPath='$(_MsixEscapeSingleQuote $_.VfsDllPath)'; ThreadingModel='$(_MsixEscapeSingleQuote $_.ThreadingModel)' }" }) | Select-Object -First 2) -join ', '))"
                 Evidence       = ($inprocPkg | ForEach-Object { "$($_.Clsid) → $($_.VfsDllPath)" }) -join '; '
                 AppId          = $null
                 ComEntries     = $inprocPkg

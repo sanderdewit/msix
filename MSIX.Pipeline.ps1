@@ -424,8 +424,7 @@ function _MsixMutatePackage {
             Move-Item -LiteralPath $scratch -Destination $target -Force
         } catch {
             if ($packOk -and $UnsignedOutputPath) {
-                Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction SilentlyContinue
-                Write-MsixLog -Level Warning -Message "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
+                _MsixPreserveUnsigned -Scratch $scratch -Destination $UnsignedOutputPath
             }
             throw
         } finally {

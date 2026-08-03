@@ -249,7 +249,13 @@ function New-MsixWorkspace {
     )
     $id   = [guid]::NewGuid().ToString('N').Substring(0, 8)
     $path = Join-Path -Path $env:TEMP -ChildPath "msix-$PackageName-$id"
-    New-Item -ItemType Directory -Path $path -Force | Out-Null
+    # -WhatIf:$false is REQUIRED. The workspace is private scratch, not a
+    # user-visible side effect, but New-Item honours the $WhatIfPreference
+    # inherited through the module scope chain. Without this, running any
+    # mutator with -WhatIf skips the create, the Get-Item below fails, and this
+    # function returns an EMPTY STRING - which broke -WhatIf across all ~46
+    # _MsixMutateManifest call sites plus _MsixMutatePackage (issue #145).
+    New-Item -ItemType Directory -Path $path -Force -WhatIf:$false | Out-Null
     # Return the LONG-form path. $env:TEMP can carry an 8.3 short segment
     # (SANDER~1 vs SanderdeWit) while Get-ChildItem returns long-form
     # FullNames; any relative-path Substring against a short-form workspace
@@ -258,6 +264,93 @@ function New-MsixWorkspace {
     $path = (Get-Item -LiteralPath $path).FullName
     Write-MsixLog -Level Debug -Message "Workspace created: $path"
     return $path
+}
+
+function _MsixWriteUtf8 {
+    <#
+    .SYNOPSIS
+        Writes a text file as UTF-8 with a DETERMINISTIC byte-order mark,
+        identical under Windows PowerShell 5.1 and PowerShell 7.
+
+    .DESCRIPTION
+        `-Encoding utf8` does not mean the same thing on both editions:
+        5.1 writes UTF-8 **with** a BOM, 7 writes it **without** (issue #146).
+        That divergence is silent and only shows up downstream:
+
+          - The Trusted Signing metadata JSON is parsed by
+            Azure.CodeSigning.Dlib.dll via `signtool /dmdf`. System.Text.Json
+            rejects a leading BOM outright ("'0xEF' is an invalid start of a
+            value"), so packages signed from 5.1 failed on the module's DEFAULT
+            signing backend while 7 worked.
+          - PSF `config.json` is parsed by the PSF runtime at every app launch.
+            `Test-MsixPsfConfig` reads it with `Get-Content -Raw`, which strips
+            the BOM on 5.1, so the module's own validator could not see the
+            defect and it shipped inside customer packages.
+
+        Rule of thumb for -WithBom:
+          - OFF for anything a non-PowerShell parser consumes (JSON, XML, HTML).
+          - ON  for generated .ps1 files, where Windows PowerShell 5.1 otherwise
+            reads a BOM-less UTF-8 file as CP-1252 and mis-parses non-ASCII
+            (the hazard documented in CLAUDE.md).
+
+    .PARAMETER WithBom
+        Emit the UTF-8 BOM (EF BB BF). Default is no BOM.
+
+    .PARAMETER NoNewline
+        Do not append a trailing newline. Set-Content/Out-File add one by
+        default; this keeps that behaviour unless suppressed.
+    #>
+    [OutputType([void])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][string]$Text,
+        [switch]$WithBom,
+        [switch]$NoNewline
+    )
+    $body = if ($null -eq $Text) { '' } else { $Text }
+    if (-not $NoNewline -and -not $body.EndsWith("`n")) { $body += [Environment]::NewLine }
+    [IO.File]::WriteAllText($Path, $body, [Text.UTF8Encoding]::new([bool]$WithBom))
+}
+
+function _MsixPreserveUnsigned {
+    <#
+    .SYNOPSIS
+        Copies a scratch package to -UnsignedOutputPath after a signing failure,
+        and reports honestly whether that actually succeeded.
+
+    .DESCRIPTION
+        Every repack site used to preserve the artifact like this:
+
+            Copy-Item -LiteralPath $scratch -Destination $dest -Force -ErrorAction SilentlyContinue
+            Write-MsixLog -Level Warning -Message "... Unsigned package preserved at: $dest"
+
+        with the enclosing finally deleting $scratch immediately after. If the
+        copy failed - destination directory missing, volume full, file locked -
+        the error was fully suppressed, the log still claimed the package had
+        been preserved, and the only copy was then destroyed. The operator
+        followed the log to an empty path and the build was unrecoverable: the
+        exact inverse of what the parameter promises (issue #145).
+
+        This helper creates the destination directory when needed, copies with
+        -ErrorAction Stop, and logs at Error - not Warning - when preservation
+        genuinely failed.
+    #>
+    [OutputType([void])]
+    param(
+        [Parameter(Mandatory)][string]$Scratch,
+        [Parameter(Mandatory)][string]$Destination
+    )
+    try {
+        $dir = Split-Path -Parent -Path $Destination
+        if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force -WhatIf:$false -ErrorAction Stop | Out-Null
+        }
+        Copy-Item -LiteralPath $Scratch -Destination $Destination -Force -ErrorAction Stop
+        Write-MsixLog -Level Warning -Message "Signing failed. Unsigned package preserved at: $Destination"
+    } catch {
+        Write-MsixLog -Level Error -Message "Signing failed AND the unsigned package could NOT be preserved at '$Destination': $($_.Exception.Message). The scratch build is being discarded; re-run after fixing the destination."
+    }
 }
 
 function Invoke-MsixProcess {

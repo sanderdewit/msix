@@ -236,7 +236,8 @@ function Add-MsixVcRuntimeBundle {
         [Alias('NoSign')]
         [switch]$SkipSigning,
         [string]$Pfx,
-        [SecureString]$PfxPassword
+        [SecureString]$PfxPassword,
+        [string]$UnsignedOutputPath
     )
 
     if (-not (Test-Path -LiteralPath $SourceFolder)) {
@@ -301,13 +302,27 @@ function Add-MsixVcRuntimeBundle {
             return
         }
 
-        # Repack
-        $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $target, '/d', $workspace, '/o')
-        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack'
-
-        if (-not $SkipSigning) {
-            Invoke-MsixSigning -PackagePath $target -Pfx $Pfx -PfxPassword $PfxPassword
+        # ── Atomic repack (issue #145) ────────────────────────────────────
+        # This used to pack straight over $target and then sign in place, so a
+        # signing failure - expired cert, wrong password, timestamp server down -
+        # left the operator holding an UNSIGNED repack where their signed package
+        # had been, with no recovery path. Build to scratch, sign, then move.
+        $target  = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
+        $scratch = Join-Path -Path $env:TEMP -ChildPath ("msix-vcruntime-{0}{1}" -f ([guid]::NewGuid().ToString('N').Substring(0,8)), ([IO.Path]::GetExtension($target)))
+        $packOk  = $false
+        try {
+            $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+            Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack'
+            $packOk = $true
+            if (-not $SkipSigning) {
+                Invoke-MsixSigning -PackagePath $scratch -Pfx $Pfx -PfxPassword $PfxPassword
+            }
+            Move-Item -LiteralPath $scratch -Destination $target -Force
+        } catch {
+            if ($packOk -and $UnsignedOutputPath) { _MsixPreserveUnsigned -Scratch $scratch -Destination $UnsignedOutputPath }
+            throw
+        } finally {
+            if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue }
         }
 
         return [pscustomobject]@{ PackagePath = $target; Bundled = $copied; Architecture = $Architecture }

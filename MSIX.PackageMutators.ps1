@@ -857,7 +857,8 @@ function Add-MsixSplashScreen {
                 }
                 $app.startScript | Add-Member -NotePropertyName splashImage -NotePropertyValue $imageLeaf -Force
             }
-            $cfg | ConvertTo-Json -Depth 15 | Set-Content -LiteralPath $cfgPath -Encoding utf8
+            # No BOM: PSF config.json is parsed by the PSF runtime (issue #146).
+            _MsixWriteUtf8 -Path $cfgPath -Text ($cfg | ConvertTo-Json -Depth 15)
             @{ SplashImage = $imageLeaf; AppId = $AppId }
         }.GetNewClosure()
 }

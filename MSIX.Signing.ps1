@@ -257,7 +257,10 @@
             } | ConvertTo-Json -Compress
 
             try {
-                Set-Content -LiteralPath $metadataPath -Value $metadata -NoNewline -Encoding utf8
+                # No BOM: signtool /dmdf hands this to Azure.CodeSigning.Dlib.dll, whose
+        # System.Text.Json parser rejects a leading BOM. '-Encoding utf8' wrote
+        # one on Windows PowerShell 5.1 (issue #146).
+        _MsixWriteUtf8 -Path $metadataPath -Text $metadata -NoNewline
 
                 $sigArgs = @('sign', '/v', '/tr', $TimestampUrl, '/td', 'sha256', '/fd', 'sha256',
                              '/dlib', $resolvedDlib, '/dmdf', $metadataPath, $fileinfo.FullName)

@@ -645,7 +645,7 @@ function Add-MsixPsfV2 {
 
     try {
         Write-MsixLog -Level Info -Message "Unpacking: $($fileinfo.FullName)"
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
         $null = Test-MsixManifest -Path "$workspace\AppxManifest.xml"
@@ -724,7 +724,9 @@ function Add-MsixPsfV2 {
             } | ConvertTo-Json -Depth 15
 
             if ($PSCmdlet.ShouldProcess($configPath, 'Merge PSF config.json')) {
-                $mergedJson | Out-File -FilePath $configPath -Encoding utf8 -Force
+                # No BOM: the PSF runtime parses this at every app launch, and
+                # '-Encoding utf8' emitted a BOM on 5.1 but not 7 (issue #146).
+                _MsixWriteUtf8 -Path $configPath -Text $mergedJson
                 Write-MsixLog -Level Info -Message "PSF config merged (fixup(s) added to existing config): $configPath"
             }
         } else {
@@ -735,7 +737,7 @@ function Add-MsixPsfV2 {
                                           -AppOptions $AppOptions
 
             if ($PSCmdlet.ShouldProcess($configPath, 'Write PSF config.json')) {
-                $psfJson | Out-File -FilePath $configPath -Encoding utf8 -Force
+                _MsixWriteUtf8 -Path $configPath -Text $psfJson
                 Write-MsixLog -Level Info -Message "PSF config written: $configPath"
             }
         }
@@ -857,7 +859,7 @@ function Add-MsixPsfV2 {
         Write-MsixLog -Level Info -Message "Repacking (via scratch): $repackTarget"
         $packOk = $false
         try {
-            $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
+            $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('pack', '/p', $scratch, '/d', $workspace, '/o')
             Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack'
             $packOk = $true
             if ($SkipSigning) {
@@ -868,8 +870,7 @@ function Add-MsixPsfV2 {
             Move-Item -LiteralPath $scratch -Destination $repackTarget -Force
         } catch {
             if ($packOk -and $UnsignedOutputPath) {
-                Copy-Item -LiteralPath $scratch -Destination $UnsignedOutputPath -Force -ErrorAction SilentlyContinue
-                Write-MsixLog -Level Warning -Message "Signing failed. Unsigned package preserved at: $UnsignedOutputPath"
+                _MsixPreserveUnsigned -Scratch $scratch -Destination $UnsignedOutputPath
             }
             throw
         } finally {
@@ -975,9 +976,17 @@ function Remove-MsixPsf {
             [xml]$manifest = Get-MsixManifest -Path $manifestPath
             $restored = 0
             $manifestDirty = $false
-            foreach ($app in @($manifest.Package.Applications.Application)) {
+            # Tracks whether the manifest points ANY app at a PsfLauncher. This is
+            # the authoritative "this package uses PSF" signal and gates the payload
+            # delete below - $restored alone is not enough, because a PSF package
+            # whose config.json does not map an app still needs its payload removed.
+            $sawPsfLauncherRef = $false
+            # Null-strip: a package with no <Applications> makes the property $null,
+            # and @($null) is an array holding one $null whose .GetAttribute() throws.
+            foreach ($app in @($manifest.Package.Applications.Application | Where-Object { $null -ne $_ })) {
                 $exe = $app.GetAttribute('Executable')
                 if ($exe -notmatch 'PsfLauncher\d*\.exe$') { continue }
+                $sawPsfLauncherRef = $true
 
                 $appId  = $app.GetAttribute('Id')
                 $target = $null
@@ -1017,14 +1026,63 @@ function Remove-MsixPsf {
             if ($manifestDirty) { Save-MsixManifest -Manifest $manifest -Path $manifestPath }
 
             # ── Delete the PSF payload ────────────────────────────────────
-            $patterns = 'PsfLauncher*.exe', 'PsfLauncher*.dll', 'PsfRuntime*.dll', 'PsfRunDll*.exe',
-                        '*Fixup*.dll', 'config.json', 'StartingScriptWrapper.ps1'
+            # GUARD (issue #145). This block used to run UNCONDITIONALLY with
+            # patterns as generic as 'config.json' and '*Fixup*.dll' recursed over
+            # the entire package. A PSF-free app shipping its own config.json (very
+            # common - Electron, .NET) had it deleted; because deletions alone made
+            # the mutator report "changed", the package was then repacked, signed
+            # and moved over the operator's original, with exit code 0. The docs
+            # promise the opposite ("a package without PSF is reported as a no-op").
+            $psfBinaryRx = '^(PsfLauncher\d*\.(exe|dll)|PsfRuntime\d*\.dll|PsfRunDll\d*\.(exe|dll)|StartingScriptWrapper\.ps1)$'
+            $psfBinaries = @(Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match $psfBinaryRx })
+
+            # No PsfLauncher entry point AND no PSF runtime binaries => not a PSF
+            # package. Touch nothing; _MsixMutatePackage reports the no-op and
+            # leaves the operator's file byte-identical.
+            if (-not $sawPsfLauncherRef -and $psfBinaries.Count -eq 0) { return $null }
+
             $removedFiles = 0
-            foreach ($pattern in $patterns) {
-                foreach ($file in @(Get-ChildItem -LiteralPath $workspace -Recurse -File -Filter $pattern -ErrorAction SilentlyContinue)) {
-                    [IO.File]::Delete($file.FullName)
+            foreach ($file in $psfBinaries) {
+                [IO.File]::Delete($file.FullName)
+                $removedFiles++
+                Write-MsixLog -Level Info -Message "Removed PSF file: $($file.FullName.Substring($workspace.Length + 1))"
+            }
+
+            # Fixup DLLs: remove only fixups PSF actually ships or the config
+            # declares. Matching '*Fixup*.dll' would also delete an application's
+            # own 'ContosoFixup.dll'.
+            $fixupNames = New-Object System.Collections.Generic.HashSet[string] ([StringComparer]::OrdinalIgnoreCase)
+            foreach ($known in $script:PsfFixupRegistry.Keys) {
+                [void]$fixupNames.Add("${known}.dll")
+                [void]$fixupNames.Add("${known}32.dll")
+                [void]$fixupNames.Add("${known}64.dll")
+            }
+            if ($cfg -and $cfg.processes) {
+                foreach ($dll in @($cfg.processes | ForEach-Object { @($_.fixups) } | ForEach-Object { $_.dll } | Where-Object { $_ })) {
+                    $leaf = [IO.Path]::GetFileName([string]$dll)
+                    if ($leaf) {
+                        [void]$fixupNames.Add($leaf)
+                        $stem = [IO.Path]::GetFileNameWithoutExtension($leaf)
+                        [void]$fixupNames.Add("${stem}32.dll")
+                        [void]$fixupNames.Add("${stem}64.dll")
+                    }
+                }
+            }
+            foreach ($file in @(Get-ChildItem -LiteralPath $workspace -Recurse -File -Filter '*.dll' -ErrorAction SilentlyContinue)) {
+                if (-not $fixupNames.Contains($file.Name)) { continue }
+                [IO.File]::Delete($file.FullName)
+                $removedFiles++
+                Write-MsixLog -Level Info -Message "Removed PSF fixup: $($file.FullName.Substring($workspace.Length + 1))"
+            }
+
+            # config.json: only the PSF config itself, never an app's own file of
+            # that name. $cfgItem is the one we parsed as a PSF config above.
+            if ($cfgItem -and $cfg -and ($cfg.PSObject.Properties['applications'] -or $cfg.PSObject.Properties['processes'])) {
+                if (Test-Path -LiteralPath $cfgItem.FullName) {
+                    [IO.File]::Delete($cfgItem.FullName)
                     $removedFiles++
-                    Write-MsixLog -Level Info -Message "Removed PSF file: $($file.FullName.Substring($workspace.Length + 1))"
+                    Write-MsixLog -Level Info -Message "Removed PSF file: $($cfgItem.FullName.Substring($workspace.Length + 1))"
                 }
             }
 

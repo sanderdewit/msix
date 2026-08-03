@@ -34,19 +34,59 @@ function _MsixSetVerifiedToolsRoot {
     param([Parameter(Mandatory)][string]$Root)
 
     if ($env:MSIX_SKIP_TOOL_VERIFICATION) {
+        # Real Warning stream as well as the module log: Write-MsixLog routes to
+        # Write-Information, which is invisible to -WarningVariable and is dropped
+        # entirely under Set-MsixLogLevel -Level Error. Disabling the control that
+        # protects the signing toolchain must not be silenceable (issue #147).
+        Write-Warning "MSIX: tool Authenticode verification BYPASSED (MSIX_SKIP_TOOL_VERIFICATION is set) for '$Root'."
         Write-MsixLog -Level Warning -Message "Tool Authenticode verification BYPASSED (MSIX_SKIP_TOOL_VERIFICATION is set). SDK tools under '$Root' are trusted without a signature check. Unset this variable to restore fail-closed verification."
     } elseif (Get-Command -Name _MsixVerifyAuthenticode -ErrorAction SilentlyContinue) {
-        foreach ($tool in @('signtool.exe', 'MakeAppx.exe', 'makepri.exe')) {
+        # Verify the tools we EXECUTE plus signtool's private side-by-side load
+        # surface (issue #147).
+        #
+        # Checking only signtool/MakeAppx/makepri was not enough: SDK signtool.exe
+        # is SxS-manifest-bound to load wintrust.dll / mssign32.dll / AppxSip.dll
+        # from its OWN directory, so an attacker able to write that directory could
+        # keep the three genuine Microsoft-signed executables (passing the check)
+        # and plant a trojaned dependency DLL beside them, running their code
+        # inside the process that holds the organisation's code-signing key.
+        #
+        # Verifying EVERY file in the root is NOT viable and was tried first:
+        # Microsoft itself ships unsigned binaries in these directories - 9 in the
+        # real Windows SDK bin\x64 (gamesaveutil.exe, SirepClient.dll,
+        # WinAppDeployCmd.exe, ...) and 5 in the NuGet BuildTools layout
+        # (PackageEditor.exe, Microsoft.Packaging.SDKUtils.dll, ...). That rejects
+        # every legitimate SDK install, so the check must be targeted.
+        #
+        # This list is deliberately the executables we invoke plus the documented
+        # signing load surface; it is not a claim that every other file in the
+        # folder is irrelevant, only that nothing else is loaded by the tools this
+        # module runs.
+        $verifyNames = @(
+            'signtool.exe', 'MakeAppx.exe', 'makepri.exe',   # executed directly
+            'wintrust.dll', 'mssign32.dll', 'AppxSip.dll',   # signtool SxS bindings
+            'msisip.dll', 'opcservices.dll'                  # SIP/OPC helpers
+        )
+        $toolsFound = 0
+        foreach ($name in $verifyNames) {
             $candidate = @(
-                (Join-Path -Path $Root -ChildPath "Tools\$tool"),
-                (Join-Path -Path $Root -ChildPath $tool)
+                (Join-Path -Path $Root -ChildPath "Tools\$name"),
+                (Join-Path -Path $Root -ChildPath $name)
             ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
-            if ($candidate) {
-                # Throws (fail-closed) if the binary is unsigned, untrusted, or
-                # its chain cannot be validated.
-                $null = _MsixVerifyAuthenticode -Path $candidate -ToolName $tool
-            }
+            if (-not $candidate) { continue }
+            if ($name -like '*.exe') { $toolsFound++ }
+            # Throws (fail-closed) if unsigned, untrusted, or the chain cannot be
+            # validated.
+            $null = _MsixVerifyAuthenticode -Path $candidate -ToolName $name
         }
+        if ($toolsFound -eq 0) {
+            throw "Tool verification failed: none of signtool.exe / MakeAppx.exe / makepri.exe were found under '$Root'. Refusing to trust an empty or unexpected tools root."
+        }
+    } else {
+        # Fail CLOSED. Previously this branch silently cached and trusted the root
+        # with no warning at all, defeating the whole control if the verifier was
+        # not in scope for any reason (issue #147).
+        throw 'Tool verification unavailable: _MsixVerifyAuthenticode is not loaded. Re-import the MSIX module; set MSIX_SKIP_TOOL_VERIFICATION only for a deliberate air-gapped bypass.'
     }
 
     $script:ToolsRoot = $Root
@@ -80,7 +120,7 @@ function Get-MsixToolsRoot {
     .EXAMPLE
         # First call resolves and caches; later calls are O(1)
         $root = Get-MsixToolsRoot
-        & "$root\Tools\MakeAppx.exe" /?
+        & (_MsixToolPath -Name 'MakeAppx.exe' -Root $root) /?
 
     .EXAMPLE
         # Force a one-shot install if nothing is found
@@ -110,28 +150,41 @@ function Get-MsixToolsRoot {
         return _MsixSetVerifiedToolsRoot -Root $PSScriptRoot
     }
 
-    # 3) Walk up to four parent levels looking for any sibling that hosts
-    #    Tools\MakeAppx.exe (e.g. C:\temp\msix\0.56\ next to C:\temp\msix\MSIX\,
-    #    or any other vendored toolchain elsewhere on the same path).
-    $cursor = $PSScriptRoot
-    for ($i = 0; $i -lt 4; $i++) {
-        $cursor = Split-Path -Path $cursor -Parent
-        if (-not $cursor) { break }
-        # Same-level siblings under this ancestor
-        $sibling = Get-ChildItem -LiteralPath $cursor -Directory -ErrorAction SilentlyContinue |
+    # 3) Look for a vendored toolchain NEXT TO the module only (one level up),
+    #    e.g. C:\temp\msix\0.56\ beside C:\temp\msix\MSIX\.
+    #
+    #    SECURITY (issue #147): this used to walk up to FOUR parent levels and
+    #    accept any subdirectory containing Tools\MakeAppx.exe, ordered by
+    #    Sort-Object Name -Descending - lexically highest wins, not most
+    #    trustworthy. For a -Scope CurrentUser install the 4th hop reaches
+    #    ~\Documents, which is fully user-writable: creating
+    #    ~\Documents\zzz\Tools\ beat every legitimate candidate on every later
+    #    session. Combined with the SxS-DLL gap above that handed an unprivileged
+    #    attacker code execution inside signing. One level keeps the intended
+    #    side-by-side layout working without reaching a user profile root.
+    $parent = Split-Path -Path $PSScriptRoot -Parent
+    if ($parent) {
+        $sibling = Get-ChildItem -LiteralPath $parent -Directory -ErrorAction SilentlyContinue |
                    Where-Object { Test-Path -LiteralPath "$($_.FullName)\Tools\MakeAppx.exe" } |
                    Sort-Object Name -Descending |
                    Select-Object -First 1
         if ($sibling) {
             return _MsixSetVerifiedToolsRoot -Root $sibling.FullName
         }
-        # Or the ancestor itself
-        if (Test-Path "$cursor\Tools\MakeAppx.exe") {
-            return _MsixSetVerifiedToolsRoot -Root $cursor
+        if (Test-Path "$parent\Tools\MakeAppx.exe") {
+            return _MsixSetVerifiedToolsRoot -Root $parent
         }
     }
 
-    # 4) Windows SDK default paths — pick the highest-versioned bin dir
+    # 4) Windows SDK default paths — pick the highest-versioned bin dir.
+    #
+    #    This is a FALLBACK, not the intended workflow. It resolves to a FLAT
+    #    root (makeappx.exe directly, no Tools\ subfolder), which every call site
+    #    used to mishandle - so a machine with the SDK installed but no module
+    #    toolchain failed with "Executable not found: ...\x64\Tools\MakeAppx.exe".
+    #    _MsixToolPath now resolves both layouts (#151), but the toolchain version
+    #    then depends on whatever SDK that machine happens to have. Warn, so an
+    #    operator who wants reproducible builds knows to pin one.
     foreach ($arch in @('x64','x86')) {
         $kitBin = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
         if (Test-Path -LiteralPath $kitBin) {
@@ -140,11 +193,15 @@ function Get-MsixToolsRoot {
                          Where-Object { Test-Path "$($_.FullName)\$arch\makeappx.exe" } |
                          Sort-Object Name -Descending |
                          Select-Object -First 1
+            $sdkRoot = $null
             if ($candidate) {
-                return _MsixSetVerifiedToolsRoot -Root "$($candidate.FullName)\$arch"
+                $sdkRoot = "$($candidate.FullName)\$arch"
+            } elseif (Test-Path "$kitBin\$arch\makeappx.exe") {
+                $sdkRoot = "$kitBin\$arch"
             }
-            if (Test-Path "$kitBin\$arch\makeappx.exe") {
-                return _MsixSetVerifiedToolsRoot -Root "$kitBin\$arch"
+            if ($sdkRoot) {
+                Write-MsixLog -Level Warning -Message "Using the Windows SDK already installed on this machine ($sdkRoot). The toolchain version is therefore whatever this host has, which is not reproducible across build agents. Run Initialize-MsixToolchain (or Install-MsixSdkTool) to pin a downloaded toolchain under the module."
+                return _MsixSetVerifiedToolsRoot -Root $sdkRoot
             }
         }
     }
@@ -203,8 +260,16 @@ function Set-MsixToolsRoot {
         [Parameter(Mandatory)]
         [string]$Path
     )
-    if (-not (Test-Path "$Path\Tools\MakeAppx.exe")) {
-        throw "MakeAppx.exe not found under '$Path\Tools\'. Verify the path."
+    # Accept BOTH layouts, matching _MsixToolPath: <Path>\Tools\MakeAppx.exe
+    # (vendored / Install-MsixSdkTool) and <Path>\makeappx.exe (a system Windows
+    # SDK bin\<ver>\<arch> root). Requiring only the first rejected a perfectly
+    # usable SDK root (#151).
+    $probe = @(
+        (Join-Path -Path $Path -ChildPath 'Tools\MakeAppx.exe'),
+        (Join-Path -Path $Path -ChildPath 'MakeAppx.exe')
+    ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    if (-not $probe) {
+        throw "MakeAppx.exe not found under '$Path' (checked '$Path\Tools\' and the root). Verify the path."
     }
     # Authenticode-verify (fail-closed) before pinning — same gate as the
     # auto-discovery paths (#54).
@@ -249,7 +314,13 @@ function New-MsixWorkspace {
     )
     $id   = [guid]::NewGuid().ToString('N').Substring(0, 8)
     $path = Join-Path -Path $env:TEMP -ChildPath "msix-$PackageName-$id"
-    New-Item -ItemType Directory -Path $path -Force | Out-Null
+    # -WhatIf:$false is REQUIRED. The workspace is private scratch, not a
+    # user-visible side effect, but New-Item honours the $WhatIfPreference
+    # inherited through the module scope chain. Without this, running any
+    # mutator with -WhatIf skips the create, the Get-Item below fails, and this
+    # function returns an EMPTY STRING - which broke -WhatIf across all ~46
+    # _MsixMutateManifest call sites plus _MsixMutatePackage (issue #145).
+    New-Item -ItemType Directory -Path $path -Force -WhatIf:$false | Out-Null
     # Return the LONG-form path. $env:TEMP can carry an 8.3 short segment
     # (SANDER~1 vs SanderdeWit) while Get-ChildItem returns long-form
     # FullNames; any relative-path Substring against a short-form workspace
@@ -258,6 +329,128 @@ function New-MsixWorkspace {
     $path = (Get-Item -LiteralPath $path).FullName
     Write-MsixLog -Level Debug -Message "Workspace created: $path"
     return $path
+}
+
+function _MsixToolPath {
+    <#
+    .SYNOPSIS
+        Resolves an SDK tool (MakeAppx / signtool / makepri) inside a tools root,
+        supporting BOTH layouts Get-MsixToolsRoot can return.
+
+    .DESCRIPTION
+        Get-MsixToolsRoot resolves a root from five sources. Two layouts result:
+
+          <root>\Tools\MakeAppx.exe   vendored / Install-MsixSdkTool
+          <root>\makeappx.exe         a system Windows SDK bin\<ver>\<arch>
+
+        Every call site used to hardcode the first form, so search path 4 (the
+        installed Windows SDK) returned a root the module could then never use -
+        "Executable not found: ...\bin\10.0.26100.0\x64\Tools\MakeAppx.exe". The
+        test-suite tooling gate happened to require the Tools\ form too, so on a
+        system-SDK host every integration test skipped and the defect stayed
+        invisible until the gate was corrected (#151).
+
+        When neither layout has the file, the Tools\ form is returned so callers
+        still produce the familiar "Executable not found" message.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [string]$Root
+    )
+    if (-not $Root) { $Root = Get-MsixToolsRoot }
+    $nested = Join-Path -Path $Root -ChildPath (Join-Path -Path 'Tools' -ChildPath $Name)
+    if (Test-Path -LiteralPath $nested -PathType Leaf) { return $nested }
+    $flat = Join-Path -Path $Root -ChildPath $Name
+    if (Test-Path -LiteralPath $flat -PathType Leaf) { return $flat }
+    return $nested
+}
+
+function _MsixWriteUtf8 {
+    <#
+    .SYNOPSIS
+        Writes a text file as UTF-8 with a DETERMINISTIC byte-order mark,
+        identical under Windows PowerShell 5.1 and PowerShell 7.
+
+    .DESCRIPTION
+        `-Encoding utf8` does not mean the same thing on both editions:
+        5.1 writes UTF-8 **with** a BOM, 7 writes it **without** (issue #146).
+        That divergence is silent and only shows up downstream:
+
+          - The Trusted Signing metadata JSON is parsed by
+            Azure.CodeSigning.Dlib.dll via `signtool /dmdf`. System.Text.Json
+            rejects a leading BOM outright ("'0xEF' is an invalid start of a
+            value"), so packages signed from 5.1 failed on the module's DEFAULT
+            signing backend while 7 worked.
+          - PSF `config.json` is parsed by the PSF runtime at every app launch.
+            `Test-MsixPsfConfig` reads it with `Get-Content -Raw`, which strips
+            the BOM on 5.1, so the module's own validator could not see the
+            defect and it shipped inside customer packages.
+
+        Rule of thumb for -WithBom:
+          - OFF for anything a non-PowerShell parser consumes (JSON, XML, HTML).
+          - ON  for generated .ps1 files, where Windows PowerShell 5.1 otherwise
+            reads a BOM-less UTF-8 file as CP-1252 and mis-parses non-ASCII
+            (the hazard documented in CLAUDE.md).
+
+    .PARAMETER WithBom
+        Emit the UTF-8 BOM (EF BB BF). Default is no BOM.
+
+    .PARAMETER NoNewline
+        Do not append a trailing newline. Set-Content/Out-File add one by
+        default; this keeps that behaviour unless suppressed.
+    #>
+    [OutputType([void])]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][AllowEmptyString()][AllowNull()][string]$Text,
+        [switch]$WithBom,
+        [switch]$NoNewline
+    )
+    $body = if ($null -eq $Text) { '' } else { $Text }
+    if (-not $NoNewline -and -not $body.EndsWith("`n")) { $body += [Environment]::NewLine }
+    [IO.File]::WriteAllText($Path, $body, [Text.UTF8Encoding]::new([bool]$WithBom))
+}
+
+function _MsixPreserveUnsigned {
+    <#
+    .SYNOPSIS
+        Copies a scratch package to -UnsignedOutputPath after a signing failure,
+        and reports honestly whether that actually succeeded.
+
+    .DESCRIPTION
+        Every repack site used to preserve the artifact like this:
+
+            Copy-Item -LiteralPath $scratch -Destination $dest -Force -ErrorAction SilentlyContinue
+            Write-MsixLog -Level Warning -Message "... Unsigned package preserved at: $dest"
+
+        with the enclosing finally deleting $scratch immediately after. If the
+        copy failed - destination directory missing, volume full, file locked -
+        the error was fully suppressed, the log still claimed the package had
+        been preserved, and the only copy was then destroyed. The operator
+        followed the log to an empty path and the build was unrecoverable: the
+        exact inverse of what the parameter promises (issue #145).
+
+        This helper creates the destination directory when needed, copies with
+        -ErrorAction Stop, and logs at Error - not Warning - when preservation
+        genuinely failed.
+    #>
+    [OutputType([void])]
+    param(
+        [Parameter(Mandatory)][string]$Scratch,
+        [Parameter(Mandatory)][string]$Destination
+    )
+    try {
+        $dir = Split-Path -Parent -Path $Destination
+        if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force -WhatIf:$false -ErrorAction Stop | Out-Null
+        }
+        Copy-Item -LiteralPath $Scratch -Destination $Destination -Force -ErrorAction Stop
+        Write-MsixLog -Level Warning -Message "Signing failed. Unsigned package preserved at: $Destination"
+    } catch {
+        Write-MsixLog -Level Error -Message "Signing failed AND the unsigned package could NOT be preserved at '$Destination': $($_.Exception.Message). The scratch build is being discarded; re-run after fixing the destination."
+    }
 }
 
 function Invoke-MsixProcess {
@@ -287,14 +480,14 @@ function Invoke-MsixProcess {
 
     .EXAMPLE
         # Preferred: array form (each argument quoted correctly)
-        Invoke-MsixProcess -FilePath "$root\Tools\MakeAppx.exe" -ArgumentList @(
+        Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $root) -ArgumentList @(
             'unpack', '/p', $packagePath, '/d', $workspace, '/o'
         )
 
     .EXAMPLE
         # DEPRECATED legacy single-string form — emits a warning. New callers
         # MUST use -ArgumentList; this is retained only for older scripts.
-        Invoke-MsixProcess -FilePath "$root\Tools\MakeAppx.exe" `
+        Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $root) `
             -Arguments "unpack /p `"$packagePath`" /d `"$workspace`" /o"
     #>
     [CmdletBinding(DefaultParameterSetName = 'ArgumentList')]
@@ -329,7 +522,26 @@ function Invoke-MsixProcess {
         }
     }
 
-    Write-MsixLog -Level Debug -Message "Exec: $FilePath $([string]::Join(' ', ($ArgumentList | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } })))"
+    # SECURITY (issue #148): redact the value FOLLOWING a secret-bearing switch
+    # before logging. The SignTool-PFX backend passes '/p', <plaintext password>
+    # in this vector; Write-MsixLog also appends to the file configured by
+    # Set-MsixLogFile, so the documented troubleshooting flow
+    # (Set-MsixLogLevel Debug + Set-MsixLogFile) wrote the code-signing password
+    # to disk in clear text, where CI artifact upload and log shippers collect it.
+    $secretSwitches = @('/p', '-p', '--password', '/password', '-Password')
+    $redacted = New-Object System.Collections.Generic.List[string]
+    $hideNext = $false
+    foreach ($a in $ArgumentList) {
+        $s = [string]$a
+        if ($hideNext) {
+            $redacted.Add('***REDACTED***')
+            $hideNext = $false
+            continue
+        }
+        if ($secretSwitches -contains $s) { $hideNext = $true }
+        $redacted.Add($(if ($s -match '\s') { '"' + $s + '"' } else { $s }))
+    }
+    Write-MsixLog -Level Debug -Message "Exec: $FilePath $([string]::Join(' ', $redacted))"
 
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName               = $FilePath

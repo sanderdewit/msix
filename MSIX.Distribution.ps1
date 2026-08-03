@@ -305,7 +305,7 @@ function New-MsixModificationPackage {
         $manifestPath = Join-Path -Path $staging -ChildPath 'AppxManifest.xml'
         [IO.File]::WriteAllText($manifestPath, $manifestXml, [Text.UTF8Encoding]::new($false))
 
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $OutputPath, '/d', $staging, '/o')
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('pack', '/p', $OutputPath, '/d', $staging, '/o')
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack (modification package)'
 
         if (-not $SkipSigning) {
@@ -358,7 +358,7 @@ function Expand-MsixBundle {
     if (-not $PSCmdlet.ShouldProcess($BundlePath, "Unbundle to $OutputFolder")) { return }
 
     $toolsRoot = Get-MsixToolsRoot
-    $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unbundle', '/p', $BundlePath, '/d', $OutputFolder, '/o')
+    $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('unbundle', '/p', $BundlePath, '/d', $OutputFolder, '/o')
     Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unbundle'
 
     $inner = @(Get-ChildItem -LiteralPath $OutputFolder -File |
@@ -425,7 +425,7 @@ function New-MsixBundle {
     $toolsRoot = Get-MsixToolsRoot
     $bundleArgs = @('bundle', '/d', $SourceFolder, '/p', $OutputPath, '/o')
     if ($BundleVersion) { $bundleArgs += @('/bv', $BundleVersion) }
-    $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList $bundleArgs
+    $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList $bundleArgs
     Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx bundle'
 
     if (-not $SkipSigning) {
@@ -714,7 +714,7 @@ function New-MsixFrameworkPackage {
         $manifestPath = Join-Path -Path $staging -ChildPath 'AppxManifest.xml'
         [IO.File]::WriteAllText($manifestPath, $manifestXml, [Text.UTF8Encoding]::new($false))
 
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack', '/p', $OutputPath, '/d', $staging, '/o')
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('pack', '/p', $OutputPath, '/d', $staging, '/o')
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack (framework package)'
 
         if (-not $SkipSigning) {
@@ -1031,7 +1031,7 @@ function ConvertTo-MsixModificationPackage {
     $content = Join-Path -Path $env:TEMP -ChildPath ("msix-diff-c-{0}" -f ([guid]::NewGuid().ToString('N').Substring(0, 8)))
     try {
         foreach ($pair in @(@($MainPackagePath, $wsMain), @($CustomizedPackagePath, $wsCust))) {
-            $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', (Resolve-Path -LiteralPath $pair[0]).Path, '/d', $pair[1], '/o')
+            $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('unpack', '/p', (Resolve-Path -LiteralPath $pair[0]).Path, '/d', $pair[1], '/o')
             Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack (diff)'
         }
         New-Item -ItemType Directory -Path $content -Force | Out-Null

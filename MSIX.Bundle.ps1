@@ -88,7 +88,7 @@ function Expand-MsixBundle {
     if (-not (Test-Path -LiteralPath $Destination)) {
         New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     }
-    $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unbundle', '/p', (Resolve-Path -LiteralPath $BundlePath).Path, '/d', $Destination, '/o')
+    $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('unbundle', '/p', (Resolve-Path -LiteralPath $BundlePath).Path, '/d', $Destination, '/o')
     Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unbundle'
 
     [pscustomobject]@{
@@ -176,7 +176,7 @@ function New-MsixBundle {
 
         $bundleArgs = @('bundle', '/d', $dir, '/p', $OutputPath, '/o')
         if ($BundleVersion) { $bundleArgs += @('/bv', $BundleVersion) }
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList $bundleArgs
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList $bundleArgs
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx bundle'
 
         if (-not $SkipSigning) {
@@ -330,7 +330,7 @@ function Invoke-MsixBundleOperation {
 
         # Rebundle to scratch, sign, then atomically replace the target.
         $toolsRoot = Get-MsixToolsRoot
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('bundle', '/d', $stage, '/p', $scratch, '/o')
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('bundle', '/d', $stage, '/p', $scratch, '/o')
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx bundle (rebundle)'
 
         if (-not $SkipSigning) {

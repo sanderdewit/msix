@@ -191,7 +191,7 @@
     }
 
     $toolsRoot = Get-MsixToolsRoot
-    $signtool  = Join-Path -Path $toolsRoot -ChildPath 'Tools\signtool.exe'
+    $signtool  = _MsixToolPath -Name 'signtool.exe' -Root $toolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath
 
     Write-MsixLog -Level Info -Message "Signing: $($fileinfo.Name) (backend: $effectiveSigner)"
@@ -257,7 +257,10 @@
             } | ConvertTo-Json -Compress
 
             try {
-                Set-Content -LiteralPath $metadataPath -Value $metadata -NoNewline -Encoding utf8
+                # No BOM: signtool /dmdf hands this to Azure.CodeSigning.Dlib.dll, whose
+        # System.Text.Json parser rejects a leading BOM. '-Encoding utf8' wrote
+        # one on Windows PowerShell 5.1 (issue #146).
+        _MsixWriteUtf8 -Path $metadataPath -Text $metadata -NoNewline
 
                 $sigArgs = @('sign', '/v', '/tr', $TimestampUrl, '/td', 'sha256', '/fd', 'sha256',
                              '/dlib', $resolvedDlib, '/dmdf', $metadataPath, $fileinfo.FullName)
@@ -402,6 +405,38 @@
                         Write-MsixLog -Level Warning -Message "Could not remove the temporary signing certificate ($imported) from CurrentUser\My: $($_.Exception.Message)"
                     } finally {
                         $store2.Close()
+                    }
+
+                    # SECURITY (issue #148): PersistKeySet above is REQUIRED (a
+                    # separate signtool.exe process must reach the private key),
+                    # but it also writes the key to the user's CNG/CAPI key store
+                    # and suppresses deletion on handle release. Removing the
+                    # certificate context does NOT remove the key container, so
+                    # every run used to deposit a copy of the organisation's
+                    # code-signing private key in the roaming profile - usable by
+                    # any later process running as that user, and extractable
+                    # because the key is also flagged Exportable. Delete it
+                    # explicitly here.
+                    try {
+                        if ($cert -and $cert.HasPrivateKey) {
+                            $key = $cert.PrivateKey
+                            if ($key -and $key.Key -and $key.Key.GetType().Name -eq 'CngKey') {
+                                $key.Key.Delete()
+                            } elseif ($key -and $key.PSObject.Properties['CspKeyContainerInfo']) {
+                                # Legacy CAPI: re-open with PersistKeyInCsp = $false
+                                # so releasing the provider deletes the container.
+                                $csp = [System.Security.Cryptography.CspParameters]::new(
+                                    $key.CspKeyContainerInfo.ProviderType,
+                                    $key.CspKeyContainerInfo.ProviderName,
+                                    $key.CspKeyContainerInfo.KeyContainerName)
+                                $csp.Flags = [System.Security.Cryptography.CspProviderFlags]::UseExistingKey
+                                $rsa = [System.Security.Cryptography.RSACryptoServiceProvider]::new($csp)
+                                $rsa.PersistKeyInCsp = $false
+                                $rsa.Clear()
+                            }
+                        }
+                    } catch {
+                        Write-MsixLog -Level Warning -Message "Could not delete the temporary private-key container for $imported. A copy of the signing key may remain in this user's key store: $($_.Exception.Message)"
                     }
                 }
                 if ($cert) { $cert.Dispose() }

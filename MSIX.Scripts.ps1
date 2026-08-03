@@ -103,7 +103,12 @@ function _MsixRenderTemplate {
         [hashtable]$Parameters
     )
     if (-not (Test-Path -LiteralPath $TemplatePath)) { throw "Template not found: $TemplatePath" }
-    $text = Get-Content -LiteralPath $TemplatePath -Raw
+    # Read as UTF-8 explicitly. Get-Content with no -Encoding falls back to the
+    # ANSI code page on Windows PowerShell 5.1, and the bundled .tmpl files are
+    # BOM-less UTF-8 containing non-ASCII - so 5.1 mis-decoded them as CP-1252
+    # and wrote mojibake into generated, code-signed customer scripts. .tmpl is
+    # outside the repo's BOM rule and PSSA's check, so it slipped through (#146).
+    $text = [IO.File]::ReadAllText($TemplatePath, [Text.UTF8Encoding]::new($false))
 
     # Find every <#PARAM:Name#> in the template, replace from $Parameters,
     # complain about anything left unsubstituted.
@@ -209,7 +214,10 @@ function New-MsixStandardScript {
     if ($PSCmdlet.ShouldProcess($OutputPath, "Generate $Name from template")) {
         $dir = Split-Path -Path $OutputPath -Parent
         if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
-        Set-Content -LiteralPath $OutputPath -Value $content -Encoding utf8
+        # BOM: this is a generated .ps1 that ships inside customer packages and
+        # is code-signed. Windows PowerShell 5.1 reads a BOM-less UTF-8 file as
+        # CP-1252, so non-ASCII content would be corrupted (issue #146).
+        _MsixWriteUtf8 -Path $OutputPath -Text $content -WithBom
         Write-MsixLog -Level Info -Message "Generated $Name -> $OutputPath"
     }
 
@@ -266,11 +274,24 @@ function Set-MsixScriptSignature {
     if (-not (Test-Path -LiteralPath $ScriptPath)) { throw "Script not found: $ScriptPath" }
     if (-not (Test-Path -LiteralPath $Pfx))        { throw "PFX not found: $Pfx" }
 
-    $cert = Get-PfxCertificate -FilePath $Pfx -Password $PfxPassword -ErrorAction Stop
-
-    $sig = Set-AuthenticodeSignature -FilePath $ScriptPath -Certificate $cert `
-                                     -TimestampServer $TimestampUrl `
-                                     -HashAlgorithm SHA256 -ErrorAction Stop
+    # Construct the certificate directly instead of Get-PfxCertificate -Password:
+    # that parameter was added in PowerShell 6 and does NOT exist on Windows
+    # PowerShell 5.1, where it threw "A parameter cannot be found that matches
+    # parameter name 'Password'" and made this function - and
+    # Add-MsixStandardScript -Pfx, which calls it - unusable (issue #146).
+    # The SecureString is never converted to plaintext; the X509 constructor
+    # takes it directly. UserKeySet keeps the key out of the machine store.
+    $pfxPath = (Resolve-Path -LiteralPath $Pfx).ProviderPath
+    $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 `
+                -ArgumentList $pfxPath, $PfxPassword,
+                    ([System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::UserKeySet)
+    try {
+        $sig = Set-AuthenticodeSignature -FilePath $ScriptPath -Certificate $cert `
+                                         -TimestampServer $TimestampUrl `
+                                         -HashAlgorithm SHA256 -ErrorAction Stop
+    } finally {
+        if ($cert) { $cert.Dispose() }
+    }
     if ($sig.Status -ne 'Valid') {
         Write-MsixLog -Level Warning -Message "Script signature status: $($sig.Status) ($($sig.StatusMessage))"
     } else {

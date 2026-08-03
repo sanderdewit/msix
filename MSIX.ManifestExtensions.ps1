@@ -78,19 +78,32 @@ function _MsixMutateManifest {
     $fileinfo  = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
     $workspace = New-MsixWorkspace -PackageName $fileinfo.BaseName
 
-    $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-    Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
+    # LEAK GUARD (issue #150). The try/finally that removes the workspace starts
+    # only after the pack step below, leaving these six throwing operations
+    # outside it - most importantly Invoke-MsixManifestTransform, which runs the
+    # caller's mutate block and throws on ordinary input errors like an unknown
+    # -AppId. Every such failure abandoned a fully unpacked package in %TEMP%.
+    # This helper backs ~46 mutators, making it the module's highest-frequency
+    # leak: 1,077 stale msix-* directories were found on one ordinary dev
+    # machine, the oldest ~3 months old. Clean up and rethrow.
+    try {
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
-    $null = Test-MsixManifest -Path "$workspace\AppxManifest.xml"
-    [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
+        $null = Test-MsixManifest -Path "$workspace\AppxManifest.xml"
+        [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
 
-    $manifest = Invoke-MsixManifestTransform -Manifest $manifest -Transform $Mutate
+        $manifest = Invoke-MsixManifestTransform -Manifest $manifest -Transform $Mutate
 
-    Save-MsixManifest -Manifest $manifest -Path "$workspace\AppxManifest.xml"
+        Save-MsixManifest -Manifest $manifest -Path "$workspace\AppxManifest.xml"
 
-    if ($SaveManifestTo) {
-        Copy-Item -Path "$workspace\AppxManifest.xml" -Destination $SaveManifestTo -Force
-        Write-MsixLog -Level Info -Message "Debug manifest saved to: $SaveManifestTo"
+        if ($SaveManifestTo) {
+            Copy-Item -Path "$workspace\AppxManifest.xml" -Destination $SaveManifestTo -Force
+            Write-MsixLog -Level Info -Message "Debug manifest saved to: $SaveManifestTo"
+        }
+    } catch {
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        throw
     }
 
     $target = if ($OutputPath) { $OutputPath } else { $fileinfo.FullName }
@@ -101,7 +114,7 @@ function _MsixMutateManifest {
     $signSucceeded = $false
     try {
         Write-MsixLog -Level Info -Message "$Activity -> $target"
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('pack','/p',$scratch,'/d',$workspace,'/o')
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('pack','/p',$scratch,'/d',$workspace,'/o')
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx pack'
         $packSucceeded = $true
 
@@ -696,11 +709,15 @@ function Add-MsixLoaderSearchPathOverride {
         Add-MsixManifestNamespace -Manifest $M -Prefix 'uap6'
         Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 17134
 
-        $app    = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
-        $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
+        # PACKAGE-level, not Application-level. MakeAppx rejects the other
+        # placement outright: "The 'windows.loaderSearchPathOverride' extension
+        # should be declared under <Package> extensions." The function had been
+        # moved to Application-level at some point and, with no behavioural test
+        # to pack the result, the breakage was invisible (issues #152, #153).
+        $pkgExt = _MsixGetOrCreatePackageExtensions -Manifest $M
 
         # Find an existing override or create one.
-        $existing = $appExt.ChildNodes |
+        $existing = $pkgExt.ChildNodes |
             Where-Object {
                 $_.LocalName -eq 'Extension' -and
                 ($_.SelectSingleNode('*[local-name()="LoaderSearchPathOverride"]'))
@@ -714,21 +731,28 @@ function Add-MsixLoaderSearchPathOverride {
             $ext.SetAttribute('Category', 'windows.loaderSearchPathOverride')
             $body = $M.CreateElement('uap6:LoaderSearchPathOverride', $u6)
             $null = $ext.AppendChild($body)
-            $null = $appExt.AppendChild($ext)
+            $null = $pkgExt.AppendChild($ext)
         }
 
         $u6 = Get-MsixManifestNamespaceUri -Prefix 'uap6'
         foreach ($p in $Paths) {
             # Idempotent: skip if same entry already present
+            # Per UapManifestSchema_v6.xsd (CT_LoaderSearchPathOverride) the
+            # required attribute on uap6:LoaderSearchPathEntry is FolderPath.
+            # The module emitted 'LoaderSearchPath', which MakeAppx rejects
+            # outright ("The attribute 'LoaderSearchPath' ... is not defined in
+            # the DTD/Schema"), so this cmdlet could NEVER produce a packable
+            # package. It had no behavioural test, and the coverage ratchet
+            # certified it from a Get-Command call (issues #152, #153).
             $already = $body.ChildNodes | Where-Object {
-                $_.LocalName -eq 'LoaderSearchPathEntry' -and $_.LoaderSearchPath -eq $p
+                $_.LocalName -eq 'LoaderSearchPathEntry' -and $_.FolderPath -eq $p
             }
             if ($already) {
                 Write-MsixLog -Level Info -Message "LoaderSearchPathEntry already present: $p"
                 continue
             }
             $entry = $M.CreateElement('uap6:LoaderSearchPathEntry', $u6)
-            $entry.SetAttribute('LoaderSearchPath', $p)
+            $entry.SetAttribute('FolderPath', $p)
             $null = $body.AppendChild($entry)
             Write-MsixLog -Level Info -Message "LoaderSearchPathEntry added: $p"
         }
@@ -868,7 +892,12 @@ function Add-MsixFirewallRule {
 
         # Idempotent rule add
         $rule = $M.CreateElement('desktop2:Rule', $d2)
-        $rule.SetAttribute('Direction',   $Direction)
+        # The desktop2 schema requires lowercase 'in'/'out'. PowerShell's
+        # ValidateSet is case-insensitive, so a caller passing -Direction In
+        # bound fine and then produced a manifest MakeAppx rejects with
+        # "The attribute 'Direction' with value 'In' failed to parse".
+        # Normalise instead of passing the caller's casing through (#153).
+        $rule.SetAttribute('Direction',   $Direction.ToLowerInvariant())
         $rule.SetAttribute('IPProtocol',  $Protocol)
         $rule.SetAttribute('Profile',     $FwProfile)
         if ($LocalPort -ne '*') {

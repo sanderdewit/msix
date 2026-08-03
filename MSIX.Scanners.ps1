@@ -52,10 +52,21 @@ function _MsixResolveScanWorkspace {
         return @{ Path = (Get-Item -LiteralPath $WorkspacePath).FullName; Owned = $false }
     }
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item -LiteralPath $PackagePath
+    # Fail loudly on a missing package. Get-Item without -ErrorAction Stop emits a
+    # NON-terminating error and returns $null, so the unpack was skipped and every
+    # scanner returned nothing - producing a report that is indistinguishable from
+    # a genuinely clean package. Same honesty rule as issue #140.
+    $fileinfo  = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
     $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-$Label"
-    $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-    Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
+    # If the unpack throws, the path is never returned and Owned never reaches a
+    # caller, so nothing can clean it up (issue #150).
+    try {
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
+    } catch {
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        throw
+    }
     return @{ Path = $workspace; Owned = $true }
 }
 
@@ -1165,6 +1176,12 @@ function Get-MsixHeuristicFinding {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$PackagePath)
 
+    # A missing/unreadable package must fail, never return an empty finding set:
+    # an empty set reads as "this package is clean". Get-Item without
+    # -ErrorAction Stop emitted a non-terminating error and analysis continued
+    # with nothing, so a typo'd path produced a perfectly clean-looking report.
+    $null = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
+
     $out = [System.Collections.Generic.List[object]]::new()
 
     # HONESTY: many findings below (ShellExt/ShellVerb, services, preview/property/
@@ -1193,7 +1210,7 @@ function Get-MsixHeuristicFinding {
     $fileinfo  = Get-Item -LiteralPath $PackagePath
     $shared    = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-scan"
     try {
-        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $shared, '/o')
+        $r = Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe' -Root $toolsRoot) -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $shared, '/o')
         Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
 
     # Uninstaller artefacts
@@ -1467,7 +1484,11 @@ function Get-MsixHeuristicFinding {
                 Severity       = 'Info'
                 Category       = 'ComServer'
                 Symptom        = "Registry.dat registers $($inprocPkg.Count) in-process COM server(s) with DLLs inside the package. External COM clients cannot activate them without a com:Extension declaration in the manifest."
-                Recommendation = "Add-MsixComServerExtension -PackagePath '$PackagePath' -Servers @($($inprocPkg | ForEach-Object { "@{ Clsid='$(_MsixEscapeSingleQuote $_.Clsid)'; VfsDllPath='$(_MsixEscapeSingleQuote $_.VfsDllPath)'; ThreadingModel='$(_MsixEscapeSingleQuote $_.ThreadingModel)' }" } | Select-Object -First 2 | Join-String -Separator ', '))"
+                # -join, NOT Join-String: Join-String is PS6+ and does not exist
+                # on Windows PowerShell 5.1. It threw CommandNotFoundException,
+                # which this block's catch converted into a generic ScannerError -
+                # silently replacing the real ComServer finding on 5.1 (issue #146).
+                Recommendation = "Add-MsixComServerExtension -PackagePath '$PackagePath' -Servers @($((@($inprocPkg | ForEach-Object { "@{ Clsid='$(_MsixEscapeSingleQuote $_.Clsid)'; VfsDllPath='$(_MsixEscapeSingleQuote $_.VfsDllPath)'; ThreadingModel='$(_MsixEscapeSingleQuote $_.ThreadingModel)' }" }) | Select-Object -First 2) -join ', '))"
                 Evidence       = ($inprocPkg | ForEach-Object { "$($_.Clsid) → $($_.VfsDllPath)" }) -join '; '
                 AppId          = $null
                 ComEntries     = $inprocPkg

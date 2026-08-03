@@ -38,26 +38,56 @@ Describe 'Coverage map: every mutator is exercised by a test' -Tag 'Meta' {
             'Update-MsixDebugView'
             'Update-MsixProcMon'
             'Update-MsixPsfBinary'
+            # Added in #152: the AST-based detector below showed these two were
+            # only ever "covered" by a Get-Command existence check. They are the
+            # same network-updater class as the four above - their whole job is
+            # downloading toolchain binaries - so they belong here rather than in
+            # the debt list. Manual coverage: TEST-PLAN.md Scenario 12.
+            'Update-MsixMgr'
+            'Update-MsixSdkTool'
         )
 
         $psd1     = Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')
         $exported = (Import-PowerShellDataFile -Path $psd1).FunctionsToExport
         $script:Mutators = @($exported | Where-Object { $_ -match '^(Add|Remove|Set|Update)-Msix' })
 
-        # Concatenate every test file except this one (so the allowlist's own
-        # mentions don't count as coverage).
+        # AST-based invocation detection (issue #152).
+        #
+        # This ratchet used to define "invoked" as the regex
+        #     [regex]::Escape($Name) + '\s+[-$@]'
+        # over the concatenated test sources. That matched things which are not
+        # invocations at all: `Get-Command Add-MsixFoo -Module MSIX`, and even
+        # `Context`/`It` TITLE strings. Eight mutators were certified as covered
+        # on exactly that basis while never being called, so the debt list read
+        # empty while 12 mutators were genuinely uninvoked - the ratchet was
+        # holding a number that was not real.
+        #
+        # Parsing each test file and collecting real CommandAst command names
+        # cannot be fooled by a string, a comment, or an argument to Get-Command.
         $self  = $MyInvocation.MyCommand.Path
         $files = Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.Tests.ps1' |
             Where-Object { $_.FullName -ne $self }
-        $script:TestBlob = ($files | ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join "`n"
+
+        $invoked = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        foreach ($file in $files) {
+            $errors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+                       $file.FullName, [ref]$null, [ref]$errors)
+            if (-not $ast) { continue }
+            foreach ($call in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+                $cmdName = $call.GetCommandName()
+                if (-not $cmdName) { continue }
+                # An MSIX cmdlet passed as an ARGUMENT (Get-Command Add-MsixFoo,
+                # Should -Invoke Add-MsixFoo, Mock Add-MsixFoo) is not a call to
+                # it. Only the command position counts.
+                [void]$invoked.Add($cmdName)
+            }
+        }
+        $script:InvokedCommands = $invoked
 
         function script:Test-MsixInvoked {
             param([string]$Name)
-            # "Invoked" = cmdlet name followed by whitespace and a parameter (-),
-            # a variable arg ($) or a splat (@). A quoted mention in a -ForEach
-            # data row ('Add-MsixFoo') does NOT match.
-            $rx = [regex]::Escape($Name) + '\s+[-$@]'
-            return ($script:TestBlob -match $rx)
+            return $script:InvokedCommands.Contains($Name)
         }
     }
 

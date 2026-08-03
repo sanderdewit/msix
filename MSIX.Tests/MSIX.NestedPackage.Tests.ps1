@@ -94,10 +94,10 @@ Describe 'Import-MsixSparseShellExtension handles a real sparse nested package (
 
         # Place the inner .msix inside the outer package payload.
         $withNested = Join-Path $script:Dir 'outer-nested.msix'
-        & (Get-Module MSIX) { param($p, $d) Invoke-MsixProcess -FilePath (Join-Path (Get-MsixToolsRoot) 'Tools\MakeAppx.exe') -ArgumentList @('unpack', '/p', $p, '/d', $d, '/o') | Out-Null } $outer.PackagePath (Join-Path $script:Dir 'stage')
+        & (Get-Module MSIX) { param($p, $d) Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe') -ArgumentList @('unpack', '/p', $p, '/d', $d, '/o') | Out-Null } $outer.PackagePath (Join-Path $script:Dir 'stage')
         $ctxDir = Join-Path $script:Dir 'stage\VFS\ProgramFilesX64\App\contextMenu'
         Copy-Item -LiteralPath $innerMsix -Destination (Join-Path $ctxDir 'Nested.msix') -Force
-        & (Get-Module MSIX) { param($s, $o) Invoke-MsixProcess -FilePath (Join-Path (Get-MsixToolsRoot) 'Tools\MakeAppx.exe') -ArgumentList @('pack', '/p', $o, '/d', $s, '/o') } (Join-Path $script:Dir 'stage') $withNested | Out-Null
+        & (Get-Module MSIX) { param($s, $o) Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe') -ArgumentList @('pack', '/p', $o, '/d', $s, '/o') } (Join-Path $script:Dir 'stage') $withNested | Out-Null
 
         $out = Join-Path $script:Dir 'merged.msix'
         # Bug 1: this used to throw on the inner unpack (MakeAppx validation).

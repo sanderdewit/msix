@@ -286,7 +286,10 @@ Describe 'Configuration setters from the coverage allowlist' -Tag 'MutatorCovera
             # Setting requires MakeAppx under <root>\Tools — validation is part
             # of the contract, so assert both sides.
             $orig = Get-MsixToolsRoot
-            $origValid = $orig -and (Test-Path -LiteralPath (Join-Path -Path $orig -ChildPath 'Tools\MakeAppx.exe'))
+            # Both root layouts, matching _MsixToolPath (#151).
+            $origValid = $orig -and (@('Tools\MakeAppx.exe', 'MakeAppx.exe') |
+                Where-Object { Test-Path -LiteralPath (Join-Path -Path $orig -ChildPath $_) } |
+                Select-Object -First 1)
             if ($origValid) {
                 # Positive side only where real tooling exists (not on the
                 # tool-less CI Pester job — the Integration job covers hosts

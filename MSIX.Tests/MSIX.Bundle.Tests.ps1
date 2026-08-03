@@ -94,7 +94,11 @@ Describe 'resources.pri regeneration (issue #124)' -Tag 'Integration' {
         $script:MakePriAvailable = $false
         if ($script:ToolingAvailable) {
             $tr = & (Get-Module MSIX) { Get-MsixToolsRoot }
-            $script:MakePriAvailable = [bool](Test-Path -LiteralPath (Join-Path -Path $tr -ChildPath 'Tools\MakePri.exe'))
+            # Both root layouts: <root>\Tools\MakePri.exe (vendored) and <root>\makepri.exe
+        # (a system Windows SDK bin\<ver>\<arch> root). See _MsixToolPath (#151).
+        $script:MakePriAvailable = [bool](@('Tools\MakePri.exe', 'MakePri.exe') |
+            Where-Object { Test-Path -LiteralPath (Join-Path -Path $tr -ChildPath $_) } |
+            Select-Object -First 1)
         }
         $script:Dir = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "msix-pri-$([guid]::NewGuid().ToString('N').Substring(0,8))"
         New-Item -ItemType Directory -Path $script:Dir -Force | Out-Null

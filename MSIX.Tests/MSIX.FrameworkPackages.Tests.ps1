@@ -129,7 +129,7 @@ Describe 'Modification packages: registry + diff (issue #131)' -Tag 'Integration
 
         $ws = Join-Path $script:Dir 'verify'
         $null = & (Get-Module MSIX) { param($p, $o)
-            Invoke-MsixProcess -FilePath (Join-Path (Get-MsixToolsRoot) 'Tools\MakeAppx.exe') -ArgumentList @('unpack', '/p', $p, '/d', $o, '/o')
+            Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe') -ArgumentList @('unpack', '/p', $p, '/d', $o, '/o')
         } $mod.PackagePath $ws
         Test-Path -LiteralPath (Join-Path $ws 'Registry.dat') | Should -BeTrue
         Test-Path -LiteralPath (Join-Path $ws 'User.dat')     | Should -BeTrue
@@ -149,14 +149,14 @@ Describe 'Modification packages: registry + diff (issue #131)' -Tag 'Integration
         # Build the "customized" copy: unpack, add two files, repack.
         $cw = Join-Path $script:Dir 'custws'
         $null = & (Get-Module MSIX) { param($p, $o)
-            Invoke-MsixProcess -FilePath (Join-Path (Get-MsixToolsRoot) 'Tools\MakeAppx.exe') -ArgumentList @('unpack', '/p', $p, '/d', $o, '/o')
+            Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe') -ArgumentList @('unpack', '/p', $p, '/d', $o, '/o')
         } $fx.PackagePath $cw
         New-Item -ItemType Directory -Path (Join-Path $cw 'VFS\ProgramFilesX64\App\plugins') -Force | Out-Null
         Set-Content -Path (Join-Path $cw 'VFS\ProgramFilesX64\App\plugins\corp.dll') -Value 'plugin'
         Set-Content -Path (Join-Path $cw 'VFS\ProgramFilesX64\App\app.ini') -Value 'customized=true'
         $cust = Join-Path $script:Dir 'customized.msix'
         $null = & (Get-Module MSIX) { param($s, $o)
-            Invoke-MsixProcess -FilePath (Join-Path (Get-MsixToolsRoot) 'Tools\MakeAppx.exe') -ArgumentList @('pack', '/p', $o, '/d', $s, '/o')
+            Invoke-MsixProcess -FilePath (_MsixToolPath -Name 'MakeAppx.exe') -ArgumentList @('pack', '/p', $o, '/d', $s, '/o')
         } $cw $cust
 
         $delta = ConvertTo-MsixModificationPackage -MainPackagePath $fx.PackagePath `

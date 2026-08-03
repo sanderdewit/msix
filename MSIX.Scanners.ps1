@@ -52,7 +52,11 @@ function _MsixResolveScanWorkspace {
         return @{ Path = (Get-Item -LiteralPath $WorkspacePath).FullName; Owned = $false }
     }
     $toolsRoot = Get-MsixToolsRoot
-    $fileinfo  = Get-Item -LiteralPath $PackagePath
+    # Fail loudly on a missing package. Get-Item without -ErrorAction Stop emits a
+    # NON-terminating error and returns $null, so the unpack was skipped and every
+    # scanner returned nothing - producing a report that is indistinguishable from
+    # a genuinely clean package. Same honesty rule as issue #140.
+    $fileinfo  = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
     $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-$Label"
     # If the unpack throws, the path is never returned and Owned never reaches a
     # caller, so nothing can clean it up (issue #150).
@@ -1171,6 +1175,12 @@ function Get-MsixHeuristicFinding {
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$PackagePath)
+
+    # A missing/unreadable package must fail, never return an empty finding set:
+    # an empty set reads as "this package is clean". Get-Item without
+    # -ErrorAction Stop emitted a non-terminating error and analysis continued
+    # with nothing, so a typo'd path produced a perfectly clean-looking report.
+    $null = Get-Item -LiteralPath $PackagePath -ErrorAction Stop
 
     $out = [System.Collections.Generic.List[object]]::new()
 

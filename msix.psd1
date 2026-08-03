@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.73.4'
+    ModuleVersion     = '0.74.0'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, deployment-script templates, heuristic heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -257,43 +257,67 @@
             ProjectUri  = 'https://github.com/sanderdewit/msix'
             LicenseUri  = 'https://github.com/sanderdewit/msix/blob/main/LICENSE.md'
             ReleaseNotes = @'
-## v0.73.4 (diagnostic: surface scanner failures)
+## v0.74.0 (hardening release - data loss, security, PS 5.1)
 
-- Get-MsixHeuristicFinding no longer swallows a failing scanner at Debug level.
-  Each scanner catch now emits a Warning-level ScannerError finding naming the
-  scanner + error, so a report missing a finding category is never mistaken for
-  a clean package (issue #140). Registry-derived scanners defer to the single
-  OfflineRegistryUnavailable finding when offreg.dll is absent (no double-report).
-- The Run-key scanner (offreg-dependent) was previously unwrapped and could
-  abort the whole analysis on a host without offreg.dll; it is now guarded.
-- Fix: the offreg availability probe no longer depends on the newer LoadLibraryW
-  method (which an older MsixOffReg type cached in the session lacks, making a
-  Win11 host with offreg.dll present wrongly report it missing). It now probes
-  via ORCreateHive, which every version of the wrapper exposes.
-- Fix: the manifest-fix block no longer NREs (and drops all manifest-fix
-  findings) on packages with no <Properties> or no package-level <Extensions> -
-  a very common shape.
-- PS 5.1 compatibility (#142): removed the PS7-only ErrorMessage argument from
-  every [ValidatePattern] (added in PS 6.0) - it threw "Property 'ErrorMessage'
-  cannot be found" at parameter binding under Windows PowerShell 5.1, making
-  affected functions (e.g. Add-MsixLegacyContextMenu) unusable on 5.1 despite
-  the declared 5.1 floor. The regex validation is unchanged. A new
-  Windows-PowerShell-5.1 CI lane now guards against regressions.
+Outcome of a full-codebase audit. Several of these could destroy or corrupt an
+operator's package, or hand an attacker control of signing; all shipped in 0.73.x.
 
-## v0.73.3 (Windows container / Server Core support)
+DATA LOSS (#145)
+- Remove-MsixPsf deleted 'config.json' and '*Fixup*.dll' recursively from ANY
+  package, then repacked, signed and moved the result over the operator's
+  original. A PSF-free app shipping its own config.json (Electron/.NET - very
+  common) silently lost it, exit code 0. Now gated on real PSF presence, with
+  precise patterns.
+- Add-MsixVcRuntimeBundle packed and signed directly over the input file, so a
+  signing failure left an unsigned repack where a signed package had been, with
+  no recovery. Now builds to scratch, signs, then moves; gains
+  -UnsignedOutputPath.
+- -WhatIf was broken for all ~46 mutators: New-MsixWorkspace honoured the
+  inherited WhatIfPreference and returned an empty path.
+- -UnsignedOutputPath could destroy the artifact it promised to preserve: the
+  copy used -ErrorAction SilentlyContinue and "preserved" was logged
+  unconditionally, then the scratch was deleted.
 
-- offreg.dll availability is now probed once per session via
-  _MsixTestOffregAvailable. offreg.dll (the Offline Registry API used to parse
-  a package's Registry.dat) is absent from Windows Server Core containers; the
-  OR* P/Invokes previously threw DllNotFoundException that the heuristic
-  aggregator swallowed at Debug level, silently dropping shell-extension /
-  service / uninstall-key findings and their fixes.
-- Get-MsixHeuristicFinding now emits a loud "OfflineRegistryUnavailable"
-  Warning finding when offreg.dll is missing, so a report that omits
-  registry-derived findings is never mistaken for a clean one. On Windows
-  10/11 (offreg.dll present) behaviour is unchanged.
-- If a module-bundled native\offreg.dll is present it is pre-loaded so the OR*
-  imports bind to it.
+SECURITY (#147, #148)
+- Signing-toolchain hijack: only 3 .exe files were Authenticode-verified, but
+  SDK signtool.exe loads wintrust.dll / mssign32.dll / AppxSip.dll from its OWN
+  directory. Every .exe/.dll in the resolved root is now verified.
+- Tool discovery walked up to four parent levels and took the lexically highest
+  match, reaching the user-writable Documents folder for a CurrentUser install.
+  Now one level.
+- The "verifier not loaded" branch trusted the root silently; now fail-closed.
+- The PFX password reached the log file via the Exec: line (and therefore CI
+  artifacts and support bundles). Secret-bearing switches are now redacted.
+- SignerSignEx left the PFX PRIVATE KEY in the user's key store on every run.
+  The key container is now deleted explicitly.
+
+WINDOWS POWERSHELL 5.1 (#146)
+- Join-String (PS6+) silently replaced the real ComServer finding with a
+  scanner error on 5.1.
+- Get-PfxCertificate -Password (PS6+) made Set-MsixScriptSignature and
+  Add-MsixStandardScript -Pfx unusable on 5.1.
+- "-Encoding utf8" means BOM on 5.1 and no BOM on 7. That put a BOM in the
+  Trusted Signing metadata JSON - rejected by System.Text.Json, on the DEFAULT
+  signing backend - and in PSF config.json.
+
+MANIFEST CORRECTNESS (#153)
+- Add-MsixLoaderSearchPathOverride emitted attribute "LoaderSearchPath" (the
+  schema requires "FolderPath") and declared the extension under Application
+  instead of Package, so it could never produce a packable package.
+- Add-MsixFirewallRule passed the caller's casing to a schema that requires
+  lowercase, so -Direction In failed to parse.
+
+RELIABILITY + CI (#150, #151, #152)
+- Fixed the workspace leak behind ~46 mutators (1,077 stale dirs observed).
+- CI now provisions PSF, so the PSF regression guards actually run; provisioning
+  failure is fatal and an all-skip run is red.
+- The coverage ratchet counted Get-Command calls and It titles as coverage;
+  replaced with AST detection, and six never-tested mutators gained real tests.
+
+NEW
+- Import-Module notifies when a newer version is on PSGallery. Silent in CI and
+  non-interactive hosts, cached 24h, hard network timeout, never blocks import.
+  Opt out with MSIX_NO_UPDATE_CHECK=1.
 
 Full history: CHANGELOG.md.
 '@

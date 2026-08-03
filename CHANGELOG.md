@@ -5,6 +5,147 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.74.0 - 2026-08-03 — Hardening: data loss, signing security, PS 5.1
+
+Outcome of a full-codebase audit (security, enterprise stability, PS 5.1
+compatibility, test/CI quality). Everything below shipped in 0.73.x; several
+items could destroy or corrupt an operator's package, or hand a local attacker
+control of what the organisation signs. Filed as issues #145–#153.
+
+### Data loss (#145)
+
+- **`Remove-MsixPsf` destroyed payload in PSF-free packages.** The delete loop
+  ran unconditionally with patterns as generic as `config.json` and
+  `*Fixup*.dll`, recursed over the whole package, and because deletions alone
+  counted as "changed" the result was repacked, signed, and moved over the
+  operator's original — exit code 0. An Electron/.NET app shipping its own
+  `resources\app\config.json` simply lost it. Now gated on real PSF presence
+  (manifest `PsfLauncher` reference or PSF binaries), and the patterns are
+  precise: known/config-declared fixup DLLs, and only the parsed PSF
+  `config.json` — never an application's own file of that name.
+- **`Add-MsixVcRuntimeBundle` packed and signed over the input file.** The only
+  mutator that skipped the scratch pattern, and it had no `-UnsignedOutputPath`.
+  A signing failure (expired cert, unreachable timestamp server) left an
+  unsigned repack where a signed package had been, unrecoverably. Now builds to
+  scratch, signs, then moves atomically; `-UnsignedOutputPath` added.
+- **`-WhatIf` was broken across all ~46 mutators.** `New-MsixWorkspace` used
+  `New-Item`, which honours the `$WhatIfPreference` inherited through the module
+  scope chain, so the directory was never created, `Get-Item` failed, and the
+  function returned an empty string. Created with `-WhatIf:$false` now (the
+  workspace is private scratch, not a user-visible side effect).
+- **`-UnsignedOutputPath` could destroy the artifact it promised to keep.** All
+  four repack sites copied with `-ErrorAction SilentlyContinue`, logged
+  "preserved" unconditionally, and then deleted the scratch in `finally`. A
+  failed copy left the operator following a log line to an empty path. The new
+  `_MsixPreserveUnsigned` creates the destination directory, copies with
+  `-ErrorAction Stop`, and logs at **Error** when preservation actually failed.
+
+### Security (#147, #148)
+
+- **Signing-toolchain hijack.** `_MsixSetVerifiedToolsRoot` verified exactly
+  three `.exe` files, but SDK `signtool.exe` is side-by-side-manifest-bound to
+  load `wintrust.dll` / `mssign32.dll` / `AppxSip.dll` from its **own**
+  directory. An attacker able to write that directory could keep the genuine
+  Microsoft-signed executables (passing the check) and plant a trojaned
+  dependency DLL beside them, executing code inside the process holding the
+  organisation's code-signing key. Every `.exe`/`.dll` in the resolved root is
+  now verified, and a root with no verifiable payload is refused.
+- **Tool discovery reached a user-writable directory.** The parent-walk went up
+  four levels and selected the lexically highest sibling containing
+  `Tools\MakeAppx.exe`; for a `-Scope CurrentUser` install that reaches
+  `~\Documents`, so `~\Documents\zzz\Tools\` won on every session. Now one level.
+- **Fail-open verification branch.** If `_MsixVerifyAuthenticode` was not in
+  scope the root was cached and trusted with no warning at all. Now throws.
+- **The bypass notice was silenceable.** `MSIX_SKIP_TOOL_VERIFICATION` announced
+  itself only through `Write-MsixLog` (i.e. `Write-Information`), invisible to
+  `-WarningVariable` and dropped under `Set-MsixLogLevel -Level Error`. It now
+  also goes to the real Warning stream.
+- **The PFX password was written to the log file.** `Invoke-MsixProcess` logged
+  the full argument vector at Debug, and `Write-MsixLog` appends to the file set
+  by `Set-MsixLogFile` — so the module's own documented troubleshooting flow
+  wrote the code-signing password to disk in clear text, where CI artifact
+  upload and log shippers collect it. The value following a secret-bearing
+  switch (`/p`, `-p`, `--password`) is now redacted.
+- **`SignerSignEx` left the PFX private key on disk.** `PersistKeySet` is
+  required (a separate `signtool.exe` process must reach the key), but removing
+  the certificate context does not remove the key container — so every run
+  deposited a copy of the organisation's signing key in the user's roaming
+  profile, extractable because the key is also `Exportable`. The container is now
+  deleted explicitly (CNG and legacy CAPI paths); verified that the key-file
+  count returns to baseline.
+
+### Windows PowerShell 5.1 (#146)
+
+The module declares `PowerShellVersion = '5.1'`, but every CI job ran under
+`pwsh` 7, so this whole class was invisible. PSScriptAnalyzer's compatibility
+rules do not flag PS7-only *cmdlets* or *parameters*.
+
+- **`Join-String` (PS6+)** in the ComServer scanner threw inside a `try` whose
+  `catch` converted it into a generic scanner error — so on 5.1 the real finding
+  was silently replaced and the operator saw a scan that "succeeded".
+- **`Get-PfxCertificate -Password` (PS6+)** made `Set-MsixScriptSignature` and
+  `Add-MsixStandardScript -Pfx` unusable on 5.1. Now constructs
+  `X509Certificate2` from the file + `SecureString` directly.
+- **`-Encoding utf8` means BOM on 5.1 and no BOM on 7.** That put a BOM in the
+  Trusted Signing metadata JSON, which `System.Text.Json` rejects outright — on
+  the module's **default** signing backend — and in PSF `config.json`, where the
+  module's own validator could not see it because `Get-Content -Raw` strips the
+  BOM on 5.1. New `_MsixWriteUtf8` makes the choice explicit and identical on
+  both editions: no BOM for machine-parsed JSON/XML/HTML, BOM for generated
+  `.ps1`. Templates are now read as UTF-8 explicitly too.
+- The 5.1 CI lane now resolves every command and parameter in the module against
+  real 5.1 metadata.
+
+### Manifest correctness (#153)
+
+Found by writing the first behavioural tests for functions the coverage ratchet
+had falsely certified. All three produced manifests MakeAppx refuses to pack, so
+the affected cmdlets could never produce a usable package:
+
+- `Add-MsixLoaderSearchPathOverride` emitted attribute `LoaderSearchPath`;
+  `CT_LoaderSearchPathOverride` in `UapManifestSchema_v6.xsd` requires
+  `FolderPath`.
+- `Add-MsixLoaderSearchPathOverride` declared the extension under **Application**
+  extensions; MakeAppx requires `windows.loaderSearchPathOverride` under
+  `<Package>`.
+- `Add-MsixFirewallRule` passed the caller's casing through to a schema that
+  requires lowercase, so `-Direction In` produced "The attribute 'Direction' with
+  value 'In' failed to parse".
+
+### Reliability and CI (#150, #151, #152)
+
+- **Workspace leak.** `_MsixMutateManifest` created the workspace *before* the
+  `try` whose `finally` removes it, so any pre-pack failure — most commonly the
+  caller's own mutate block rejecting an unknown `-AppId` — abandoned a fully
+  unpacked package in `%TEMP%`. This helper backs ~46 mutators: **1,077 stale
+  `msix-*` directories** were found on one ordinary dev machine, the oldest ~3
+  months old. `_MsixUnpackForCompare` and `_MsixResolveScanWorkspace` leaked
+  permanently on a failed unpack, since the path was never returned to a caller.
+- **CI never provisioned PSF**, so every PSF-dependent test skipped — including
+  the `Add-MsixPsfV2` re-injection guard for the `OrderedDictionary.ContainsKey`
+  crash (#138) and the `Remove-MsixPsf` round-trip. Those guards had never once
+  executed on a CI runner. Provisioning failure is now fatal instead of a
+  `::warning::` that produced a green build with ~96 tests silently skipped, and
+  the lane asserts a passed-count floor so an all-skip run is red.
+- **The coverage ratchet was measuring the wrong thing.** It defined "invoked" as
+  a regex over test source text, so `Get-Command Add-MsixFoo -Module MSIX`
+  counted as coverage — and so did `Context`/`It` **titles**. The debt list read
+  EMPTY while 12 mutators were never called. Replaced with AST `CommandAst`
+  detection; six mutators gained real behavioural tests (which immediately
+  exposed the three manifest bugs above).
+- `Test-MsixFixtureToolingAvailable` accepted only `<root>\Tools\MakeAppx.exe`,
+  so it returned `$false` on hosts using the system Windows SDK (where
+  `makeappx.exe` sits at the root), silently disabling integration coverage.
+
+### New
+
+- **PSGallery update notification on import.** Tells an interactive operator when
+  a newer version is published, so field fixes actually reach the people running
+  the module. Silent in CI and non-interactive hosts, cached for 24h, hard
+  network timeout, and every failure swallowed — an update notice must never
+  slow or break `Import-Module`. Opt out with
+  `$env:MSIX_NO_UPDATE_CHECK = '1'`.
+
 ## v0.73.4 - 2026-07-08 — Diagnostic: surface heuristic scanner failures (#140)
 
 Generalizes the 0.73.3 offreg honesty fix to the whole scanner pipeline.

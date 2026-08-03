@@ -114,7 +114,11 @@ Describe 'Add-MsixVcRuntimeBundle atomic repack (issue #145)' -Tag 'DataLoss' {
             try {
                 Add-MsixVcRuntimeBundle -PackagePath $pkg -SourceFolder $src -Architecture x64 `
                     -Names 'msvcp140.dll' -SkipSigning -ErrorAction SilentlyContinue | Out-Null
-            } catch { }
+            } catch {
+                # Expected: the heavily-mocked pipeline cannot complete. We only
+                # care which path was handed to MakeAppx pack.
+                $script:packError = $_
+            }
             [pscustomobject]@{ Targets = $script:targets; Pkg = $pkg }
         }
         @($packTargets.Targets).Count | Should -BeGreaterThan 0

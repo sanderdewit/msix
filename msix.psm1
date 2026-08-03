@@ -58,6 +58,28 @@ try {
 . "$PSScriptRoot\MSIX.Distribution.ps1"
 . "$PSScriptRoot\MSIX.Bundle.ps1"
 . "$PSScriptRoot\MSIX.RuntimeTest.ps1"
+. "$PSScriptRoot\MSIX.UpdateCheck.ps1"
+#endregion
+
+
+#region --- Update notification --------------------------------------------
+# Tell an interactive operator when a newer version is on PSGallery, so field
+# fixes actually reach the people running the module. Skipped entirely in CI,
+# in non-interactive hosts, and when MSIX_NO_UPDATE_CHECK is set; cached for
+# 24h; hard network timeout; every failure swallowed. An update notice must
+# never slow down or break Import-Module.
+try {
+    $script:MsixManifestPath = Join-Path -Path $PSScriptRoot -ChildPath 'msix.psd1'
+    if (Test-Path -LiteralPath $script:MsixManifestPath) {
+        $script:MsixCurrentVersion = (Import-PowerShellDataFile -Path $script:MsixManifestPath).ModuleVersion
+        if ($script:MsixCurrentVersion) {
+            _MsixNotifyIfUpdateAvailable -CurrentVersion ([version]$script:MsixCurrentVersion)
+        }
+    }
+} catch {
+    # Never let the update notice affect the import result.
+    Write-Debug "MSIX: update check skipped: $($_.Exception.Message)"
+}
 #endregion
 
 

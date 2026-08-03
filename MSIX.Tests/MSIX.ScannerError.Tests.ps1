@@ -69,6 +69,17 @@ Describe '_MsixAddOffregScannerError' -Tag 'Scanners' {
     }
 }
 
+Describe 'Get-MsixHeuristicFinding rejects a missing package' -Tag 'Scanners' {
+
+    It 'throws instead of returning an empty (clean-looking) finding set' {
+        # Get-Item without -ErrorAction Stop emitted a NON-terminating error and
+        # analysis carried on with nothing, so a typo'd path produced a report
+        # indistinguishable from a genuinely clean package.
+        $missing = Join-Path ([IO.Path]::GetTempPath()) ("no-such-" + [guid]::NewGuid().ToString('N') + '.msix')
+        { Get-MsixHeuristicFinding -PackagePath $missing -ErrorAction Stop } | Should -Throw
+    }
+}
+
 Describe "Get-MsixHeuristicFinding manifest-fix block is null-safe" -Tag 'Scanners' {
 
     # Regression: a manifest with NO <Properties> element (so $mf.Package.Properties

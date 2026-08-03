@@ -68,8 +68,11 @@ Describe '_MsixSetVerifiedToolsRoot (#54, #147)' -Tag 'Toolchain', 'Security' {
         try {
             InModuleScope MSIX -Parameters @{ Root = $root } {
                 param($Root)
+                # Bind to a local first: PSSA does not trace usage into the
+                # nested scriptblock handed to Should -Throw.
+                $rootPath = $Root
                 Mock _MsixVerifyAuthenticode { throw 'Authenticode verification FAILED (planted binary)' }
-                { _MsixSetVerifiedToolsRoot -Root $Root } | Should -Throw '*Authenticode verification FAILED*'
+                { _MsixSetVerifiedToolsRoot -Root $rootPath } | Should -Throw '*Authenticode verification FAILED*'
                 $script:ToolsRoot | Should -BeNullOrEmpty
             }
         } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
@@ -80,8 +83,9 @@ Describe '_MsixSetVerifiedToolsRoot (#54, #147)' -Tag 'Toolchain', 'Security' {
         try {
             InModuleScope MSIX -Parameters @{ Root = $root } {
                 param($Root)
+                $rootPath = $Root
                 Mock _MsixVerifyAuthenticode {}
-                { _MsixSetVerifiedToolsRoot -Root $Root } | Should -Throw '*no .exe/.dll found*'
+                { _MsixSetVerifiedToolsRoot -Root $rootPath } | Should -Throw '*no .exe/.dll found*'
                 $script:ToolsRoot | Should -BeNullOrEmpty
             }
         } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }

@@ -124,6 +124,33 @@ Describe 'Add-MsixVcRuntimeBundle atomic repack (issue #145)' -Tag 'DataLoss' {
     }
 }
 
+Describe 'Workspace cleanup on the error path (issue #150)' -Tag 'DataLoss', 'Integration' {
+
+    BeforeAll {
+        $script:ToolingAvailable = Test-MsixFixtureToolingAvailable
+        $script:Dir = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath "msix-leak-$([guid]::NewGuid().ToString('N').Substring(0,8))"
+        New-Item -ItemType Directory -Path $script:Dir -Force | Out-Null
+    }
+    BeforeEach { if (-not $script:ToolingAvailable) { Set-ItResult -Skipped -Because 'MakeAppx not available.' } }
+    AfterAll { if ($script:Dir -and (Test-Path -LiteralPath $script:Dir)) { Remove-Item -LiteralPath $script:Dir -Recurse -Force -ErrorAction SilentlyContinue } }
+
+    It 'leaves no workspace behind when the mutate block throws' {
+        # _MsixMutateManifest created the workspace BEFORE the try whose finally
+        # removes it, so any pre-pack failure - most commonly the caller's own
+        # mutate block rejecting an unknown -AppId - abandoned a fully unpacked
+        # package in %TEMP%. This helper backs ~46 mutators; 1,077 stale msix-*
+        # directories were found on one ordinary dev machine.
+        $fx = New-MsixTestFixture -OutputPath (Join-Path $script:Dir 'leak-base.msix')
+
+        $before = @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Directory -Filter 'msix-*' -ErrorAction SilentlyContinue).Count
+        { Add-MsixStartupTask -PackagePath $fx.PackagePath -AppId 'NoSuchAppId' `
+              -TaskId 'T' -DisplayName 'D' -SkipSigning -ErrorAction Stop } | Should -Throw
+        $after = @(Get-ChildItem -LiteralPath ([IO.Path]::GetTempPath()) -Directory -Filter 'msix-*' -ErrorAction SilentlyContinue).Count
+
+        $after | Should -Be $before -Because 'a failed mutation must not abandon its unpacked workspace'
+    }
+}
+
 Describe '_MsixPreserveUnsigned honesty (issue #145)' -Tag 'DataLoss' {
 
     It 'logs at Error - not a false "preserved" Warning - when the copy fails' {

@@ -54,8 +54,15 @@ function _MsixResolveScanWorkspace {
     $toolsRoot = Get-MsixToolsRoot
     $fileinfo  = Get-Item -LiteralPath $PackagePath
     $workspace = New-MsixWorkspace -PackageName "$($fileinfo.BaseName)-$Label"
-    $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
-    Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
+    # If the unpack throws, the path is never returned and Owned never reaches a
+    # caller, so nothing can clean it up (issue #150).
+    try {
+        $r = Invoke-MsixProcess -FilePath "$toolsRoot\Tools\MakeAppx.exe" -ArgumentList @('unpack', '/p', $fileinfo.FullName, '/d', $workspace, '/o')
+        Assert-MsixProcessSuccess -Result $r -Operation 'MakeAppx unpack'
+    } catch {
+        Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction SilentlyContinue
+        throw
+    }
     return @{ Path = $workspace; Owned = $true }
 }
 

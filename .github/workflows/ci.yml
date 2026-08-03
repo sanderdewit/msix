@@ -202,23 +202,53 @@ jobs:
         shell: pwsh
         run: Install-Module Pester -Force -SkipPublisherCheck -MinimumVersion 5.0
 
-      # Build the SDK toolchain (MakeAppx / signtool) via the module's own
-      # installer so the Integration-tagged tests can pack and sign real .msix
-      # fixtures instead of skipping. If acquisition fails (e.g. NuGet/PSGallery
-      # outage) the tests skip loudly rather than failing the build.
-      - name: Provision SDK toolchain
+      # Build the toolchain the Integration-tagged tests need so they exercise
+      # real pack/sign paths instead of skipping.
+      #
+      # Provisioning failure is now FATAL (issue #151). It used to be swallowed
+      # into a "::warning::", which meant a NuGet/PSGallery outage produced a
+      # GREEN build with ~96 integration tests silently skipped — the failure
+      # mode looked identical to a passing run.
+      #
+      # PSF is provisioned too. It never was, so every PSF-dependent test
+      # skipped in CI — including the Add-MsixPsfV2 re-injection regression
+      # guard added for the OrderedDictionary.ContainsKey crash (#138) and the
+      # Remove-MsixPsf round-trip that covers the #145 data-loss fix. Those
+      # guards had never once run on a CI runner.
+      - name: Provision SDK + PSF toolchain
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           Import-Module ./MSIX.psd1 -Force
-          try { Install-MsixSdkTool | Out-Null }
-          catch { Write-Host "::warning::SDK toolchain provisioning failed: $($_.Exception.Message)" }
+          Install-MsixSdkTool | Out-Null
+          Install-MsixPsfBinary | Out-Null
+          $root = & (Get-Module MSIX) { Get-MsixToolsRoot }
+          "Tools root: $root"
+          foreach ($probe in @('Tools\MakeAppx.exe', 'psf\PsfLauncher64.exe')) {
+            $p = Join-Path $root $probe
+            if (-not (Test-Path -LiteralPath $p)) { throw "Provisioning incomplete: $p is missing." }
+            "  present: $probe"
+          }
 
       - name: Run integration tests
         shell: pwsh
         run: |
           $cfg = New-PesterConfiguration
-          $cfg.Run.Path        = './MSIX.Tests'
-          $cfg.Run.Exit        = $true
-          $cfg.Filter.Tag      = 'Integration'
-          $cfg.Output.Verbosity = 'Detailed'
-          Invoke-Pester -Configuration $cfg
+          $cfg.Run.Path          = './MSIX.Tests'
+          $cfg.Run.PassThru      = $true
+          $cfg.Filter.Tag        = 'Integration'
+          $cfg.Output.Verbosity  = 'Detailed'
+          $r = Invoke-Pester -Configuration $cfg
+
+          # Floor assertion (issue #151/#152): an all-skip run must be RED. Without
+          # this, anything that quietly disables the tooling gate turns "ran no
+          # integration coverage" into a passing build.
+          # 100 pass locally with the full toolchain; an all-skip run lands near
+          # zero, so this floor separates the two decisively without being brittle
+          # about a handful of environment-dependent cases.
+          $minimum = 85
+          "Passed: $($r.PassedCount)  Failed: $($r.FailedCount)  Skipped: $($r.SkippedCount)"
+          if ($r.FailedCount -gt 0) { throw "$($r.FailedCount) integration test(s) failed." }
+          if ($r.PassedCount -lt $minimum) {
+            throw "Only $($r.PassedCount) integration tests passed (floor is $minimum). The toolchain gate is probably disabled - check the provisioning step and Test-MsixFixtureToolingAvailable."
+          }

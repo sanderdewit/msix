@@ -406,6 +406,38 @@
                     } finally {
                         $store2.Close()
                     }
+
+                    # SECURITY (issue #148): PersistKeySet above is REQUIRED (a
+                    # separate signtool.exe process must reach the private key),
+                    # but it also writes the key to the user's CNG/CAPI key store
+                    # and suppresses deletion on handle release. Removing the
+                    # certificate context does NOT remove the key container, so
+                    # every run used to deposit a copy of the organisation's
+                    # code-signing private key in the roaming profile - usable by
+                    # any later process running as that user, and extractable
+                    # because the key is also flagged Exportable. Delete it
+                    # explicitly here.
+                    try {
+                        if ($cert -and $cert.HasPrivateKey) {
+                            $key = $cert.PrivateKey
+                            if ($key -and $key.Key -and $key.Key.GetType().Name -eq 'CngKey') {
+                                $key.Key.Delete()
+                            } elseif ($key -and $key.PSObject.Properties['CspKeyContainerInfo']) {
+                                # Legacy CAPI: re-open with PersistKeyInCsp = $false
+                                # so releasing the provider deletes the container.
+                                $csp = [System.Security.Cryptography.CspParameters]::new(
+                                    $key.CspKeyContainerInfo.ProviderType,
+                                    $key.CspKeyContainerInfo.ProviderName,
+                                    $key.CspKeyContainerInfo.KeyContainerName)
+                                $csp.Flags = [System.Security.Cryptography.CspProviderFlags]::UseExistingKey
+                                $rsa = [System.Security.Cryptography.RSACryptoServiceProvider]::new($csp)
+                                $rsa.PersistKeyInCsp = $false
+                                $rsa.Clear()
+                            }
+                        }
+                    } catch {
+                        Write-MsixLog -Level Warning -Message "Could not delete the temporary private-key container for $imported. A copy of the signing key may remain in this user's key store: $($_.Exception.Message)"
+                    }
                 }
                 if ($cert) { $cert.Dispose() }
             }

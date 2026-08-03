@@ -31,7 +31,16 @@ function Test-MsixFixtureToolingAvailable {
     param()
     try {
         $root = & (Get-Module MSIX) { Get-MsixToolsRoot -ErrorAction Stop }
-        return [bool]($root -and (Test-Path -LiteralPath (Join-Path -Path $root -ChildPath 'Tools\MakeAppx.exe')))
+        if (-not $root) { return $false }
+        # BOTH layouts Get-MsixToolsRoot can return (issue #151): a vendored /
+        # Install-MsixSdkTool root has MakeAppx under Tools\, but a system Windows
+        # SDK root (…\bin\10.0.x\x64) has makeappx.exe directly. Checking only
+        # Tools\ made this return $false on any host relying on the system SDK,
+        # silently skipping every integration test while the SDK was right there.
+        foreach ($rel in @('Tools\MakeAppx.exe', 'MakeAppx.exe')) {
+            if (Test-Path -LiteralPath (Join-Path -Path $root -ChildPath $rel)) { return $true }
+        }
+        return $false
     } catch {
         return $false
     }
@@ -150,7 +159,12 @@ $tdfXml
 
     # --- Pack via the SDK MakeAppx (resolved through the module) --------------
     $toolsRoot = & (Get-Module MSIX) { Get-MsixToolsRoot }
-    $makeappx  = Join-Path -Path $toolsRoot -ChildPath 'Tools\MakeAppx.exe'
+    # Support both root layouts, same as Test-MsixFixtureToolingAvailable (#151).
+    $makeappx  = @('Tools\MakeAppx.exe', 'MakeAppx.exe') |
+                 ForEach-Object { Join-Path -Path $toolsRoot -ChildPath $_ } |
+                 Where-Object { Test-Path -LiteralPath $_ } |
+                 Select-Object -First 1
+    if (-not $makeappx) { throw "MakeAppx.exe not found under '$toolsRoot' (checked Tools\ and the root)." }
     $r = & (Get-Module MSIX) {
         param($exe, $stageDir, $out)
         Invoke-MsixProcess -FilePath $exe -ArgumentList @('pack', '/d', $stageDir, '/p', $out, '/o')

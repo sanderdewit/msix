@@ -34,19 +34,39 @@ function _MsixSetVerifiedToolsRoot {
     param([Parameter(Mandatory)][string]$Root)
 
     if ($env:MSIX_SKIP_TOOL_VERIFICATION) {
+        # Real Warning stream as well as the module log: Write-MsixLog routes to
+        # Write-Information, which is invisible to -WarningVariable and is dropped
+        # entirely under Set-MsixLogLevel -Level Error. Disabling the control that
+        # protects the signing toolchain must not be silenceable (issue #147).
+        Write-Warning "MSIX: tool Authenticode verification BYPASSED (MSIX_SKIP_TOOL_VERIFICATION is set) for '$Root'."
         Write-MsixLog -Level Warning -Message "Tool Authenticode verification BYPASSED (MSIX_SKIP_TOOL_VERIFICATION is set). SDK tools under '$Root' are trusted without a signature check. Unset this variable to restore fail-closed verification."
     } elseif (Get-Command -Name _MsixVerifyAuthenticode -ErrorAction SilentlyContinue) {
-        foreach ($tool in @('signtool.exe', 'MakeAppx.exe', 'makepri.exe')) {
-            $candidate = @(
-                (Join-Path -Path $Root -ChildPath "Tools\$tool"),
-                (Join-Path -Path $Root -ChildPath $tool)
-            ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
-            if ($candidate) {
-                # Throws (fail-closed) if the binary is unsigned, untrusted, or
-                # its chain cannot be validated.
-                $null = _MsixVerifyAuthenticode -Path $candidate -ToolName $tool
-            }
+        # Verify EVERY executable payload in the resolved root, not just the three
+        # tools we invoke by name. SDK signtool.exe is side-by-side-manifest-bound
+        # to load wintrust.dll / mssign32.dll / AppxSip.dll from its OWN directory,
+        # so an attacker who can write that directory could keep the three genuine
+        # Microsoft-signed .exe files (passing the old check) and plant a trojaned
+        # dependency DLL beside them - executing their code inside the process that
+        # holds the organisation's code-signing key (issue #147).
+        $scanDirs = @($Root, (Join-Path -Path $Root -ChildPath 'Tools')) |
+                    Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+        $payload = @($scanDirs | ForEach-Object {
+            Get-ChildItem -LiteralPath $_ -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Extension -in '.exe', '.dll' }
+        })
+        if (-not $payload) {
+            throw "Tool verification failed: no .exe/.dll found under '$Root'. Refusing to trust an empty or unexpected tools root."
         }
+        foreach ($file in $payload) {
+            # Throws (fail-closed) if unsigned, untrusted, or the chain cannot be
+            # validated.
+            $null = _MsixVerifyAuthenticode -Path $file.FullName -ToolName $file.Name
+        }
+    } else {
+        # Fail CLOSED. Previously this branch silently cached and trusted the root
+        # with no warning at all, defeating the whole control if the verifier was
+        # not in scope for any reason (issue #147).
+        throw 'Tool verification unavailable: _MsixVerifyAuthenticode is not loaded. Re-import the MSIX module; set MSIX_SKIP_TOOL_VERIFICATION only for a deliberate air-gapped bypass.'
     }
 
     $script:ToolsRoot = $Root
@@ -110,24 +130,29 @@ function Get-MsixToolsRoot {
         return _MsixSetVerifiedToolsRoot -Root $PSScriptRoot
     }
 
-    # 3) Walk up to four parent levels looking for any sibling that hosts
-    #    Tools\MakeAppx.exe (e.g. C:\temp\msix\0.56\ next to C:\temp\msix\MSIX\,
-    #    or any other vendored toolchain elsewhere on the same path).
-    $cursor = $PSScriptRoot
-    for ($i = 0; $i -lt 4; $i++) {
-        $cursor = Split-Path -Path $cursor -Parent
-        if (-not $cursor) { break }
-        # Same-level siblings under this ancestor
-        $sibling = Get-ChildItem -LiteralPath $cursor -Directory -ErrorAction SilentlyContinue |
+    # 3) Look for a vendored toolchain NEXT TO the module only (one level up),
+    #    e.g. C:\temp\msix\0.56\ beside C:\temp\msix\MSIX\.
+    #
+    #    SECURITY (issue #147): this used to walk up to FOUR parent levels and
+    #    accept any subdirectory containing Tools\MakeAppx.exe, ordered by
+    #    Sort-Object Name -Descending - lexically highest wins, not most
+    #    trustworthy. For a -Scope CurrentUser install the 4th hop reaches
+    #    ~\Documents, which is fully user-writable: creating
+    #    ~\Documents\zzz\Tools\ beat every legitimate candidate on every later
+    #    session. Combined with the SxS-DLL gap above that handed an unprivileged
+    #    attacker code execution inside signing. One level keeps the intended
+    #    side-by-side layout working without reaching a user profile root.
+    $parent = Split-Path -Path $PSScriptRoot -Parent
+    if ($parent) {
+        $sibling = Get-ChildItem -LiteralPath $parent -Directory -ErrorAction SilentlyContinue |
                    Where-Object { Test-Path -LiteralPath "$($_.FullName)\Tools\MakeAppx.exe" } |
                    Sort-Object Name -Descending |
                    Select-Object -First 1
         if ($sibling) {
             return _MsixSetVerifiedToolsRoot -Root $sibling.FullName
         }
-        # Or the ancestor itself
-        if (Test-Path "$cursor\Tools\MakeAppx.exe") {
-            return _MsixSetVerifiedToolsRoot -Root $cursor
+        if (Test-Path "$parent\Tools\MakeAppx.exe") {
+            return _MsixSetVerifiedToolsRoot -Root $parent
         }
     }
 
@@ -422,7 +447,26 @@ function Invoke-MsixProcess {
         }
     }
 
-    Write-MsixLog -Level Debug -Message "Exec: $FilePath $([string]::Join(' ', ($ArgumentList | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } })))"
+    # SECURITY (issue #148): redact the value FOLLOWING a secret-bearing switch
+    # before logging. The SignTool-PFX backend passes '/p', <plaintext password>
+    # in this vector; Write-MsixLog also appends to the file configured by
+    # Set-MsixLogFile, so the documented troubleshooting flow
+    # (Set-MsixLogLevel Debug + Set-MsixLogFile) wrote the code-signing password
+    # to disk in clear text, where CI artifact upload and log shippers collect it.
+    $secretSwitches = @('/p', '-p', '--password', '/password', '-Password')
+    $redacted = New-Object System.Collections.Generic.List[string]
+    $hideNext = $false
+    foreach ($a in $ArgumentList) {
+        $s = [string]$a
+        if ($hideNext) {
+            $redacted.Add('***REDACTED***')
+            $hideNext = $false
+            continue
+        }
+        if ($secretSwitches -contains $s) { $hideNext = $true }
+        $redacted.Add($(if ($s -match '\s') { '"' + $s + '"' } else { $s }))
+    }
+    Write-MsixLog -Level Debug -Message "Exec: $FilePath $([string]::Join(' ', $redacted))"
 
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName               = $FilePath

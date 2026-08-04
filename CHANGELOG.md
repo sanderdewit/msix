@@ -20,8 +20,11 @@ older lives here.
   ProcMon extract fails intermittently even locally), and msixmgr carries a
   documented Authenticode exception (upstream signing is broken,
   microsoft/msix-packaging#710) that has no business running on every push.
-- `actions/upload-artifact` bumped to **v5** (Node 24); v4 targets the
-  deprecated Node 20 and was being force-migrated with a warning on every build.
+- `actions/upload-artifact` bumped to **v7**, which runs on Node 24. Both v4 and
+  v5 declare `using: node20`, so the runner force-migrated them and warned on
+  every build; v6 was the first Node 24 line. Verified against each tag's
+  `action.yml` rather than assuming a newer major implies a newer runtime.
+  `actions/checkout@v6` was already Node 24.
 
 ### Security (#147, completed)
 

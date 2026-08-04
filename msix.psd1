@@ -320,8 +320,9 @@ CI
 - Both lanes provision the toolchain with Initialize-MsixToolchain, so the 10
   PSF-dependent tests that used to skip now actually run - including the
   regression guards for #138 and #145.
-- actions/upload-artifact bumped to v5 (Node 24); v4 targets the deprecated
-  Node 20 and was force-migrated with a warning on every build.
+- actions/upload-artifact bumped to v7, which runs on Node 24. Both v4 AND v5
+  declare using: node20, so the runner force-migrated them and warned on every
+  build; v6 was the first Node 24 line.
 
 Suite: 848 passing. Full history: CHANGELOG.md.
 '@

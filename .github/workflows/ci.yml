@@ -137,9 +137,11 @@ jobs:
 
       - name: Upload coverage report
         if: always()
-        # v5 runs on Node 24; v4 targets the deprecated Node 20 and was being
-        # force-migrated by the runner with a warning on every build.
-        uses: actions/upload-artifact@v5
+        # v7 is the current release and the FIRST line that actually runs on
+        # Node 24 is v6 - v4 AND v5 both declare `using: node20`, so the runner
+        # force-migrates them and warns on every build. Verified against each
+        # tag's action.yml rather than assuming "newest major = newest runtime".
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.xml

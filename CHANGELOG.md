@@ -5,6 +5,89 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## Unreleased — Completing the audit: #147, #152, #153
+
+0.74.0 closed these three issues only partially. This finishes them.
+
+### Security (#147, completed)
+
+- **The verification bypass no longer requires — or grants — anything persistent.**
+  `MSIX_SKIP_TOOL_VERIFICATION` as a process/user environment variable is now
+  **ignored**: a non-admin could persist it in `HKCU\Environment`, after which
+  every *future* session in that user's context silently trusted an arbitrary
+  tools root. The supported escape hatch for air-gapped agents is the new
+  **`Set-MsixToolVerification -Enabled $false`** — session-scoped, in-memory, and
+  **no administrator rights required**. (The module must never require elevation;
+  that is the whole reason it parses hives through `offreg.dll` rather than
+  `reg.exe load`, which demands `SeBackupPrivilege`/`SeRestorePrivilege`.) A
+  machine-scoped value is still honoured for fleet configuration — note that
+  *reading* it needs no admin, only writing does.
+- **Helper executables are verified before they are executed.**
+  `Resolve-MsixProcMonPath` and `Resolve-MsixDebugViewPath` now Authenticode-check
+  every candidate. ProcMon loads a kernel driver, so it runs **elevated**, and the
+  old resolver trusted both a user-settable `MSIX_PROCMON_PATH` and a fixed
+  `C:\PSF\ProcessMonitor\Procmon.exe` fallback — a directory any standard user can
+  create, because the root of `C:` grants Authenticated Users
+  `CreateDirectories`. That was a local privilege-escalation path. Untrusted
+  candidates are skipped rather than fatal, so a poisoned override cannot deny
+  service either.
+
+### Correctness (#153, completed)
+
+- **`_MsixOfflineSaveHive`'s return value is no longer discarded.** It signals
+  failure only by returning `$false`, so a failed save shipped a **signed**
+  modification package containing none of the requested registry keys, exit code
+  0, and a log line claiming success. (It also leaked a `[bool]` into the output
+  stream.)
+- **Idempotency guards** added to `Add-MsixFileTypeAssociation`,
+  `Add-MsixShellVerbExtension`, `Add-MsixFileExplorerContextMenu` and the `Rule`
+  element of `Add-MsixFirewallRule`. All four appended unconditionally, so a
+  re-run — or `Invoke-MsixPlaybook` replaying a step list verbatim — produced
+  duplicates, and a conflicting FTA makes `Add-AppxPackage` reject the package.
+- **The rest of the `@($null)` cluster** — 15 further sites across 15 files.
+- **`Invoke-MsixAutoFixLoop -CaptureTrace` now works.** It called
+  `Invoke-MsixProcMonCapture -PackagePath`, which is not a parameter of that
+  cmdlet, inside a `catch` that logged and continued — so the documented feature
+  had never once produced a `.pml`, and the `NoRegressions` stop condition never
+  received delta data.
+- **`Test-MsixSignature`** includes `NotTrusted` in `NeedsSelfSign`; such a
+  package will not install in a clean sandbox, which is exactly what `-AutoSign`
+  is for.
+- **`Add-MsixVcRuntimeBundle`** no longer coerces an undetectable (or arm64)
+  architecture to x86 while logging "auto-detected", and no longer packs a
+  **partial** bundle as success — both shipped a package that fails at launch.
+- **`Write-MsixLog`** writes UTF-8 with `-LiteralPath`. The ANSI default on 5.1
+  turned the arrows and box drawing this module emits into literal `?`, and
+  `-Path` treated `[` `]` in a log path as wildcards and silently dropped the line.
+
+### Test coverage (#152, completed)
+
+- **Never-invoked exported functions: 73 → 26**, and all 26 that remain are
+  genuinely environment-bound (network installers, Hyper-V/VHDX, the ProcMon
+  kernel driver, Windows Sandbox, or a live installed package). Each is listed
+  with its reason.
+- **The ratchet now guards the whole exported surface**, not just
+  `Add`/`Remove`/`Set`/`Update` mutators — the narrow scope is how 73 functions
+  came to be uncovered with nothing reporting it. Three orchestrators
+  (`Invoke-MsixAccelerator`, `Invoke-MsixAutoFixLoop`,
+  `Invoke-MsixRemediationPlan`) are recorded as real debt with a ceiling so the
+  list can only shrink.
+- **Authenticode rejection is finally tested.** Both existing tests mocked
+  `Get-AuthenticodeSignature` to return `Valid`, so the `throw` branch — the
+  control that stops a planted toolchain binary from being executed — had never
+  executed. Every rejection reason is now driven, plus a valid-signature-but-
+  untrusted-publisher case and a positive control.
+- **Read-only scanner matrix**: all 15 scanners are exercised against a
+  well-formed package, against the degenerate manifest shape the module itself
+  generates (no `<Applications>`/`<Extensions>`/`<Capabilities>` — the shape that
+  produced the null-deref class), and against a missing package to prove they
+  fail loudly instead of returning an empty, clean-looking result.
+- **Code coverage is measured in CI** and reported in the job summary; there was
+  no measurement at all before.
+- Test isolation: the update-check tests wrote to the **real** user cache at
+  `%LOCALAPPDATA%\MSIX\update-check.json`, poisoning it with a mocked version and
+  producing a false "1.0.0 is available" notice.
+
 ## v0.74.0 - 2026-08-03 — Hardening: data loss, signing security, PS 5.1
 
 Outcome of a full-codebase audit (security, enterprise stability, PS 5.1

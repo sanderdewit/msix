@@ -87,6 +87,12 @@ function New-MsixTestFixture {
         [hashtable[]]$TargetDeviceFamilies,
         [hashtable[]]$Files,
         [string]$Executable = 'VFS\ProgramFilesX64\App\app.exe',
+        # Raw AppxManifest.xml, replacing the generated one. Lets a test build a
+        # deliberately degenerate shape - no <Applications>, no <Extensions>,
+        # no <Capabilities> - which is exactly what New-MsixModificationPackage
+        # and New-MsixFrameworkPackage emit, and the shape that produced the
+        # @($null) null-deref class (#152, #153).
+        [string]$ManifestXml,
         [switch]$Sign
     )
 
@@ -102,6 +108,10 @@ function New-MsixTestFixture {
     }) -join "`n"
 
     # --- AppxManifest.xml -----------------------------------------------------
+    if ($ManifestXml) {
+        $manifestPath = Join-Path -Path $stage -ChildPath 'AppxManifest.xml'
+        [IO.File]::WriteAllText($manifestPath, $ManifestXml, [Text.UTF8Encoding]::new($true))
+    } else {
     $manifest = @"
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
@@ -132,6 +142,7 @@ $tdfXml
     $manifestPath = Join-Path -Path $stage -ChildPath 'AppxManifest.xml'
     # UTF-8 BOM so Windows PowerShell 5.1 round-trips it identically.
     [IO.File]::WriteAllText($manifestPath, $manifest, [Text.UTF8Encoding]::new($true))
+    }
 
     # --- Assets + a stub executable so the manifest references resolve --------
     $assets = Join-Path -Path $stage -ChildPath 'Assets'

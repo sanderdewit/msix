@@ -69,20 +69,45 @@ jobs:
         shell: pwsh
         run: Install-Module Pester -Force -SkipPublisherCheck -MinimumVersion 5.0
 
-      - name: Run Pester tests
+      - name: Run Pester tests (with code coverage)
         shell: pwsh
         run: |
           $testPath = if (Test-Path ./MSIX.Tests -PathType Container) { './MSIX.Tests' }
                       elseif (Test-Path ./tests -PathType Container) { './tests' }
                       else { $null }
-          if ($testPath) {
-            $cfg = New-PesterConfiguration
-            $cfg.Run.Path = $testPath
-            $cfg.Run.Exit = $true
-            Invoke-Pester -Configuration $cfg
-          } else {
-            throw "No test directory found (expected MSIX.Tests/ or tests/)."
+          if (-not $testPath) { throw "No test directory found (expected MSIX.Tests/ or tests/)." }
+
+          $cfg = New-PesterConfiguration
+          $cfg.Run.Path      = $testPath
+          $cfg.Run.PassThru  = $true
+          # Code coverage (issue #152): the suite had NO coverage measurement at
+          # all, which is how 73 of 195 exported functions came to be never
+          # invoked while the contract test reported zero debt. Measured, not
+          # gated - the floor below is on test outcomes; coverage is reported so
+          # a drop is visible in the job summary.
+          $cfg.CodeCoverage.Enabled              = $true
+          $cfg.CodeCoverage.Path                 = (Get-ChildItem -Path . -Filter 'MSIX.*.ps1' -File |
+                                                    Where-Object { $_.Name -notlike '*.Tests.ps1' }).FullName
+          $cfg.CodeCoverage.OutputFormat         = 'JaCoCo'
+          $cfg.CodeCoverage.OutputPath           = 'coverage.xml'
+          $cfg.CodeCoverage.CoveragePercentTarget = 60
+
+          $r = Invoke-Pester -Configuration $cfg
+
+          if ($r.CodeCoverage) {
+            $pct = [math]::Round($r.CodeCoverage.CoveragePercent, 2)
+            "Code coverage: $pct% ($($r.CodeCoverage.CommandsExecutedCount)/$($r.CodeCoverage.CommandsAnalyzedCount) commands)"
+            "### Code coverage: $pct%" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           }
+          if ($r.FailedCount -gt 0) { throw "$($r.FailedCount) test(s) failed." }
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: ignore
 
   compat-ps51:
     name: Windows PowerShell 5.1 compatibility

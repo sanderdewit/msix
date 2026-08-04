@@ -5,9 +5,26 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
-## Unreleased — Completing the audit: #147, #152, #153
+## v0.74.1 - 2026-08-04 — Completing the audit: #147, #152, #153
 
 0.74.0 closed these three issues only partially. This finishes them.
+
+### CI
+
+- **Both lanes now provision the toolchain** with `Initialize-MsixToolchain`, so
+  the 10 PSF-dependent tests that used to skip actually run — including the
+  regression guards for the `OrderedDictionary.ContainsKey` crash (#138) and the
+  `Remove-MsixPsf` data-loss fix (#145). A skipped guard protects nothing.
+  ProcMon / DebugView / msixmgr / the App Runtime are deliberately skipped: no
+  test needs them, they add four more download endpoints to every build (the
+  ProcMon extract fails intermittently even locally), and msixmgr carries a
+  documented Authenticode exception (upstream signing is broken,
+  microsoft/msix-packaging#710) that has no business running on every push.
+- `actions/upload-artifact` bumped to **v7**, which runs on Node 24. Both v4 and
+  v5 declare `using: node20`, so the runner force-migrated them and warned on
+  every build; v6 was the first Node 24 line. Verified against each tag's
+  `action.yml` rather than assuming a newer major implies a newer runtime.
+  `actions/checkout@v6` was already Node 24.
 
 ### Security (#147, completed)
 

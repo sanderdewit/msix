@@ -473,7 +473,7 @@ function New-MsixPsfConfig {
         [hashtable[]]$AppOptions
     )
 
-    $apps = @($Manifest.Package.Applications.Application)
+    $apps = @($Manifest.Package.Applications.Application | Where-Object { $null -ne $_ })
 
     # Index AppOptions by app id and kind so we can merge into entries
     $argsById   = @{}

@@ -1073,7 +1073,7 @@ function Get-MsixAliasCandidate {
     $workspace = $ws.Path
     try {
         [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
-        $apps          = @($manifest.Package.Applications.Application)
+        $apps          = @($manifest.Package.Applications.Application | Where-Object { $null -ne $_ })
 
         $skipPatterns = @(
             '^msvcr','^msvcp','^vcruntime','^ucrtbase',

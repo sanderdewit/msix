@@ -294,8 +294,24 @@ function Invoke-MsixAutoFixLoop {
             $tracePath = Join-Path -Path $passDir -ChildPath 'trace.pml'
             Write-MsixLog -Level Info -Message "AutoFixLoop: capturing trace ($TraceDurationSeconds s)..."
             try {
-                Invoke-MsixProcMonCapture -PackagePath $targetPath -OutputPml $tracePath `
-                    -DurationSeconds $TraceDurationSeconds
+                # Invoke-MsixProcMonCapture takes -PackageFamilyName and -AppId,
+                # NOT -PackagePath (issue #153). The old call could never bind, so
+                # it threw ParameterBindingException into the catch below on every
+                # pass: no .pml was ever produced, and the NoRegressions stop
+                # condition never received delta data. The documented -CaptureTrace
+                # feature had therefore never worked. Derive the identity the
+                # cmdlet actually needs from the package under test.
+                [xml]$traceManifest = Get-MsixManifest -Path $targetPath
+                $identity = $traceManifest.Package.Identity
+                if (-not $identity) { throw "Cannot resolve package identity from '$targetPath'." }
+                $familyName = '{0}_{1}' -f $identity.Name, (Get-MsixPublisherId -Publisher $identity.Publisher)
+                $firstApp = @($traceManifest.Package.Applications.Application | Where-Object { $null -ne $_ }) |
+                            Select-Object -First 1
+                if (-not $firstApp) { throw "Cannot resolve an Application Id from '$targetPath'." }
+
+                Invoke-MsixProcMonCapture -PackageFamilyName $familyName `
+                    -AppId $firstApp.GetAttribute('Id') `
+                    -OutputPml $tracePath -DurationSeconds $TraceDurationSeconds
             } catch {
                 Write-MsixLog -Level Warning -Message "AutoFixLoop: trace capture failed on pass $pass - $_"
             }

@@ -417,7 +417,7 @@ function Get-MsixPluginExtensionPoint {
         # can resolve it. Without that anchor we'd also flag e.g.
         # VFS\Windows\System32\<random>\Plugins (false positive).
         [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
-        $apps = @($manifest.Package.Applications.Application)
+        $apps = @($manifest.Package.Applications.Application | Where-Object { $null -ne $_ })
         $appRoots = [System.Collections.Generic.List[string]]::new()
         foreach ($app in $apps) {
             $exe = $app.GetAttribute('Executable')

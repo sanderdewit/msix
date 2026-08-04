@@ -235,7 +235,7 @@ function Invoke-MsixContainerCommand {
 
         if (-not $AppId) {
             $manifest = Get-AppPackageManifest -Package $appx.PackageFullName
-            $AppId = (@($manifest.Package.Applications.Application))[0].Id
+            $AppId = (@($manifest.Package.Applications.Application | Where-Object { $null -ne $_ }))[0].Id
         }
 
         Write-MsixLog -Level Info -Message "Container exec: $($appx.PackageFamilyName)!$AppId -> $Command"

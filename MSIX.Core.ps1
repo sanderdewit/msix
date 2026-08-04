@@ -1,6 +1,111 @@
 ﻿# Resolved once per module load; overridable via $env:MSIX_TOOLS_PATH
 $script:ToolsRoot = $null
 
+# Session-scoped verification opt-out. Deliberately in-memory only: see
+# _MsixIsToolVerificationBypassed.
+$script:MsixToolVerificationDisabled = $false
+
+function Set-MsixToolVerification {
+    <#
+    .SYNOPSIS
+        Enables or disables Authenticode verification of the toolchain for the
+        CURRENT SESSION only. No administrator rights required.
+
+    .DESCRIPTION
+        The escape hatch for offline / air-gapped build agents where CRL/OCSP
+        chain checks cannot complete for a legitimately Microsoft-signed binary.
+
+        SECURITY (#147): this is deliberately a session-scoped, in-memory switch
+        rather than an environment variable. An environment variable can be
+        persisted by a non-admin into HKCU\Environment, after which EVERY later
+        PowerShell session in that user's context silently trusts an arbitrary
+        tools root - and combined with MSIX_TOOLS_PATH that is control over what
+        the organisation signs. A setting that lives only in the current
+        runspace cannot be planted for a future session to pick up: the operator
+        has to opt out explicitly, in the script that is doing the work.
+
+        The state does not persist. Re-import the module, or open a new session,
+        and verification is on again.
+
+    .PARAMETER Enabled
+        $false disables verification for this session; $true restores it.
+
+    .EXAMPLE
+        # Air-gapped agent: no CRL/OCSP reachability
+        Set-MsixToolVerification -Enabled $false
+        Invoke-MsixSigning -PackagePath app.msix
+
+    .OUTPUTS
+        None.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    [OutputType([void])]
+    param(
+        [Parameter(Mandatory)][bool]$Enabled
+    )
+    $action = if ($Enabled) { 'Enable toolchain Authenticode verification' } else { 'DISABLE toolchain Authenticode verification' }
+    if (-not $PSCmdlet.ShouldProcess('MSIX toolchain verification (this session)', $action)) { return }
+
+    $script:MsixToolVerificationDisabled = -not $Enabled
+    # Drop any cached root so the next resolution re-evaluates under the new setting.
+    $script:ToolsRoot = $null
+
+    if ($Enabled) {
+        Write-MsixLog -Level Info -Message 'Toolchain Authenticode verification ENABLED for this session.'
+    } else {
+        Write-Warning 'MSIX: toolchain Authenticode verification DISABLED for this session. SDK tools will be trusted without a signature check. This lasts until the session ends or the module is re-imported.'
+        Write-MsixLog -Level Warning -Message 'Toolchain Authenticode verification DISABLED for this session via Set-MsixToolVerification.'
+    }
+}
+
+function _MsixIsToolVerificationBypassed {
+    <#
+    .SYNOPSIS
+        Returns $true when toolchain Authenticode verification has been opted out
+        of, either for this session or machine-wide.
+
+    .DESCRIPTION
+        SECURITY (#147). The bypass used to be an ordinary environment variable,
+        so a non-admin attacker could persist it in HKCU\Environment and every
+        later PowerShell session in that user's context would trust an arbitrary
+        tools root - combined with MSIX_TOOLS_PATH, that is full control of what
+        the organisation signs, with only a suppressible log line as a signal.
+
+        Two supported opt-outs remain, neither of which can be planted for a
+        FUTURE session to silently pick up:
+
+          1. Set-MsixToolVerification -Enabled $false
+             Session-scoped, in-memory, NO admin rights required. This is the
+             normal escape hatch for an air-gapped agent.
+
+          2. MSIX_SKIP_TOOL_VERIFICATION at MACHINE scope
+             For fleet configuration; writing it needs administrator rights.
+
+        A process- or user-scoped environment variable is deliberately IGNORED,
+        and says so loudly rather than silently appearing to work.
+    #>
+    [OutputType([bool])]
+    param()
+
+    if ($script:MsixToolVerificationDisabled) { return $true }
+
+    $machine = $null
+    try {
+        $machine = [Environment]::GetEnvironmentVariable('MSIX_SKIP_TOOL_VERIFICATION', 'Machine')
+    } catch {
+        # Registry read denied (locked-down host): treat as not bypassed.
+        Write-MsixLog -Level Debug -Message "Could not read the machine-scoped MSIX_SKIP_TOOL_VERIFICATION: $($_.Exception.Message)"
+    }
+    if ($machine) { return $true }
+
+    # Set somewhere, but not at machine scope: ignore it, and point at the
+    # supported, admin-free alternative.
+    if ($env:MSIX_SKIP_TOOL_VERIFICATION) {
+        Write-Warning "MSIX: MSIX_SKIP_TOOL_VERIFICATION is set for this process/user but is IGNORED, because an environment variable can be planted to affect future sessions. Use 'Set-MsixToolVerification -Enabled `$false' for this session (no admin needed), or set the variable at Machine scope for the whole host. Verification remains ENABLED."
+    }
+    return $false
+}
+
 function _MsixSetVerifiedToolsRoot {
     <#
     .SYNOPSIS
@@ -33,13 +138,13 @@ function _MsixSetVerifiedToolsRoot {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '')]
     param([Parameter(Mandatory)][string]$Root)
 
-    if ($env:MSIX_SKIP_TOOL_VERIFICATION) {
+    if (_MsixIsToolVerificationBypassed) {
         # Real Warning stream as well as the module log: Write-MsixLog routes to
         # Write-Information, which is invisible to -WarningVariable and is dropped
         # entirely under Set-MsixLogLevel -Level Error. Disabling the control that
         # protects the signing toolchain must not be silenceable (issue #147).
-        Write-Warning "MSIX: tool Authenticode verification BYPASSED (MSIX_SKIP_TOOL_VERIFICATION is set) for '$Root'."
-        Write-MsixLog -Level Warning -Message "Tool Authenticode verification BYPASSED (MSIX_SKIP_TOOL_VERIFICATION is set). SDK tools under '$Root' are trusted without a signature check. Unset this variable to restore fail-closed verification."
+        Write-Warning "MSIX: tool Authenticode verification BYPASSED (machine-scoped MSIX_SKIP_TOOL_VERIFICATION is set) for '$Root'."
+        Write-MsixLog -Level Warning -Message "Tool Authenticode verification BYPASSED (machine-scoped MSIX_SKIP_TOOL_VERIFICATION is set). SDK tools under '$Root' are trusted without a signature check. Clear the machine-scoped variable to restore fail-closed verification."
     } elseif (Get-Command -Name _MsixVerifyAuthenticode -ErrorAction SilentlyContinue) {
         # Verify the tools we EXECUTE plus signtool's private side-by-side load
         # surface (issue #147).
@@ -329,6 +434,46 @@ function New-MsixWorkspace {
     $path = (Get-Item -LiteralPath $path).FullName
     Write-MsixLog -Level Debug -Message "Workspace created: $path"
     return $path
+}
+
+function _MsixTestTrustedExecutable {
+    <#
+    .SYNOPSIS
+        Returns $true when a resolved helper executable is Authenticode-trusted,
+        $false (with a Warning) otherwise. Does not throw.
+
+    .DESCRIPTION
+        SECURITY (#147). Resolve-MsixProcMonPath and friends pick an executable
+        out of env-var overrides, PATH, and fixed fallbacks such as
+        'C:\PSF\ProcessMonitor\Procmon.exe' - and their results are executed,
+        usually ELEVATED (ProcMon needs its kernel driver). None of that was
+        verified, so a standard user who created C:\PSF - the root of C: grants
+        Authenticated Users CreateDirectories, and C:\PSF does not exist by
+        default - got their binary run as SYSTEM.
+
+        This returns a boolean rather than throwing so a resolver can simply skip
+        an untrusted candidate and keep looking, which keeps a poisoned override
+        from denying service as well.
+
+        Honours the same machine-scoped bypass as the SDK toolchain check.
+    #>
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$ToolName = 'tool'
+    )
+    if (_MsixIsToolVerificationBypassed) { return $true }
+    if (-not (Get-Command -Name _MsixVerifyAuthenticode -ErrorAction SilentlyContinue)) {
+        Write-MsixLog -Level Warning -Message "Cannot verify $ToolName at '$Path': the Authenticode verifier is not loaded. Skipping this candidate."
+        return $false
+    }
+    try {
+        $null = _MsixVerifyAuthenticode -Path $Path -ToolName $ToolName
+        return $true
+    } catch {
+        Write-MsixLog -Level Warning -Message "Ignoring untrusted $ToolName at '$Path': $($_.Exception.Message.Split([char]10)[0]). It will NOT be executed."
+        return $false
+    }
 }
 
 function _MsixToolPath {

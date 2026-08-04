@@ -265,7 +265,7 @@
         Set-MsixManifestMaxVersionTested -Manifest $manifest -MinBuild $minBuild
 
         # ── Locate the target Application ─────────────────────────────────
-        $apps = @($manifest.Package.Applications.Application)
+        $apps = @($manifest.Package.Applications.Application | Where-Object { $null -ne $_ })
         $app  = if ($AppId) {
             $apps | Where-Object { $_.GetAttribute('Id') -eq $AppId } | Select-Object -First 1
         } else {
@@ -545,12 +545,34 @@ function Add-MsixFileExplorerContextMenu {
         $d4Uri = Get-MsixManifestNamespaceUri -Prefix 'desktop4'
         $d5Uri = Get-MsixManifestNamespaceUri -Prefix 'desktop5'
 
-        $d4Ext = $manifest.CreateElement('desktop4:Extension', $d4Uri)
-        $d4Ext.SetAttribute('Category', 'windows.fileExplorerContextMenus')
-
-        $ctxMenus = $manifest.CreateElement('desktop4:FileExplorerContextMenus', $d4Uri)
+        # IDEMPOTENCY (issue #153): this had NO existence check, while
+        # Add-MsixLegacyContextMenu in this same file does it correctly. Running
+        # twice produced a second FileExplorerContextMenus block, and once a
+        # duplicate exists the legacy function's SelectSingleNode only ever sees
+        # the first one. Reuse an existing container and skip ItemType/Verb pairs
+        # that are already declared.
+        $ctxMenus = $extNode.SelectSingleNode(
+            "*[local-name()='Extension'][@Category='windows.fileExplorerContextMenus']/*[local-name()='FileExplorerContextMenus']")
+        if ($ctxMenus) {
+            $d4Ext = $null   # reusing the existing extension; nothing to append
+        } else {
+            $d4Ext = $manifest.CreateElement('desktop4:Extension', $d4Uri)
+            $d4Ext.SetAttribute('Category', 'windows.fileExplorerContextMenus')
+            $ctxMenus = $manifest.CreateElement('desktop4:FileExplorerContextMenus', $d4Uri)
+        }
 
         foreach ($ft in $FileTypes) {
+            $already = @($ctxMenus.SelectNodes("*[local-name()='ItemType']")) |
+                Where-Object {
+                    $_.GetAttribute('Type') -eq $ft -and
+                    @($_.SelectNodes("*[local-name()='Verb']") |
+                        Where-Object { $_.GetAttribute('Id') -eq $VerbId })
+                } | Select-Object -First 1
+            if ($already) {
+                Write-MsixLog -Level Info -Message "Context-menu verb '$VerbId' already declared for '$ft'; leaving it unchanged."
+                continue
+            }
+
             $itemType = $manifest.CreateElement('desktop5:ItemType', $d5Uri)
             $itemType.SetAttribute('Type', $ft)
 
@@ -562,7 +584,9 @@ function Add-MsixFileExplorerContextMenu {
             $null = $ctxMenus.AppendChild($itemType)
         }
 
-        $null = $d4Ext.AppendChild($ctxMenus)
-        $null = $extNode.AppendChild($d4Ext)
+        if ($d4Ext) {
+            $null = $d4Ext.AppendChild($ctxMenus)
+            $null = $extNode.AppendChild($d4Ext)
+        }
     }
 }

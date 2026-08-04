@@ -488,8 +488,13 @@ function Test-MsixSignature {
     # The sandbox has no trust for the signing CA unless we install it, so
     # anything other than NotSigned/HashMismatch is fine on the host but
     # won't necessarily survive a fresh sandbox without -AutoSign.
+    # NotTrusted must be included (issue #153): a package signed by a CA this
+    # machine does not trust will NOT install in a clean sandbox, which is
+    # precisely the case -AutoSign exists for. Omitting it reported
+    # NeedsSelfSign = $false for exactly the package that needs re-signing, even
+    # though this function's own documentation lists NotTrusted as returnable.
     $needsSelfSign = $sig.Status -in @(
-        'NotSigned', 'HashMismatch', 'Incompatible', 'UnknownError'
+        'NotSigned', 'NotTrusted', 'HashMismatch', 'Incompatible', 'UnknownError'
     )
 
     return [pscustomobject]@{

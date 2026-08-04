@@ -141,7 +141,7 @@ function Invoke-MsixCommand {
 
         if (-not $AppId) {
             $manifest = Get-AppPackageManifest -Package $appx.PackageFullName
-            $apps     = @($manifest.Package.Applications.Application)
+            $apps     = @($manifest.Package.Applications.Application | Where-Object { $null -ne $_ })
             if ($apps.Count -gt 1) { Write-Warning "Multiple apps in package; using first: $($apps[0].Id)" }
             $AppId = $apps[0].Id
         }
@@ -355,7 +355,9 @@ function New-MsixPsfJson {
 
     Write-Warning 'New-MsixPsfJson is obsolete and produces incorrect output for multi-app packages. Use New-MsixPsfConfig with typed builders (New-MsixPsfFileRedirectionConfig, etc.) and Add-MsixPsfV2 instead.'
     [xml]$appinfo  = _MsixLoadXmlSecure -Path (Get-Item -LiteralPath $AppxManifest).FullName
-    $apps          = @($appinfo.Package.Applications.Application)
+    # Null-strip (#153): @($null) here produced a phantom application entry in
+    # the generated PSF config.
+    $apps          = @($appinfo.Package.Applications.Application | Where-Object { $null -ne $_ })
 
     $appEntries = foreach ($app in $apps) {
         [pscustomobject]@{
@@ -473,7 +475,7 @@ function Add-MsixAlias {
             $uap3Uri    = Get-MsixManifestNamespaceUri -Prefix 'uap3'
             $desktopUri = Get-MsixManifestNamespaceUri -Prefix 'desktop'
 
-            $targets = @($manifest.Package.Applications.Application)
+            $targets = @($manifest.Package.Applications.Application | Where-Object { $null -ne $_ })
             if (-not $targetAll -and $targetAppIds) {
                 $targets = $targets | Where-Object { $targetAppIds -contains $_.Id }
             }
@@ -604,7 +606,7 @@ function Remove-MsixStartMenuEntry {
             -Activity 'Remove Start menu entry' -Mutate {
             param([xml]$manifest)
 
-            $targets = @($manifest.Package.Applications.Application)
+            $targets = @($manifest.Package.Applications.Application | Where-Object { $null -ne $_ })
             if (-not $targetAll -and $targetAppIds) {
                 $targets = $targets | Where-Object { $targetAppIds -contains $_.Id }
             }
@@ -700,7 +702,7 @@ function Add-MsixStartMenuFolder {
             Add-MsixManifestNamespace -Manifest $manifest -Prefix 'uap3'
             $uap3Uri = Get-MsixManifestNamespaceUri -Prefix 'uap3'
 
-            foreach ($app in @($manifest.Package.Applications.Application)) {
+            foreach ($app in @($manifest.Package.Applications.Application | Where-Object { $null -ne $_ })) {
                 $ve = $app.SelectSingleNode('*[local-name()="VisualElements"]')
                 if (-not $ve) { continue }
 

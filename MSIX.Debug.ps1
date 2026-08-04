@@ -39,14 +39,15 @@ function Resolve-MsixDebugViewPath {
     [CmdletBinding()]
     [OutputType([string])]
     param()
-    if ($env:MSIX_DEBUGVIEW_PATH -and (Test-Path -LiteralPath $env:MSIX_DEBUGVIEW_PATH)) {
-        return (Resolve-Path -LiteralPath $env:MSIX_DEBUGVIEW_PATH).Path
-    }
-    $cmd = Get-Command -Name Dbgview.exe, Dbgview64.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($cmd) { return $cmd.Source }
-
+    # SECURITY (#147): DebugView is launched by the debug session, often
+    # elevated, and MSIX_DEBUGVIEW_PATH is a plain user-settable variable. Verify
+    # every candidate before returning one to a caller that will execute it, and
+    # skip (rather than fail) an untrusted candidate so a poisoned override
+    # cannot deny service either.
     $toolsRoot = Get-MsixToolsRoot
     foreach ($p in @(
+        $(if ($env:MSIX_DEBUGVIEW_PATH -and (Test-Path -LiteralPath $env:MSIX_DEBUGVIEW_PATH)) { (Resolve-Path -LiteralPath $env:MSIX_DEBUGVIEW_PATH).Path }),
+        $((Get-Command -Name Dbgview.exe, Dbgview64.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source),
         (Join-Path -Path $toolsRoot -ChildPath 'debugview\Dbgview64.exe'),
         (Join-Path -Path $toolsRoot -ChildPath 'debugview\Dbgview.exe'),
         (Join-Path -Path $toolsRoot -ChildPath 'procmon\Dbgview64.exe'),
@@ -56,7 +57,9 @@ function Resolve-MsixDebugViewPath {
         "${env:ProgramFiles}\SysInternalsSuite\Dbgview64.exe",
         "${env:ProgramFiles}\SysInternalsSuite\Dbgview.exe"
     )) {
-        if (Test-Path -LiteralPath $p) { return $p }
+        if (-not $p) { continue }
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+        if (_MsixTestTrustedExecutable -Path $p -ToolName 'DebugView') { return $p }
     }
     return $null
 }

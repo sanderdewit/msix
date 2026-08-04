@@ -944,7 +944,17 @@ function _MsixBuildRegistryContent {
                 }
             }
             $datPath = Join-Path -Path $Staging -ChildPath $set.File
-            _MsixOfflineSaveHive -Hive $hive -Path $datPath
+            # _MsixOfflineSaveHive signals failure ONLY by returning $false - it
+            # does not throw. Discarding that (issue #153) meant a failed save
+            # produced no Registry.dat, which is not a pack error, so the operator
+            # got a SIGNED modification package containing none of the requested
+            # registry keys, exit code 0, and a log line claiming success. The
+            # bare call also leaked a [bool] into the output stream, so the cmdlet
+            # returned @($true, $obj). MSIX.PackageMutators.ps1 already branches
+            # on this return value; match it.
+            if (-not (_MsixOfflineSaveHive -Hive $hive -Path $datPath)) {
+                throw "Failed to write $($set.File) to '$datPath'. The modification package would have shipped without the requested registry content."
+            }
             Write-MsixLog -Level Info -Message "$($set.File) built with $($set.Map.Count) key(s)."
         } finally {
             _MsixCloseOfflineHive -Hive $hive

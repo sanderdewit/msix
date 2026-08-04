@@ -140,7 +140,7 @@ function Test-MsixDeployment {
     # Read identity on the host (avoids a round-trip and lets us build the AUMID).
     [xml]$manifest = Get-MsixManifest -Path $PackagePath
     $identityName = $manifest.Package.Identity.Name
-    $apps = @($manifest.Package.Applications.Application)
+    $apps = @($manifest.Package.Applications.Application | Where-Object { $null -ne $_ })
     if ($AppId) {
         $app = $apps | Where-Object { $_.GetAttribute('Id') -eq $AppId } | Select-Object -First 1
         if (-not $app) { throw "Application '$AppId' not found in the manifest." }

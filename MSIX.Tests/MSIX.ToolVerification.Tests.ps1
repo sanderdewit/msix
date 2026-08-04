@@ -116,10 +116,13 @@ Describe '_MsixSetVerifiedToolsRoot (#54, #147)' -Tag 'Toolchain', 'Security' {
         } finally { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
     }
 
-    It 'bypasses verification when MSIX_SKIP_TOOL_VERIFICATION is set (offline escape hatch)' {
-        $env:MSIX_SKIP_TOOL_VERIFICATION = '1'
+    It 'bypasses verification for the offline escape hatch (machine-scoped)' {
+        # The bypass is only honoured at MACHINE scope now (#147), which needs
+        # admin rights to set - so the gate is mocked rather than setting a real
+        # machine-wide variable from a test.
         $result = InModuleScope MSIX {
             $script:verifyCalled = $false
+            Mock _MsixIsToolVerificationBypassed { $true }
             Mock _MsixVerifyAuthenticode { $script:verifyCalled = $true }
             Mock Write-Warning {}
             $r = _MsixSetVerifiedToolsRoot -Root 'C:\offline\root'
@@ -134,15 +137,121 @@ Describe '_MsixSetVerifiedToolsRoot (#54, #147)' -Tag 'Toolchain', 'Security' {
         # Write-MsixLog routes to Write-Information: invisible to -WarningVariable
         # and dropped entirely under Set-MsixLogLevel -Level Error. Disabling the
         # control that protects signing must not be silenceable.
-        $env:MSIX_SKIP_TOOL_VERIFICATION = '1'
         $warned = InModuleScope MSIX {
             $script:warnings = @()
+            Mock _MsixIsToolVerificationBypassed { $true }
             Mock Write-Warning { $script:warnings += $Message }
             $null = _MsixSetVerifiedToolsRoot -Root 'C:\offline\root'
             @($script:warnings)
         }
         @($warned).Count | Should -BeGreaterThan 0
         $warned -join ' ' | Should -Match 'BYPASS'
+    }
+}
+
+Describe 'Verification bypass requires MACHINE scope (#147)' -Tag 'Security' {
+
+    AfterEach { Remove-Item Env:\MSIX_SKIP_TOOL_VERIFICATION -ErrorAction SilentlyContinue }
+
+    It 'offers a session-scoped opt-out that needs no administrator rights' {
+        # The module must not require admin. Set-MsixToolVerification is the
+        # supported escape hatch for an air-gapped agent: in-memory, so it cannot
+        # be planted for a future session the way an env var can.
+        try {
+            Set-MsixToolVerification -Enabled $false -WarningAction SilentlyContinue
+            InModuleScope MSIX { _MsixIsToolVerificationBypassed } | Should -BeTrue
+        } finally {
+            Set-MsixToolVerification -Enabled $true
+        }
+        InModuleScope MSIX { _MsixIsToolVerificationBypassed } | Should -BeFalse
+    }
+
+    It 'does not persist the session opt-out across a module re-import' {
+        Set-MsixToolVerification -Enabled $false -WarningAction SilentlyContinue
+        Import-Module -Name (Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')) -Force
+        InModuleScope MSIX { _MsixIsToolVerificationBypassed } | Should -BeFalse
+    }
+
+    It 'ignores a process/user-scoped MSIX_SKIP_TOOL_VERIFICATION' {
+        # A non-admin could persist this in HKCU\Environment; combined with
+        # MSIX_TOOLS_PATH that was full control of what the organisation signs.
+        # The escape hatch is an administrative decision about a build machine,
+        # so it must be made with administrative rights.
+        $env:MSIX_SKIP_TOOL_VERIFICATION = '1'
+        $bypassed = InModuleScope MSIX {
+            Mock Write-Warning {}
+            _MsixIsToolVerificationBypassed
+        }
+        $bypassed | Should -BeFalse
+    }
+
+    It 'says loudly that a process-scoped value is being ignored' {
+        $env:MSIX_SKIP_TOOL_VERIFICATION = '1'
+        $warned = InModuleScope MSIX {
+            $script:warnings = @()
+            Mock Write-Warning { $script:warnings += $Message }
+            $null = _MsixIsToolVerificationBypassed
+            @($script:warnings)
+        }
+        ($warned -join ' ') | Should -Match 'IGNORED'
+    }
+
+    It 'still verifies the toolchain when only a process-scoped value is set' {
+        $env:MSIX_SKIP_TOOL_VERIFICATION = '1'
+        $root = New-FakeToolsRoot
+        try {
+            $verified = InModuleScope MSIX -Parameters @{ Root = $root } {
+                param($Root)
+                $script:verified = @()
+                Mock Write-Warning {}
+                Mock _MsixVerifyAuthenticode { $script:verified += $Path }
+                $null = _MsixSetVerifiedToolsRoot -Root $Root
+                @($script:verified)
+            }
+            @($verified).Count | Should -BeGreaterThan 0
+        } finally {
+            InModuleScope MSIX { $script:ToolsRoot = $null }
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Describe 'Helper executables are verified before execution (#147)' -Tag 'Security' {
+
+    It 'refuses an untrusted binary planted via MSIX_PROCMON_PATH' {
+        # ProcMon needs its kernel driver, so it runs ELEVATED. The old resolver
+        # returned whatever the (user-settable) override pointed at, and also had
+        # a fixed 'C:\PSF\ProcessMonitor\Procmon.exe' fallback under a directory
+        # any standard user can create - a local privilege-escalation path.
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ("plant-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        $planted = Join-Path $dir 'Procmon.exe'
+        [IO.File]::WriteAllBytes($planted, [byte[]]@(0x4D,0x5A,0x90,0x00))
+        try {
+            $env:MSIX_PROCMON_PATH = $planted
+            $resolved = Resolve-MsixProcMonPath -WarningAction SilentlyContinue
+            $resolved | Should -Not -Be $planted
+        } finally {
+            Remove-Item Env:\MSIX_PROCMON_PATH -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'accepts a genuinely signed executable' {
+        $ok = InModuleScope MSIX {
+            _MsixTestTrustedExecutable -Path "$env:WINDIR\System32\where.exe" -ToolName 'probe'
+        }
+        $ok | Should -BeTrue
+    }
+
+    It 'returns false (not throw) for an untrusted candidate so resolution can continue' {
+        $res = InModuleScope MSIX {
+            $f = Join-Path ([IO.Path]::GetTempPath()) ("unsigned-" + [guid]::NewGuid().ToString('N').Substring(0,8) + '.exe')
+            [IO.File]::WriteAllBytes($f, [byte[]]@(0x4D,0x5A))
+            try { _MsixTestTrustedExecutable -Path $f -ToolName 'probe' }
+            finally { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+        }
+        $res | Should -BeFalse
     }
 }
 

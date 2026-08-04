@@ -183,6 +183,7 @@
         'Set-MsixRegistryWriteVirtualization',
         'Set-MsixScriptSignature',
         'Set-MsixToolsRoot',
+        'Set-MsixToolVerification',
         'Start-MsixDebugSession',
         'Start-MsixSandbox',
         'Test-MsixAgainstLimitation',

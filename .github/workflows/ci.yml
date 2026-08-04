@@ -69,6 +69,40 @@ jobs:
         shell: pwsh
         run: Install-Module Pester -Force -SkipPublisherCheck -MinimumVersion 5.0
 
+      # Provision the toolchain here too, not just in the integration lane.
+      # Without it this lane fell through to the runner's system Windows SDK,
+      # which has no PSF - so 10 PSF-dependent tests skipped, including the
+      # Add-MsixPsfV2 re-injection guard for the OrderedDictionary.ContainsKey
+      # crash (#138) and the Remove-MsixPsf round-trip covering the #145
+      # data-loss fix. A skipped guard protects nothing.
+      #
+      # Uses the module's own one-call setup, so the installer path is exercised
+      # end to end. Procmon/DebugView/MsixMgr/Runtime are SKIPPED deliberately:
+      #   * no test needs them - they are in the environment-bound exclusion list
+      #     because they require a kernel driver, Hyper-V, or a live install;
+      #   * they add four more download endpoints (Sysinternals, aka.ms
+      #     redirectors) to every build. The Procmon extract fails intermittently
+      #     even locally, so including it would make CI flaky for no coverage;
+      #   * msixmgr additionally carries a documented Authenticode exception
+      #     (upstream signing is broken, microsoft/msix-packaging#710) that has
+      #     no business being exercised on every push.
+      # Failure is FATAL: a toolchain we could not provision must fail the build
+      # rather than silently reduce coverage (#151).
+      - name: Provision toolchain (SDK + PSF)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module ./MSIX.psd1 -Force
+          Initialize-MsixToolchain -Skip Procmon,DebugView,MsixMgr,Runtime | Out-Null
+          $root = & (Get-Module MSIX) { Get-MsixToolsRoot }
+          "Tools root: $root"
+          foreach ($probe in @('Tools\MakeAppx.exe', 'psf\PsfLauncher64.exe')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $root $probe))) {
+              throw "Provisioning incomplete: $probe is missing under '$root'."
+            }
+            "  present: $probe"
+          }
+
       - name: Run Pester tests (with code coverage)
         shell: pwsh
         run: |
@@ -103,7 +137,9 @@ jobs:
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        # v5 runs on Node 24; v4 targets the deprecated Node 20 and was being
+        # force-migrated by the runner with a warning on every build.
+        uses: actions/upload-artifact@v5
         with:
           name: coverage
           path: coverage.xml
@@ -240,13 +276,15 @@ jobs:
       # guard added for the OrderedDictionary.ContainsKey crash (#138) and the
       # Remove-MsixPsf round-trip that covers the #145 data-loss fix. Those
       # guards had never once run on a CI runner.
-      - name: Provision SDK + PSF toolchain
+      - name: Provision toolchain (SDK + PSF)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module ./MSIX.psd1 -Force
-          Install-MsixSdkTool | Out-Null
-          Install-MsixPsfBinary | Out-Null
+          # Same one-call setup as the Pester lane, so both lanes provision
+          # identically and the module's own entry point is exercised. See that
+          # lane for why Procmon/DebugView/MsixMgr/Runtime are skipped.
+          Initialize-MsixToolchain -Skip Procmon,DebugView,MsixMgr,Runtime | Out-Null
           $root = & (Get-Module MSIX) { Get-MsixToolsRoot }
           "Tools root: $root"
           foreach ($probe in @('Tools\MakeAppx.exe', 'psf\PsfLauncher64.exe')) {

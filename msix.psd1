@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.74.0'
+    ModuleVersion     = '0.74.1'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, deployment-script templates, heuristic heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -258,69 +258,72 @@
             ProjectUri  = 'https://github.com/sanderdewit/msix'
             LicenseUri  = 'https://github.com/sanderdewit/msix/blob/main/LICENSE.md'
             ReleaseNotes = @'
-## v0.74.0 (hardening release - data loss, security, PS 5.1)
+## v0.74.1 (completes the 0.74.0 audit fixes)
 
-Outcome of a full-codebase audit. Several of these could destroy or corrupt an
-operator's package, or hand an attacker control of signing; all shipped in 0.73.x.
+0.74.0 closed issues #147, #152 and #153 only partially. This finishes them.
 
-DATA LOSS (#145)
-- Remove-MsixPsf deleted 'config.json' and '*Fixup*.dll' recursively from ANY
-  package, then repacked, signed and moved the result over the operator's
-  original. A PSF-free app shipping its own config.json (Electron/.NET - very
-  common) silently lost it, exit code 0. Now gated on real PSF presence, with
-  precise patterns.
-- Add-MsixVcRuntimeBundle packed and signed directly over the input file, so a
-  signing failure left an unsigned repack where a signed package had been, with
-  no recovery. Now builds to scratch, signs, then moves; gains
-  -UnsignedOutputPath.
-- -WhatIf was broken for all ~46 mutators: New-MsixWorkspace honoured the
-  inherited WhatIfPreference and returned an empty path.
-- -UnsignedOutputPath could destroy the artifact it promised to preserve: the
-  copy used -ErrorAction SilentlyContinue and "preserved" was logged
-  unconditionally, then the scratch was deleted.
+SECURITY (#147) - and without requiring administrator rights
+- New Set-MsixToolVerification -Enabled $false: the supported escape hatch for
+  air-gapped agents. Session-scoped and in-memory, so NO admin is needed and it
+  cannot be planted for a future session to pick up. The module must never
+  require elevation - that is why it parses hives via offreg.dll rather than
+  reg.exe load, which demands SeBackupPrivilege/SeRestorePrivilege.
+- A process/user-scoped MSIX_SKIP_TOOL_VERIFICATION is now IGNORED (with a loud
+  warning). That was the real attack: a non-admin persists it in
+  HKCU\Environment and every later session silently trusts an arbitrary tools
+  root. A machine-scoped value is still honoured for fleet configuration.
+- Resolve-MsixProcMonPath / Resolve-MsixDebugViewPath now Authenticode-verify
+  every candidate before returning it. ProcMon loads a kernel driver so it runs
+  ELEVATED, and the resolver trusted both a user-settable override and a fixed
+  C:\PSF\ProcessMonitor\Procmon.exe fallback - a directory any standard user can
+  create, because the root of C: grants Authenticated Users CreateDirectories.
+  That was a local privilege-escalation path. msixmgr keeps its documented
+  unsigned exception (microsoft/msix-packaging#710) and is unaffected.
 
-SECURITY (#147, #148)
-- Signing-toolchain hijack: only 3 .exe files were Authenticode-verified, but
-  SDK signtool.exe loads wintrust.dll / mssign32.dll / AppxSip.dll from its OWN
-  directory. Every .exe/.dll in the resolved root is now verified.
-- Tool discovery walked up to four parent levels and took the lexically highest
-  match, reaching the user-writable Documents folder for a CurrentUser install.
-  Now one level.
-- The "verifier not loaded" branch trusted the root silently; now fail-closed.
-- The PFX password reached the log file via the Exec: line (and therefore CI
-  artifacts and support bundles). Secret-bearing switches are now redacted.
-- SignerSignEx left the PFX PRIVATE KEY in the user's key store on every run.
-  The key container is now deleted explicitly.
+CORRECTNESS (#153)
+- _MsixOfflineSaveHive's return value is no longer discarded: it signals failure
+  only by returning $false, so a failed save shipped a SIGNED modification
+  package containing none of the requested registry keys, exit code 0, and a log
+  line claiming success.
+- Idempotency guards for Add-MsixFileTypeAssociation, Add-MsixShellVerbExtension,
+  Add-MsixFileExplorerContextMenu and the Rule element of Add-MsixFirewallRule.
+- The rest of the @($null) null-deref cluster: 15 further sites.
+- Invoke-MsixAutoFixLoop -CaptureTrace now works. It called
+  Invoke-MsixProcMonCapture -PackagePath, which is not a parameter of that
+  cmdlet, inside a catch that logged and continued - so the documented feature
+  had never once produced a .pml.
+- Test-MsixSignature includes NotTrusted in NeedsSelfSign; such a package does
+  not install in a clean sandbox, which is what -AutoSign exists for.
+- Add-MsixVcRuntimeBundle no longer coerces an undetectable (or arm64)
+  architecture to x86 while logging "auto-detected", and no longer packs a
+  PARTIAL bundle as success. Both shipped a package that fails at launch.
+- Write-MsixLog writes UTF-8 with -LiteralPath. The ANSI default on 5.1 turned
+  the arrows and box drawing this module emits into a literal '?', and -Path
+  treated [ ] in a log path as wildcards and silently dropped the line.
 
-WINDOWS POWERSHELL 5.1 (#146)
-- Join-String (PS6+) silently replaced the real ComServer finding with a
-  scanner error on 5.1.
-- Get-PfxCertificate -Password (PS6+) made Set-MsixScriptSignature and
-  Add-MsixStandardScript -Pfx unusable on 5.1.
-- "-Encoding utf8" means BOM on 5.1 and no BOM on 7. That put a BOM in the
-  Trusted Signing metadata JSON - rejected by System.Text.Json, on the DEFAULT
-  signing backend - and in PSF config.json.
+TEST COVERAGE (#152)
+- Never-invoked exported functions: 73 -> 26, and all 26 remaining are genuinely
+  environment-bound (network installers, Hyper-V/VHDX, the ProcMon kernel
+  driver, Windows Sandbox, a live installed package), each listed with a reason.
+- The coverage ratchet now guards the WHOLE exported surface rather than only
+  Add/Remove/Set/Update mutators - the narrow scope is how 73 functions came to
+  be uncovered with nothing reporting it.
+- Authenticode REJECTION is tested for the first time: both existing tests
+  mocked a Valid signature, so the throw branch - the control that stops a
+  planted toolchain binary from executing - had never executed.
+- Read-only scanner matrix: all 15 scanners against a well-formed package,
+  against the degenerate manifest the module generates itself, and against a
+  missing package (must fail loudly, not return a clean-looking empty result).
+- Code coverage is now measured in CI (60.5%) and reported in the job summary.
 
-MANIFEST CORRECTNESS (#153)
-- Add-MsixLoaderSearchPathOverride emitted attribute "LoaderSearchPath" (the
-  schema requires "FolderPath") and declared the extension under Application
-  instead of Package, so it could never produce a packable package.
-- Add-MsixFirewallRule passed the caller's casing to a schema that requires
-  lowercase, so -Direction In failed to parse.
+CI
+- Both lanes provision the toolchain with Initialize-MsixToolchain, so the 10
+  PSF-dependent tests that used to skip now actually run - including the
+  regression guards for #138 and #145.
+- actions/upload-artifact bumped to v5 (Node 24); v4 targets the deprecated
+  Node 20 and was force-migrated with a warning on every build.
 
-RELIABILITY + CI (#150, #151, #152)
-- Fixed the workspace leak behind ~46 mutators (1,077 stale dirs observed).
-- CI now provisions PSF, so the PSF regression guards actually run; provisioning
-  failure is fatal and an all-skip run is red.
-- The coverage ratchet counted Get-Command calls and It titles as coverage;
-  replaced with AST detection, and six never-tested mutators gained real tests.
-
-NEW
-- Import-Module notifies when a newer version is on PSGallery. Silent in CI and
-  non-interactive hosts, cached 24h, hard network timeout, never blocks import.
-  Opt out with MSIX_NO_UPDATE_CHECK=1.
-
-Full history: CHANGELOG.md.
+Suite: 848 passing. Full history: CHANGELOG.md.
 '@
         }
     }

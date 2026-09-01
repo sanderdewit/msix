@@ -1,11 +1,41 @@
-# MSIX PowerShell Module — v0.73.0
+# MSIX PowerShell Module
 
-Enterprise-grade MSIX packaging automation for mission-critical environments.
-Covers the full conversion lifecycle: static + runtime investigation, PSF
-injection, manifest editing, signing (local / Azure Trusted Signing / Key
-Vault), CI/CD pipeline orchestration, sandbox debugging, App Attach, Win32
-App Isolation, deployment-script templates, and a comprehensive Pester test
-suite.
+[![PowerShell Gallery](https://img.shields.io/powershellgallery/v/MSIX?label=PSGallery&logo=powershell)](https://www.powershellgallery.com/packages/MSIX)
+[![Downloads](https://img.shields.io/powershellgallery/dt/MSIX?label=downloads)](https://www.powershellgallery.com/packages/MSIX)
+[![CI](https://github.com/sanderdewit/msix/actions/workflows/ci.yml/badge.svg)](https://github.com/sanderdewit/msix/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-848%20passing-brightgreen)](https://github.com/sanderdewit/msix/actions/workflows/ci.yml)
+[![PowerShell 5.1](https://img.shields.io/badge/PowerShell-5.1%20%7C%207-5391FE?logo=powershell&logoColor=white)](https://learn.microsoft.com/powershell/)
+[![License](https://img.shields.io/badge/license-PolyForm%20Shield%201.0.0-blue)](LICENSE.md)
+
+**Your app works. You package it as MSIX. Now the shell extension is gone, the
+app can't write to its own install folder, and the uninstaller does nothing.**
+
+MSIX breaks working applications in ways the error messages never explain. This
+module finds out *why* and fixes it — from PowerShell, **without administrator
+rights**.
+
+```powershell
+Install-Module MSIX -Scope CurrentUser
+Initialize-MsixToolchain                       # one-time, downloads + verifies the SDK
+$report = Invoke-MsixInvestigation -PackagePath .\app.msix
+Invoke-MsixAutoFixFromAnalysis -Report $report # applies what it can prove is safe
+```
+
+It reads the package's `Registry.dat` via `offreg.dll` rather than `reg.exe
+load`, so it needs no elevation and no privileges to tell you that your COM
+shell extension was never going to load.
+
+**Got a catalogue rather than one app?**
+
+```powershell
+Invoke-MsixBulkAnalysis -Path 'D:\packages' -ReportPath .\fleet.csv
+# -> one row per package: Clean / AutoFixable / NeedsManual / Incomplete / Error
+```
+
+<sub>Also covers: PSF injection with the full TMurgent fixup palette, manifest
+editing, signing (SignTool / Azure Trusted Signing / Key Vault / in-process
+SignerSignEx), CI/CD orchestration, sandbox debugging, App Attach VHDX/CIM,
+Win32 App Isolation, and an 848-test Pester suite.</sub>
 
 > **Security note** — this module is designed for use in high-assurance
 > environments (DoD, NATO, financial, healthcare). All downloaded toolchain
@@ -34,7 +64,7 @@ suite.
 - [Debug & sandbox](#debug--sandbox)
 - [CI/CD](#cicd)
 - [Tests](#tests)
-- [What's new in v0.73](#whats-new-in-v073)
+- [What's new](#whats-new-in-v075)
 - [Release history](#release-history)
 - [License](#license)
 
@@ -100,7 +130,7 @@ Skip individual components: `Initialize-MsixToolchain -Skip Sdk,Procmon,MsixMgr`
 
 ```
 MSIX\
-├── MSIX.psd1                  Module manifest (v0.73.0)
+├── MSIX.psd1                  Module manifest
 ├── MSIX.psm1                  Root module — dot-sources all sub-modules
 ├── MSIX.Logging.ps1           Write-MsixLog + log-level / file controls
 ├── MSIX.Core.ps1              Workspace, process runner, tools resolution
@@ -575,6 +605,26 @@ CI runs PSScriptAnalyzer (Error + Warning) and Pester on every push / PR via
 
 ---
 
+## What's new in v0.75
+
+**Bulk / fleet analysis** — `Invoke-MsixBulkAnalysis` runs the whole
+investigate → plan pipeline over a folder of packages and emits one comparable
+row each (`Clean` / `AutoFixable` / `NeedsManual` / `Incomplete` / `Error`).
+Built for catalogues: every package is isolated so a corrupt one cannot end the
+run, results stream to the CSV as they complete, and `-Resume` skips what is
+already recorded — so a multi-day corpus run can be stopped and restarted at
+will. The `AutoFixable` verdict is decided by asking the real planner what it
+would do, not by a second copy of the fixable-category list.
+
+## What's new in v0.74
+
+Hardening release from a full-codebase audit — data-loss fixes (`Remove-MsixPsf`
+deleting an app's own `config.json`; `Add-MsixVcRuntimeBundle` signing over its
+input; `-WhatIf` broken across every mutator), signing-toolchain security (SxS
+DLL verification, PFX private-key residue, the password reaching the log file),
+and Windows PowerShell 5.1 compatibility. See
+[CHANGELOG.md](CHANGELOG.md#v0741---2026-08-04--completing-the-audit-147-152-153).
+
 ## What's new in v0.73
 
 **Shared runtime frameworks (#130)** — package a JRE/.NET/Python runtime ONCE
@@ -641,3 +691,4 @@ property of their respective owners (Microsoft / Tim Mangan / TMurgent
 Technologies). This module does not redistribute any binaries — it downloads
 them on demand from the authors' official release channels and verifies
 Authenticode signatures before use.
+

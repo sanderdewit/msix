@@ -58,6 +58,9 @@ try {
 . "$PSScriptRoot\MSIX.Distribution.ps1"
 . "$PSScriptRoot\MSIX.Bundle.ps1"
 . "$PSScriptRoot\MSIX.RuntimeTest.ps1"
+# Bulk/fleet layer - loaded last: it orchestrates Invoke-MsixInvestigation and
+# Invoke-MsixAutoFixFromAnalysis, so both must already be defined.
+. "$PSScriptRoot\MSIX.Bulk.ps1"
 . "$PSScriptRoot\MSIX.UpdateCheck.ps1"
 #endregion
 

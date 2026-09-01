@@ -5,6 +5,49 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.75.0 - 2026-08-04 — Bulk / fleet analysis
+
+The module's unit of work was one package. A packaging team's unit of work is a
+**catalogue** — "we have 200 apps to migrate, which break and which can you
+fix?" — and the project's own 1.0 gate needs the same thing at corpus scale.
+
+### `Invoke-MsixBulkAnalysis`
+
+Runs investigate → plan over a folder of packages and emits one comparable row
+each: `Clean` / `AutoFixable` / `NeedsManual` / `Incomplete` / `Error`, with the
+finding count, categories and planned fixes.
+
+A `foreach` around `Invoke-MsixInvestigation` does not survive real use, so this
+is built around four properties:
+
+- **Isolation** — every package runs in its own `try`/`catch`. A corrupt or
+  hostile package produces an `Error` row; it never ends the run. Verified with
+  a deliberately corrupt package in the set.
+- **Streaming** — each row is appended to `-ReportPath` as soon as it is known,
+  so a run killed at package 180 keeps the first 179 results.
+- **Resumable** — `-Resume` reads the existing report and skips what is already
+  recorded, so a multi-day corpus run can be stopped and restarted at will.
+- **No duplicated logic** — the `AutoFixable` verdict is decided by asking the
+  real planner (`Invoke-MsixAutoFixFromAnalysis -DryRun`) what it *would* do,
+  rather than keeping a second copy of the fixable-category list here. A second
+  copy would drift from the first, which is the defect class that produced the
+  three manifest bugs fixed in 0.74.0.
+
+It also refuses to flatter the result: a package whose scan hit a `ScannerError`
+or an unavailable offline-registry API is reported **`Incomplete`**, never
+`Clean` — an incomplete scan must not be presentable as a clean one (#140).
+
+Deliberately **serial** for now. The module keeps session state in script scope
+(resolved tools root, memoized offreg probe, log file handle), so concurrent
+analyses inside one process would race on it. Throughput comes from `-Resume`
+plus long runs until that state is made concurrency-safe; correctness first.
+
+### Storefront
+
+README rewritten problem-first with PSGallery/CI/test badges, and the repository
+given a real description and topics. The previous README opened with a feature
+list and a stale version header.
+
 ## v0.74.1 - 2026-08-04 — Completing the audit: #147, #152, #153
 
 0.74.0 closed these three issues only partially. This finishes them.

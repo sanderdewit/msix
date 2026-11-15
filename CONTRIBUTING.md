@@ -246,6 +246,11 @@ function Verb-MsixNoun {
   (`MSIX.PsfBinaries.ps1`) as the version to pin. Bump that constant once a newer
   release has been verified. CI provisions the newest release, so a green CI run
   on a newer version is the signal.
+- That signal relies on CI provisioning the SDK from scratch. `Update-MsixSdkTool`
+  (and so `Initialize-MsixToolchain`) keeps already-installed SDK tools that
+  still verify when the newest release is rejected, and only warns. On a fresh
+  runner there is nothing to keep, so a rejection still fails the build. Do not
+  cache `Tools\` between CI runs.
 - `Install-MsixPsfBinary` works the same way with `$script:PsfKnownGoodVersion`.
   The difference is that CI provisions PSF **at** that tag, because the newest
   TMurgent releases ship unsigned. To move on, run

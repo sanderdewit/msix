@@ -5,6 +5,69 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.75.3 - 2026-11-15 — Keep a verified SDK toolchain when the newest release is rejected
+
+### Fixed: `Initialize-MsixToolchain` failed on machines that already had a working toolchain
+
+`Update-MsixSdkTool`, which `Initialize-MsixToolchain` runs first, always moves to the
+newest stable `Microsoft.Windows.SDK.BuildTools`. When that release was rejected by
+Authenticode verification (as 10.0.28000.2957 was until 0.75.1 trusted
+`CN=Microsoft Windows Kits Publisher,`), `Install-MsixSdkTool` left the installed `Tools\`
+alone, because it verifies before it copies. Its error still reached the caller, though.
+Toolchain setup therefore failed on machines whose installed tools worked fine, and the
+next time Microsoft moves a file to a new signer it would happen again.
+
+Now, when the update is rejected and SDK tools are already installed:
+
+- **The installed tools are re-verified** with the check `Get-MsixToolsRoot` and
+  `Set-MsixToolsRoot` apply before the module runs them. They are kept only if they
+  pass. The session's cached tools root does not change.
+- **One warning** is written with `Write-Warning`, so `-WarningVariable` and CI logs
+  capture it and `Set-MsixLogLevel -Level Error` cannot hide it. It names the rejected
+  version and the kept one. After that comes the full error `Install-MsixSdkTool` would
+  have thrown: the rejected files and their signer, what to pin, and the `signers.json`
+  governance route.
+- **The result** has `Updated = $false`, plus the `Version` and `Architecture` of the
+  kept install and a new `RejectedVersion` property. `Initialize-MsixToolchain` carries
+  on with its other components.
+- **`Get-MsixToolsRoot` does not quote the rejection** as the likely cause of a missing
+  `MakeAppx.exe`, because nothing is missing.
+
+These are unchanged and still an error:
+
+- a machine with no SDK tools yet, which gets the 0.75.1 error;
+- installed tools that no longer pass verification. The rejection is thrown, and the
+  reason the tools could not be kept is logged;
+- any failure other than a rejection, such as NuGet being unreachable or a failed
+  download.
+
+### SDK rejection advice
+
+- When the installed tools are already at least the version this module release was
+  verified against, the advice no longer offers `Install-MsixSdkTool -Version` for that
+  version. That would be a no-op or a downgrade, so it says there is nothing to pin.
+- It no longer says that `Initialize-MsixToolchain` and `Update-MsixSdkTool` always move
+  to the newest version. They try it on every run and, while it is rejected, keep the
+  verified install and warn. `Initialize-MsixToolchain -Skip Sdk` skips that check.
+- Both are opt-in switches on the shared `_MsixFormatToolRejection`, so the PSF advice
+  is unchanged. `Update-MsixPsfBinary` still fails when the latest PSF release is
+  rejected.
+
+### Tests
+
+- `MSIX.SdkToolInstall.Tests.ps1` now also runs `Update-MsixSdkTool` with the NuGet calls
+  and Authenticode mocked. It covers:
+  - keeping and warning on an existing install;
+  - still failing on a fresh machine;
+  - not keeping an installed `signtool.exe` whose signature no longer verifies;
+  - still failing on a download error;
+  - no pin suggestion for an install at or above the verified version.
+- It runs `Initialize-MsixToolchain`'s SDK step against a test folder, with the other
+  components skipped: it carries on over an existing install and still fails on a fresh
+  machine.
+- `Update-MsixSdkTool` and `Initialize-MsixToolchain` come off the coverage map's
+  excluded lists.
+
 ## v0.75.2 - 2026-11-15 — Process Monitor, DebugView and msixmgr installs copy their files again
 
 ### Fixed: `Install-MsixProcMon`, `Install-MsixDebugView` and `Install-MsixMgr` installed nothing

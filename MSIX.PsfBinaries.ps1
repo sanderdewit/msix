@@ -426,6 +426,16 @@ function _MsixFormatToolRejection {
     .PARAMETER SkipComponent
         The Initialize-MsixToolchain -Skip value for this tool, so the one-call
         setup does not immediately move off the pinned release again.
+    .PARAMETER UpdaterKeepsInstall
+        -UpdaterName keeps a verified install, with a warning, while the newest
+        release is rejected (Update-MsixSdkTool does), so the one-call setup
+        does not fail on it. The advice then says so instead of claiming the
+        updater always moves to the newest version.
+    .PARAMETER InstalledIsCurrent
+        The install left in place is already -KnownGoodVersion or newer, so
+        pinning would be a no-op or a downgrade: say there is nothing to pin
+        instead of offering -PinCommand. Meant for an updater that keeps the
+        install (-UpdaterKeepsInstall).
     #>
     [OutputType([string])]
     param(
@@ -439,7 +449,9 @@ function _MsixFormatToolRejection {
         [string]$KnownGoodVersion,
         [string]$PinCommand,
         [Parameter(Mandatory)] [string]$UpdaterName,
-        [Parameter(Mandatory)] [string]$SkipComponent
+        [Parameter(Mandatory)] [string]$SkipComponent,
+        [switch]$UpdaterKeepsInstall,
+        [switch]$InstalledIsCurrent
     )
     $nl = [Environment]::NewLine
     $lines = [System.Collections.Generic.List[string]]::new()
@@ -452,11 +464,21 @@ function _MsixFormatToolRejection {
     $lines.Add('')
     $lines.Add('What you can do:')
 
-    if ($KnownGoodVersion -and $KnownGoodVersion -ne $Version -and $PinCommand) {
-        $lines.Add('  - Pin the newest version this module release was verified against:')
-        $lines.Add("        $PinCommand")
-        $lines.Add("    Initialize-MsixToolchain and $UpdaterName always move to the newest version,")
-        $lines.Add('    so after pinning use:')
+    if ($KnownGoodVersion -and $KnownGoodVersion -ne $Version -and ($PinCommand -or $InstalledIsCurrent)) {
+        if ($InstalledIsCurrent) {
+            $lines.Add("  - Nothing to pin: the tools installed there are not older than $KnownGoodVersion, the")
+            $lines.Add('    newest version this module release was verified against.')
+        } else {
+            $lines.Add('  - Pin the newest version this module release was verified against:')
+            $lines.Add("        $PinCommand")
+        }
+        if ($UpdaterKeepsInstall) {
+            $lines.Add("    Initialize-MsixToolchain and $UpdaterName try the newest version on every run.")
+            $lines.Add('    While it is rejected they keep the verified install and warn. To skip that check, use:')
+        } else {
+            $lines.Add("    Initialize-MsixToolchain and $UpdaterName always move to the newest version,")
+            $lines.Add('    so after pinning use:')
+        }
         $lines.Add("        Initialize-MsixToolchain -Skip $SkipComponent")
     } else {
         $lines.Add("  - $Version is the version this module release was verified against, so this points at a")
@@ -1452,6 +1474,9 @@ function Install-MsixSdkTool {
         was verified against (to pass to -Version), and the signers.json
         governance route. Get-MsixToolsRoot repeats that cause in its
         "MakeAppx.exe not found" error for the rest of the session.
+        Update-MsixSdkTool, and so Initialize-MsixToolchain, turns the error
+        into a warning when verified SDK tools are already installed and keeps
+        those.
 
     .PARAMETER Destination
         Where to land the binaries. Default: the module folder. After install,
@@ -1592,18 +1617,38 @@ function Install-MsixSdkTool {
                 $pin = "Install-MsixSdkTool -Version $($script:SdkToolsKnownGoodVersion)"
                 if ($Architecture -ne 'x64') { $pin += " -Architecture $Architecture" }
                 if ($Destination -ne $PSScriptRoot) { $pin += " -Destination '$Destination'" }
+                # Pinning only helps when it moves the install forward.
+                # Update-MsixSdkTool keeps a verified install when the newest
+                # release is rejected, and that install is often the verified
+                # version already, or a newer one that also passed - offering
+                # -Version there would be a no-op or a downgrade.
+                $installedIsCurrent = $false
+                if ($previousInstall) {
+                    $installedParts = @($previousInstall -split '\|')
+                    $installedArch  = 'x64'
+                    if ($installedParts.Count -gt 1 -and $installedParts[1]) { $installedArch = $installedParts[1] }
+                    $installedVer = $null
+                    $knownGoodVer = $null
+                    if ($installedArch -eq $Architecture -and
+                        [version]::TryParse($installedParts[0], [ref]$installedVer) -and
+                        [version]::TryParse([string]$script:SdkToolsKnownGoodVersion, [ref]$knownGoodVer)) {
+                        $installedIsCurrent = ($installedVer -ge $knownGoodVer)
+                    }
+                }
                 $formatArgs = @{
-                    Release          = "$($script:SdkToolsNuGet) $Version ($Architecture)"
-                    TargetDir        = $toolsDir
-                    PreviousInstall  = $previousInstall
-                    DetailToolName   = "SDK BuildTools $Version/$Architecture"
-                    Rejected         = $records
-                    TotalCount       = $totalCount
-                    Version          = $Version
-                    KnownGoodVersion = $script:SdkToolsKnownGoodVersion
-                    PinCommand       = $pin
-                    UpdaterName      = 'Update-MsixSdkTool'
-                    SkipComponent    = 'Sdk'
+                    Release             = "$($script:SdkToolsNuGet) $Version ($Architecture)"
+                    TargetDir           = $toolsDir
+                    PreviousInstall     = $previousInstall
+                    DetailToolName      = "SDK BuildTools $Version/$Architecture"
+                    Rejected            = $records
+                    TotalCount          = $totalCount
+                    Version             = $Version
+                    KnownGoodVersion    = $script:SdkToolsKnownGoodVersion
+                    PinCommand          = $pin
+                    UpdaterName         = 'Update-MsixSdkTool'
+                    SkipComponent       = 'Sdk'
+                    UpdaterKeepsInstall = $true
+                    InstalledIsCurrent  = $installedIsCurrent
                 }
                 $actionable = _MsixFormatToolRejection @formatArgs
                 $script:MsixLastSdkInstallError = $actionable
@@ -1640,6 +1685,18 @@ function Update-MsixSdkTool {
         re-runs Install-MsixSdkTool only if the local `sdk.version` marker
         doesn't already match "<version>|<architecture>".
 
+        If that newest release is rejected by Authenticode verification (for
+        example because Microsoft signed part of it with a publisher that is
+        not in signers.json yet), the SDK tools already installed are
+        re-verified and kept, so Initialize-MsixToolchain keeps working. The
+        update then writes a warning (Write-Warning, so -WarningVariable
+        captures it) that names the rejected version and says what to do, and
+        returns Updated = $false with RejectedVersion set. The rejection is
+        still thrown, as Install-MsixSdkTool's error, when nothing is
+        installed yet or the installed tools no longer pass verification.
+        Any other failure (NuGet unreachable, download or copy failed) is
+        thrown as before.
+
     .PARAMETER Destination
         Where SDK tools are installed. Defaults to the module folder
         ($PSScriptRoot).
@@ -1648,11 +1705,18 @@ function Update-MsixSdkTool {
         x64 (default) or x86.
 
     .OUTPUTS
-        [pscustomobject] from Install-MsixSdkTool or a no-op summary.
+        [pscustomobject] from Install-MsixSdkTool, or a summary with
+        Updated = $false: Path, Version, Architecture, plus RejectedVersion
+        when the newest release was rejected and the installed tools were kept.
 
     .EXAMPLE
         # Refresh the SDK tools (no-op if already on the latest tag).
         Update-MsixSdkTool
+
+    .EXAMPLE
+        # See whether the newest release was held back, and why.
+        $sdk = Update-MsixSdkTool -WarningVariable sdkWarnings
+        if ($sdk.RejectedVersion) { "Kept $($sdk.Version); $($sdk.RejectedVersion) was rejected:"; $sdkWarnings }
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
@@ -1680,7 +1744,65 @@ function Update-MsixSdkTool {
         return [pscustomobject]@{ Path = "$Destination\Tools"; Version = $latest; Architecture = $Architecture; Updated = $false }
     }
     Write-MsixLog -Level Info -Message "SDK tools update available: $current -> $latest|$Architecture"
-    return Install-MsixSdkTool -Destination $Destination -Architecture $Architecture -Version $latest -Force
+    try {
+        return Install-MsixSdkTool -Destination $Destination -Architecture $Architecture -Version $latest -Force
+    } catch {
+        # Only a release rejected by Authenticode verification is held back. A
+        # download, extraction or copy failure says nothing about the release
+        # and still fails the update.
+        $rejectionData = $_.Exception.Data
+        if (-not ($rejectionData -and $rejectionData.Contains('MsixAuthenticodeRejected'))) { throw }
+        $rejection = $_
+    }
+
+    # The newest release was rejected. Install-MsixSdkTool verifies BEFORE it
+    # copies, so the install in Tools\ is untouched. Throwing anyway made
+    # Initialize-MsixToolchain fail on every machine with a working older
+    # toolchain as soon as Microsoft signed part of a new release with a
+    # publisher that is not in signers.json yet (10.0.28000.2957 did).
+    #
+    # Keep that install only if it passes the gate Get-MsixToolsRoot and
+    # Set-MsixToolsRoot apply before the module runs a tool from it. Otherwise
+    # there is nothing usable to keep and the rejection stands. The session's
+    # cached tools root is restored afterwards: like the up-to-date path above,
+    # keeping an install does not change which root this session uses.
+    $toolsDir    = Join-Path -Path $Destination -ChildPath 'Tools'
+    $keepFailure = $null
+    $cachedRoot  = $script:ToolsRoot
+    try {
+        if (-not (Test-Path -LiteralPath (Join-Path -Path $toolsDir -ChildPath 'MakeAppx.exe') -PathType Leaf)) {
+            throw "MakeAppx.exe is missing from $toolsDir."
+        }
+        $null = _MsixSetVerifiedToolsRoot -Root $Destination
+    } catch {
+        $keepFailure = $_
+    } finally {
+        $script:ToolsRoot = $cachedRoot
+    }
+    if ($keepFailure) {
+        $reason = ($keepFailure.Exception.Message -split '\r?\n')[0]
+        Write-MsixLog -Level Warning -Message "The SDK tools already in $toolsDir ($current) cannot be kept instead of the rejected update: $reason"
+        throw $rejection
+    }
+
+    $installed = Get-MsixSdkToolsVersion -Destination $Destination
+    # The tools still work, so this rejection is not why MakeAppx.exe would be
+    # missing later; Get-MsixToolsRoot must not quote it as the likely cause.
+    $script:MsixLastSdkInstallError = $null
+    $summary = "SDK tools NOT updated: $($script:SdkToolsNuGet) $latest ($Architecture) was rejected by Authenticode verification. The verified install already in $toolsDir ($($installed.Version), $($installed.Architecture)) was kept and keeps working."
+    Write-MsixLog -Level Warning -Message $summary
+    # The real Warning stream as well. Write-MsixLog goes to Write-Information,
+    # which -WarningVariable cannot capture and Set-MsixLogLevel -Level Error
+    # drops, and a held-back update of the signing toolchain must stay visible.
+    $nl = [Environment]::NewLine
+    Write-Warning -Message "$summary$nl$nl$($rejection.Exception.Message)"
+    return [pscustomobject]@{
+        Path            = "$Destination\Tools"
+        Version         = $installed.Version
+        Architecture    = $installed.Architecture
+        Updated         = $false
+        RejectedVersion = $latest
+    }
 }
 
 
@@ -2062,6 +2184,13 @@ function Initialize-MsixToolchain {
         missing or stale; all downloaded binaries are Authenticode-verified
         against the trusted-publisher allowlist before they land in the
         toolchain root. Safe to run repeatedly — idempotent across components.
+
+        When the newest SDK BuildTools release is rejected by that
+        verification, SDK tools that are already installed and still pass it
+        are kept: Update-MsixSdkTool writes a warning and the Sdk result has
+        Updated = $false and RejectedVersion set, and the other components are
+        still processed. On a machine without such an install the rejection
+        fails the call, with an error that says what to do.
 
         This is what you should call from a fresh CI agent / VM / sandbox
         before doing anything else with this module.

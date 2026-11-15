@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.75.1'
+    ModuleVersion     = '0.75.2'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, deployment-script templates, heuristic heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -259,6 +259,29 @@
             ProjectUri  = 'https://github.com/sanderdewit/msix'
             LicenseUri  = 'https://github.com/sanderdewit/msix/blob/main/LICENSE.md'
             ReleaseNotes = @'
+## v0.75.2 (Process Monitor / DebugView / msixmgr installs copy their files again)
+
+FIXED: since v0.71.0, Install-MsixProcMon, Install-MsixDebugView and
+Install-MsixMgr installed nothing. Their shared helper copied the verified
+archive with Copy-Item -LiteralPath "<stage>\*". -LiteralPath never expands
+wildcards, so nothing was copied:
+- Windows PowerShell 5.1 raised no error. PowerShell 7 raised a non-terminating
+  "Cannot find path" error, which rolled back only under ErrorAction Stop.
+- Otherwise the install wrote its marker and reported success. The tool looked
+  installed with only the marker in its folder, and later calls skipped it.
+- The copy now enumerates the stage and copies each item with -LiteralPath.
+  It also stops on any copy error, so the marker is written only after a real
+  copy. Destination paths containing [ ] work.
+
+REPAIR: a tool folder that holds only its install marker now counts as not
+installed. Install-MsixProcMon / Install-MsixDebugView / Install-MsixMgr
+reinstall it with a warning. Update-MsixProcMon / Update-MsixDebugView /
+Update-MsixMgr (and so Initialize-MsixToolchain) reinstall it instead of
+reporting it fresh. No -Force needed.
+
+TESTS: MSIX.ArchiveToolInstall.Tests.ps1 runs the three installers end to end
+on a real zip, with only the download and Authenticode mocked.
+
 ## v0.75.1 (Windows SDK BuildTools signer)
 
 FIXED: an unpinned Install-MsixSdkTool / Initialize-MsixToolchain failed on

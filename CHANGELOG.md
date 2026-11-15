@@ -5,6 +5,115 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.75.1 - 2026-11-15 — The Windows Kits Publisher SDK signer, and saying why an SDK install failed
+
+### Fixed: unpinned `Install-MsixSdkTool` / `Initialize-MsixToolchain` failed on every fresh machine
+
+`Microsoft.Windows.SDK.BuildTools` **10.0.26100.9457** and **10.0.28000.2957**, both
+published 2026-10-28, sign `appxsip.dll` (x64 and x86) with a certificate whose subject
+is `CN=Microsoft Windows Kits Publisher, O=Microsoft Corporation, L=Redmond,
+S=Washington, C=US`. That CN was not in `signers.json`, so the SDK install verified 42
+of the 43 x64 binaries, rejected `appxsip.dll` and rolled back. The caller then got
+`Get-MsixToolsRoot`'s "MakeAppx.exe not found". Machines that already had an older
+toolchain kept it, but `Initialize-MsixToolchain` failed on them too, because
+`Update-MsixSdkTool` tried to move to the new release. The last good release was
+10.0.28000.2705, which is the one CI provisioned for 0.75.0.
+
+`signers.json` now lists **`CN=Microsoft Windows Kits Publisher,`**, prefix-only like
+the other Microsoft entries. This was verified before adding it:
+
+- **Chain:** leaf → **Microsoft Windows Code Signing PCA 2024** (`D30F05F6…2A94`) →
+  **Microsoft Root Certificate Authority 2010** (`3B1EFD3A…5BD5`). That is the same
+  intermediate and root as the `CN=Microsoft Corporation` certs on `signtool.exe` and
+  `makeappx.exe` in the same package.
+- **EKU:** *Windows Kits Component* (`1.3.6.1.4.1.311.10.3.20`) plus Code Signing.
+- **Signatures:** every one is `Valid`. The nupkg itself is author-signed by Microsoft
+  and countersigned by NuGet.org.
+- **Why prefix-only:** two leaf certs are already in use (`2C3BD48A…6B49` on x64/x86
+  `appxsip.dll`, `DC42495E…E94C` on arm64). Both are valid 2026-03-05 → 2027-03-03, so
+  a thumbprint pin would break at the next yearly rotation.
+- **Scope:** in arm64, 31 of the 43 binaries already use this signer, including
+  `signtool.exe` and `makeappx.exe`, so expect more x64 files to follow.
+
+A real unpinned `Install-MsixSdkTool` now installs 10.0.28000.2957 for x64 (43
+binaries) and for x86 (42).
+
+### Clearer failure when a BuildTools release is rejected
+
+- **Every rejected file is reported, grouped by signer.** `_MsixVerifyAuthenticodeFolder`
+  used to stop at the first rejected binary. When a release moved several files to a
+  new signer, you needed one failed install per file to find them all, and the first
+  error couldn't say whether one `signers.json` entry would cover every file. It now
+  verifies every file and throws once. It is still fail-closed: one rejected file fails
+  the whole folder. Invalid or missing signatures are listed separately and are not
+  presented as something `signers.json` can fix.
+- **`Install-MsixSdkTool` says what happened and what to do.** The error now covers:
+  - that nothing was copied, and that an existing install was left as it was;
+  - which files were rejected, and their signer;
+  - the newest version this release was verified against, to pass to `-Version`
+    (`10.0.28000.2957`), with the `Initialize-MsixToolchain -Skip Sdk` follow-up;
+  - the `signers.json` governance route, with a link.
+
+  When the rejected version *is* the verified one, the error says so instead, because
+  then a new upstream signer is not the explanation.
+- **`Get-MsixToolsRoot` quotes the cause.** If an `Install-MsixSdkTool` failed earlier
+  in the session, the "MakeAppx.exe not found" error now starts with that failure. It
+  no longer sends you straight back to the install that just failed.
+
+### TMurgent PSF: pin a release with `-Version`; CI uses the last signed one
+
+TMurgent PSF **v2026.10.13** and **v2026.11.14** ship `PsfLauncher*`, `PsfRuntime*` and
+every fixup **unsigned**: 25 of 33 binaries are `NotSigned`, and only the Microsoft
+redistributables in the zip are signed. The module rightly refuses them, because
+`signers.json` cannot vouch for an unsigned binary. So `Install-MsixPsfBinary` and
+`Initialize-MsixToolchain` have failed on fresh machines since 2026-10-14, and CI with
+them. **v2026.07.01** is the last release signed by `CN=TMurgent Technologies LLP`
+(`890C5C4E…3296`).
+
+- **Pin a release:** `Install-MsixPsfBinary` and `Update-MsixPsfBinary` take
+  **`-Version <tag>`** to install or keep a specific release. It is verified exactly
+  like the latest. When that release is already installed, `Update-MsixPsfBinary
+  -Version` does nothing and makes no GitHub query.
+- **Actionable rejection:** a rejected PSF release gets the same error layout as the
+  SDK. It covers:
+  - that nothing was copied, and that an existing install was kept;
+  - which files were rejected;
+  - `Install-MsixPsfBinary -Version v2026.07.01` (`$script:PsfKnownGoodVersion`), with
+    `Initialize-MsixToolchain -Skip Psf` as the follow-up;
+  - for unsigned files, that `signers.json` cannot fix them.
+- **CI provisions PSF at `$script:PsfKnownGoodVersion`** instead of the latest
+  release, so the version a rejection tells you to pin is re-verified on every build.
+  For users, the default is still the latest release.
+- **CI authenticates its GitHub API lookups.** The provisioning steps map the job
+  token into `GITHUB_TOKEN`, which the module already sends only to
+  `api.github.com`. Anonymous calls from shared runner IPs failed with
+  `403 (rate limit exceeded)`. The workflow now also declares
+  `permissions: contents: read`.
+
+### Tests
+
+- The new `MSIX.SdkToolInstall.Tests.ps1` runs `Install-MsixSdkTool` end to end with
+  the NuGet calls and Authenticode mocked. It covers:
+  - picking the newest stable version;
+  - the Kits Publisher layout;
+  - a rejection, with rollback;
+  - an existing install kept in place;
+  - not suggesting the rejected version itself as the pin.
+
+  It also covers the folder verifier and the `Get-MsixToolsRoot` message.
+  `Install-MsixSdkTool` therefore comes off the coverage map's environment-bound list.
+- `MSIX.TrustedPublishers.Tests.ps1` checks the new entry, and checks that a longer
+  CN that only starts with it is still rejected.
+- `MSIX.PsfBinaries.Tests.ps1` covers:
+  - the PSF `-Version` pin;
+  - the unsigned-release rejection, with rollback;
+  - a pinned install surviving a rejected update to the latest release;
+  - `Update-MsixPsfBinary -Version` doing nothing when the release is already
+    installed, and installing it otherwise;
+  - the URL escaping of the tag.
+
+  `Update-MsixPsfBinary` therefore comes off the coverage map's permanent exclusions.
+
 ## v0.75.0 - 2026-08-04 — Bulk / fleet analysis
 
 The module's unit of work was one package. A packaging team's unit of work is a

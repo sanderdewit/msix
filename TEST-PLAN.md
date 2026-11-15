@@ -504,6 +504,18 @@ Initialize-MsixToolchain -ToolsRoot 'C:\msix-tools'
 - If you tamper with a downloaded binary (e.g. replace `signtool.exe` with a
   random EXE) and re-run, the verification fails with a clear error naming the
   file and the actual signer's Subject.
+- From BuildTools 10.0.26100.9457 / 10.0.28000.2957 on, the `appxsip.dll` line
+  names `CN=Microsoft Windows Kits Publisher, O=Microsoft Corporation, ...`.
+- Remove that entry from `signers.json` and run `Install-MsixSdkTool` again:
+  nothing is copied to `Tools\`, the error lists every rejected file under its
+  signer, offers `Install-MsixSdkTool -Version <verified version>` plus
+  `Initialize-MsixToolchain -Skip Sdk`, and links the signers.json governance.
+  A following `Get-MsixToolsRoot` (on a machine with no other toolchain)
+  quotes that failure before its usual remedies.
+- PSF: while the latest TMurgent release ships unsigned binaries (v2026.10.13
+  and v2026.11.14 do), `Install-MsixPsfBinary` without `-Version` fails, lists
+  the unsigned files, and offers `-Version v2026.07.01`. With that tag it
+  installs, and `Update-MsixPsfBinary -Version v2026.07.01` is then a no-op.
 
 ---
 

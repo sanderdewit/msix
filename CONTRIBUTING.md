@@ -241,6 +241,16 @@ function Verb-MsixNoun {
 - Trusted publishers are listed in `signers.json` at the module root. Adding a
   new publisher requires PR review and a link to the publisher's official cert
   thumbprint (see the governance section below).
+- `Install-MsixSdkTool` defaults to the newest BuildTools release on NuGet. When
+  that release is rejected, its error offers `$script:SdkToolsKnownGoodVersion`
+  (`MSIX.PsfBinaries.ps1`) as the version to pin. Bump that constant once a newer
+  release has been verified. CI provisions the newest release, so a green CI run
+  on a newer version is the signal.
+- `Install-MsixPsfBinary` works the same way with `$script:PsfKnownGoodVersion`.
+  The difference is that CI provisions PSF **at** that tag, because the newest
+  TMurgent releases ship unsigned. To move on, run
+  `Install-MsixPsfBinary -Version <newer tag>` locally. If every binary verifies,
+  bump the constant; CI then re-verifies it.
 
 ## Signing
 

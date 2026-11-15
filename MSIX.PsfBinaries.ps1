@@ -17,6 +17,22 @@ $script:ProcmonZipUrl    = 'https://download.sysinternals.com/files/ProcessMonit
 $script:DebugViewZipUrl  = 'https://download.sysinternals.com/files/DebugView.zip'
 $script:SdkToolsNuGet = 'Microsoft.Windows.SDK.BuildTools'   # publishes MakeAppx + signtool
 
+# Newest Microsoft.Windows.SDK.BuildTools version this module release was checked
+# against signers.json: every x64 and x86 .exe/.dll in it passes
+# _MsixVerifyAuthenticodeFolder. Install-MsixSdkTool still defaults to the newest
+# stable version on NuGet. This value is only offered as a concrete -Version to pin
+# when a newer upstream release is rejected - e.g. because Microsoft started signing
+# part of it with a publisher that is not in signers.json yet, which is exactly what
+# 10.0.26100.9457 / 10.0.28000.2957 did with CN=Microsoft Windows Kits Publisher.
+# Bump it when a newer version has been verified (CI provisions the newest one).
+$script:SdkToolsKnownGoodVersion = '10.0.28000.2957'
+
+# Message of the most recent failed Install-MsixSdkTool in this session, or $null.
+# A failed install leaves no Tools\MakeAppx.exe behind, so the next caller only sees
+# Get-MsixToolsRoot's "MakeAppx.exe not found" - which named every remedy except the
+# real cause. Get-MsixToolsRoot appends this so the cause is not hidden.
+$script:MsixLastSdkInstallError = $null
+
 # =============================================================================
 # Authenticode verification of downloaded tool binaries (Wave 2a / H1)
 # -----------------------------------------------------------------------------
@@ -123,6 +139,37 @@ $script:MsixTrustedPublisherEntries = @()
 $script:MsixTrustedPublishers = _MsixLoadTrustedPublishers
 $script:MsixTrustedPublishersPath = Join-Path -Path $PSScriptRoot -ChildPath 'signers.json'
 
+function _MsixNewAuthenticodeError {
+    <#
+    .SYNOPSIS
+        Builds the exception _MsixVerifyAuthenticode throws. Internal.
+    .DESCRIPTION
+        The message text is unchanged from the plain-string throws it replaces
+        (callers and tests match on it). The exception additionally carries the
+        rejection details in .Data, so a caller that verifies a whole folder
+        (_MsixVerifyAuthenticodeFolder) can report every rejected binary grouped
+        by signer instead of only the first file's text.
+    #>
+    [OutputType([System.Management.Automation.RuntimeException])]
+    param(
+        [Parameter(Mandatory)] [string]$Message,
+        [Parameter(Mandatory)]
+        [ValidateSet('FileNotFound', 'InvalidSignature', 'NoSignerCertificate', 'UntrustedPublisher', 'ThumbprintNotPinned')]
+        [string]$Reason,
+        [string]$Path,
+        [string]$Status,
+        [string]$Subject,
+        [string]$Thumbprint
+    )
+    $ex = [System.Management.Automation.RuntimeException]::new($Message)
+    $ex.Data['MsixAuthenticodeReason']     = $Reason
+    $ex.Data['MsixAuthenticodePath']       = $Path
+    $ex.Data['MsixAuthenticodeStatus']     = $Status
+    $ex.Data['MsixAuthenticodeSubject']    = $Subject
+    $ex.Data['MsixAuthenticodeThumbprint'] = $Thumbprint
+    return $ex
+}
+
 function _MsixVerifyAuthenticode {
     <#
     .SYNOPSIS
@@ -133,7 +180,9 @@ function _MsixVerifyAuthenticode {
           - signer cert is in signers.json's trusted-publisher allowlist
           - when the matching entry has a thumbprint pin, the signer cert
             thumbprint matches that entry's pin
-        Throws on rejection; returns the signature object on success.
+        Throws on rejection; returns the signature object on success. The
+        thrown exception carries the reason, status, subject and thumbprint in
+        .Data (see _MsixNewAuthenticodeError).
     .PARAMETER Path
         File to verify.
     .PARAMETER ToolName
@@ -145,16 +194,17 @@ function _MsixVerifyAuthenticode {
         [Parameter(Mandatory)] [string]$ToolName
     )
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        throw "Cannot verify Authenticode: file not found at $Path"
+        throw (_MsixNewAuthenticodeError -Reason FileNotFound -Path $Path -Message "Cannot verify Authenticode: file not found at $Path")
     }
     $sig = Get-AuthenticodeSignature -LiteralPath $Path
     if ($sig.Status -ne 'Valid') {
-        throw "Authenticode verification FAILED for $ToolName at $Path. Status: $($sig.Status). $($sig.StatusMessage)"
+        throw (_MsixNewAuthenticodeError -Reason InvalidSignature -Path $Path -Status ([string]$sig.Status) -Message "Authenticode verification FAILED for $ToolName at $Path. Status: $($sig.Status). $($sig.StatusMessage)")
     }
     $subject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { '' }
     if (-not $subject) {
-        throw "Authenticode verification FAILED for $ToolName at $Path`: no signer cert."
+        throw (_MsixNewAuthenticodeError -Reason NoSignerCertificate -Path $Path -Status ([string]$sig.Status) -Message "Authenticode verification FAILED for $ToolName at $Path`: no signer cert.")
     }
+    $signerThumbprint = [string]$sig.SignerCertificate.Thumbprint
     $matchedEntries = @()
     if ($script:MsixTrustedPublisherEntries -and $script:MsixTrustedPublisherEntries.Count -gt 0) {
         foreach ($entry in $script:MsixTrustedPublisherEntries) {
@@ -171,13 +221,14 @@ function _MsixVerifyAuthenticode {
         }
     }
     if (-not $matchedEntries) {
-        throw @"
+        $untrustedMessage = @"
 Authenticode verification FAILED for $ToolName at $Path.
 Signer is NOT in the trusted-publisher allowlist:
   Subject:    $subject
-  Thumbprint: $($sig.SignerCertificate.Thumbprint)
+  Thumbprint: $signerThumbprint
 If you trust this publisher, add its CN prefix to signers.json and follow the trusted-publisher governance notes in CONTRIBUTING.md.
 "@
+        throw (_MsixNewAuthenticodeError -Reason UntrustedPublisher -Path $Path -Status 'Valid' -Subject $subject -Thumbprint $signerThumbprint -Message $untrustedMessage)
     }
     # When the matching signers.json entry pins one or more thumbprints,
     # require an exact match. Pinning is opt-in per entry: unrelated prefix-only
@@ -187,7 +238,7 @@ If you trust this publisher, add its CN prefix to signers.json and follow the tr
         $actualTp = if ($sig.SignerCertificate) { ($sig.SignerCertificate.Thumbprint -replace '\s', '').ToUpperInvariant() } else { '' }
         $allowedThumbprints = @($pinnedEntries | ForEach-Object { $_.Thumbprints })
         if ($actualTp -notin $allowedThumbprints) {
-            throw @"
+            $notPinnedMessage = @"
 Authenticode verification FAILED for $ToolName at $Path.
 Signer cert passed the publisher-prefix check but its thumbprint is NOT pinned
 on the matching signers.json entry:
@@ -195,6 +246,7 @@ on the matching signers.json entry:
   Thumbprint: $actualTp
 If you trust this certificate, add its thumbprint to the matching signers.json entry.
 "@
+            throw (_MsixNewAuthenticodeError -Reason ThumbprintNotPinned -Path $Path -Status 'Valid' -Subject $subject -Thumbprint $actualTp -Message $notPinnedMessage)
         }
     }
     Write-MsixLog -Level Info -Message "Authenticode verified: $ToolName ($subject)"
@@ -207,7 +259,18 @@ function _MsixVerifyAuthenticodeFolder {
         Verifies every .exe and .dll under a folder.
     .DESCRIPTION
         Calls _MsixVerifyAuthenticode against every .exe / .dll under the given
-        folder (recursively). Throws on the first untrusted / unsigned binary.
+        folder (recursively). If ANY binary is rejected it throws one error that
+        lists EVERY rejected binary, grouped by signer - it no longer stops at
+        the first. When Microsoft moves several files of a package to a new
+        signer, the first file's error alone neither shows how many files are
+        affected nor whether one signers.json entry would cover them all, and
+        each retry only revealed the next file. Nothing is trusted on a partial
+        pass: one rejected file still fails the whole folder.
+
+        The thrown exception's .Data['MsixAuthenticodeRejected'] holds one
+        record per rejected file (File, Path, Reason, Status, Subject,
+        Thumbprint, Message) for callers that add context (Install-MsixSdkTool).
+
         Logs a warning if no .exe/.dll were found at all (caller decides whether
         that's acceptable - e.g. for archives that bundle only data).
 
@@ -231,9 +294,108 @@ function _MsixVerifyAuthenticodeFolder {
         Write-MsixLog -Level Warning -Message "No .exe/.dll under $Folder to verify ($ToolName)"
         return
     }
+    $folderRoot = $Folder.TrimEnd('\', '/')
+    $rejected = [System.Collections.Generic.List[object]]::new()
     foreach ($file in $files) {
-        _MsixVerifyAuthenticode -Path $file.FullName -ToolName "$ToolName/$($file.Name)" | Out-Null
+        try {
+            _MsixVerifyAuthenticode -Path $file.FullName -ToolName "$ToolName/$($file.Name)" | Out-Null
+        } catch {
+            $data = $_.Exception.Data
+            $reason = 'VerificationFailed'
+            if ($data -and $data.Contains('MsixAuthenticodeReason')) { $reason = [string]$data['MsixAuthenticodeReason'] }
+            $status = ''; $subject = ''; $thumbprint = ''
+            if ($data) {
+                $status     = [string]$data['MsixAuthenticodeStatus']
+                $subject    = [string]$data['MsixAuthenticodeSubject']
+                $thumbprint = [string]$data['MsixAuthenticodeThumbprint']
+            }
+            $relative = $file.Name
+            if ($file.FullName.StartsWith("$folderRoot\", [System.StringComparison]::OrdinalIgnoreCase)) {
+                $relative = $file.FullName.Substring($folderRoot.Length + 1)
+            }
+            $rejected.Add([pscustomobject]@{
+                File       = $relative
+                Path       = $file.FullName
+                Reason     = $reason
+                Status     = $status
+                Subject    = $subject
+                Thumbprint = $thumbprint
+                Message    = $_.Exception.Message
+            })
+        }
     }
+    if ($rejected.Count -gt 0) {
+        $records = $rejected.ToArray()
+        $ex = [System.Management.Automation.RuntimeException]::new(
+            (_MsixFormatAuthenticodeRejection -ToolName $ToolName -Rejected $records -TotalCount $files.Count))
+        $ex.Data['MsixAuthenticodeRejected']   = $records
+        $ex.Data['MsixAuthenticodeTotalCount'] = $files.Count
+        throw $ex
+    }
+}
+
+function _MsixFormatAuthenticodeRejection {
+    <#
+    .SYNOPSIS
+        Renders _MsixVerifyAuthenticodeFolder's rejection records. Internal.
+    .DESCRIPTION
+        Groups allowlist rejections by signer (one block per Subject+thumbprint,
+        listing its files) because that is the unit a signers.json decision is
+        made in. Invalid / missing signatures are listed separately and are
+        explicitly NOT presented as fixable through signers.json: trusting a
+        publisher cannot repair a hash mismatch or an unsigned file.
+        -NoAdvice leaves out the closing signers.json hint, for a caller that
+        prints its own remedies (Install-MsixSdkTool).
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [string]$ToolName,
+        [Parameter(Mandatory)] [object[]]$Rejected,
+        [Parameter(Mandatory)] [int]$TotalCount,
+        [switch]$NoAdvice
+    )
+    $nl = [Environment]::NewLine
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("Authenticode verification FAILED for ${ToolName}: $($Rejected.Count) of $TotalCount binaries rejected.")
+
+    $allowlistReasons = @('UntrustedPublisher', 'ThumbprintNotPinned')
+    $signerGroups = @($Rejected | Where-Object { $_.Reason -in $allowlistReasons } |
+        Group-Object -Property Reason, Subject, Thumbprint)
+    foreach ($group in $signerGroups) {
+        $first = $group.Group[0]
+        if ($first.Reason -eq 'UntrustedPublisher') {
+            $lines.Add('Signer is NOT in the trusted-publisher allowlist (signers.json):')
+        } else {
+            $lines.Add('Signer matches a signers.json prefix, but its thumbprint is NOT pinned on that entry:')
+        }
+        $lines.Add("  Subject:    $($first.Subject)")
+        $lines.Add("  Thumbprint: $($first.Thumbprint)")
+        $names = @($group.Group | ForEach-Object { $_.File } | Sort-Object)
+        $lines.Add("  Files ($($names.Count)): $($names -join ', ')")
+    }
+
+    $unverifiable = @($Rejected | Where-Object { $_.Reason -notin $allowlistReasons })
+    if ($unverifiable.Count -gt 0) {
+        $lines.Add('Signature invalid or missing - signers.json cannot fix these; treat the files as untrusted:')
+        foreach ($r in $unverifiable) {
+            switch ($r.Reason) {
+                'InvalidSignature'    { $lines.Add("  $($r.File): signature status $($r.Status)") }
+                'NoSignerCertificate' { $lines.Add("  $($r.File): no signer certificate") }
+                'FileNotFound'        { $lines.Add("  $($r.File): file disappeared before it could be verified") }
+                default               { $lines.Add("  $($r.File): $(($r.Message -split '\r?\n')[0])") }
+            }
+        }
+    }
+
+    if (-not $NoAdvice) {
+        if (@($Rejected | Where-Object { $_.Reason -eq 'UntrustedPublisher' }).Count -gt 0) {
+            $lines.Add('If you trust a publisher listed above, add its CN prefix to signers.json and follow the trusted-publisher governance notes in CONTRIBUTING.md.')
+        }
+        if (@($Rejected | Where-Object { $_.Reason -eq 'ThumbprintNotPinned' }).Count -gt 0) {
+            $lines.Add('If you trust a certificate listed above, add its thumbprint to the matching signers.json entry.')
+        }
+    }
+    return ($lines -join $nl)
 }
 
 function _MsixVerifyAuthenticodeMsixBundle {
@@ -1021,6 +1183,67 @@ function Get-MsixDebugViewVersion {
 }
 
 
+function _MsixFormatSdkRejection {
+    <#
+    .SYNOPSIS
+        Builds Install-MsixSdkTool's error for a BuildTools release whose
+        binaries failed Authenticode verification. Internal.
+    .DESCRIPTION
+        The folder-verification detail says WHAT was rejected. An operator on a
+        fresh build agent also needs to know that nothing was installed, what to
+        run to get going again, and where the trust decision is made. When
+        10.0.26100.9457 / 10.0.28000.2957 moved AppxSip.dll to CN=Microsoft
+        Windows Kits Publisher, every unpinned install failed and most callers
+        only ever saw the downstream "MakeAppx.exe not found".
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [string]$Version,
+        [Parameter(Mandatory)] [string]$Architecture,
+        [Parameter(Mandatory)] [string]$Destination,
+        [string]$PreviousInstall,
+        [Parameter(Mandatory)] [object[]]$Rejected,
+        [Parameter(Mandatory)] [int]$TotalCount
+    )
+    $nl = [Environment]::NewLine
+    $toolsDir = Join-Path -Path $Destination -ChildPath 'Tools'
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("$($script:SdkToolsNuGet) $Version ($Architecture) was NOT installed: nothing was copied to $toolsDir.")
+    if ($PreviousInstall) {
+        $lines.Add("The SDK tools already installed there ($PreviousInstall) were left as they were.")
+    }
+    $lines.Add('')
+    $lines.Add((_MsixFormatAuthenticodeRejection -ToolName "SDK BuildTools $Version/$Architecture" -Rejected $Rejected -TotalCount $TotalCount -NoAdvice))
+    $lines.Add('')
+    $lines.Add('What you can do:')
+
+    $knownGood = $script:SdkToolsKnownGoodVersion
+    if ($knownGood -and $knownGood -ne $Version) {
+        $pin = "Install-MsixSdkTool -Version $knownGood"
+        if ($Architecture -ne 'x64') { $pin += " -Architecture $Architecture" }
+        if ($Destination -ne $PSScriptRoot) { $pin += " -Destination '$Destination'" }
+        $lines.Add('  - Pin the newest version this module release was verified against:')
+        $lines.Add("        $pin")
+        $lines.Add('    Initialize-MsixToolchain and Update-MsixSdkTool always move to the newest version,')
+        $lines.Add('    so after pinning use:')
+        $lines.Add('        Initialize-MsixToolchain -Skip Sdk')
+    } else {
+        $lines.Add("  - $Version is the version this module release was verified against, so this points at a")
+        $lines.Add('    changed signers.json, a revoked certificate or a tampered download rather than a new')
+        $lines.Add('    upstream signer. Investigate before adding trust.')
+    }
+
+    $signerRejections = @($Rejected | Where-Object { $_.Reason -in 'UntrustedPublisher', 'ThumbprintNotPinned' })
+    if ($signerRejections.Count -gt 0) {
+        $lines.Add('  - If your security policy trusts the signer above, add it to signers.json')
+        $lines.Add("    ($($script:MsixTrustedPublishersPath)) as described under")
+        $lines.Add('    "Trusted-publisher governance" in CONTRIBUTING.md:')
+        $lines.Add('    https://github.com/sanderdewit/msix/blob/main/CONTRIBUTING.md#trusted-publisher-governance-signersjson')
+    }
+    return ($lines -join $nl)
+}
+
+
 function Install-MsixSdkTool {
     <#
     .SYNOPSIS
@@ -1047,6 +1270,14 @@ function Install-MsixSdkTool {
         SECURITY: every .exe / .dll inside the chosen arch folder is
         Authenticode-verified against the Microsoft trusted-publisher
         allowlist BEFORE anything is copied to "$Destination\Tools".
+
+        If a release is rejected (for example because Microsoft signed part of
+        it with a publisher that is not in signers.json yet), nothing is copied
+        and an existing install is left as it was. The error lists every
+        rejected file with its signer, the newest version this module release
+        was verified against (to pass to -Version), and the signers.json
+        governance route. Get-MsixToolsRoot repeats that cause in its
+        "MakeAppx.exe not found" error for the rest of the session.
 
     .PARAMETER Destination
         Where to land the binaries. Default: the module folder. After install,
@@ -1095,7 +1326,8 @@ function Install-MsixSdkTool {
         try {
             $idx = Invoke-RestMethod -Uri $idxUrl -UseBasicParsing -ErrorAction Stop
         } catch {
-            throw "Could not query NuGet for $($script:SdkToolsNuGet) versions: $_"
+            $script:MsixLastSdkInstallError = "Could not query NuGet for $($script:SdkToolsNuGet) versions: $_"
+            throw $script:MsixLastSdkInstallError
         }
         # The index lists every version. Take the highest non-prerelease one.
         $stable = $idx.versions |
@@ -1104,7 +1336,8 @@ function Install-MsixSdkTool {
                   Sort-Object -Property Ver -Descending |
                   Select-Object -First 1
         if (-not $stable) {
-            throw "No stable versions found for $($script:SdkToolsNuGet)."
+            $script:MsixLastSdkInstallError = "No stable versions found for $($script:SdkToolsNuGet)."
+            throw $script:MsixLastSdkInstallError
         }
         $Version = $stable.Raw
     }
@@ -1116,6 +1349,7 @@ function Install-MsixSdkTool {
         $current = (Get-Content -LiteralPath $marker -Raw -ErrorAction SilentlyContinue).Trim()
         if ($current -eq "$Version|$Architecture") {
             Write-MsixLog -Level Info -Message "SDK tools $Version ($Architecture) already installed at $Destination\Tools."
+            $script:MsixLastSdkInstallError = $null
             return [pscustomobject]@{ Path = "$Destination\Tools"; Version = $Version; Architecture = $Architecture; Updated = $false }
         }
     }
@@ -1129,6 +1363,11 @@ function Install-MsixSdkTool {
     if ($PSCmdlet.ShouldProcess("$Destination\Tools", "Install Microsoft.Windows.SDK.BuildTools $Version ($Architecture)")) {
         $toolsDir = Join-Path -Path $Destination -ChildPath 'Tools'
         $toolsDirExisted = Test-Path -LiteralPath $toolsDir
+        $previousInstall = $null
+        if (Test-Path -LiteralPath $marker -PathType Leaf) {
+            $previousInstall = [string](Get-Content -LiteralPath $marker -Raw -ErrorAction SilentlyContinue)
+            $previousInstall = $previousInstall.Trim()
+        }
         try {
             _MsixDownloadFile -Url $url -Destination $nupkg
 
@@ -1161,12 +1400,36 @@ function Install-MsixSdkTool {
 
             # Reset the cached tools root so the next Get-MsixToolsRoot picks this up
             Set-MsixToolsRoot -Path $Destination
+            $script:MsixLastSdkInstallError = $null
 
         } catch {
-            Write-MsixLog -Level Error -Message "SDK tools install rolled back: $_"
+            $failure = $_
+            Write-MsixLog -Level Error -Message "SDK tools install rolled back: $failure"
             if (-not $toolsDirExisted) {
                 Remove-Item -LiteralPath $toolsDir -Recurse -Force -ErrorAction SilentlyContinue
             }
+            $failureData = $failure.Exception.Data
+            if ($failureData -and $failureData.Contains('MsixAuthenticodeRejected')) {
+                # Verification runs BEFORE the copy, so a rejection never touched
+                # Tools\ - say so, and turn the raw per-file detail into steps.
+                $records = @($failureData['MsixAuthenticodeRejected'])
+                $totalCount = $records.Count
+                if ($failureData.Contains('MsixAuthenticodeTotalCount')) { $totalCount = [int]$failureData['MsixAuthenticodeTotalCount'] }
+                $formatArgs = @{
+                    Version         = $Version
+                    Architecture    = $Architecture
+                    Destination     = $Destination
+                    PreviousInstall = $previousInstall
+                    Rejected        = $records
+                    TotalCount      = $totalCount
+                }
+                $actionable = _MsixFormatSdkRejection @formatArgs
+                $script:MsixLastSdkInstallError = $actionable
+                $wrapped = [System.Management.Automation.RuntimeException]::new($actionable, $failure.Exception)
+                $wrapped.Data['MsixAuthenticodeRejected'] = $records
+                throw $wrapped
+            }
+            $script:MsixLastSdkInstallError = "Install-MsixSdkTool $Version ($Architecture) failed: $($failure.Exception.Message)"
             throw
         } finally {
             Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue

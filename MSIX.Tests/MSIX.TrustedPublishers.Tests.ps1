@@ -104,4 +104,67 @@ Describe 'Trusted-publisher allowlist (issue #19)' -Tag 'TrustedPublishers' {
             }
         }
     }
+
+    Context 'Windows SDK BuildTools signers' {
+        # BuildTools 10.0.26100.9457 and 10.0.28000.2957 (2026-10-28) sign
+        # appxsip.dll - x64 and x86 - with CN=Microsoft Windows Kits Publisher.
+        # Observed leaf: 2C3BD48A6836D6CEBAC6FFB4A972A0A69B5D6B49, chained to
+        # Microsoft Root Certificate Authority 2010 via Microsoft Windows Code
+        # Signing PCA 2024 (the intermediate of the CN=Microsoft Corporation
+        # certs on signtool/MakeAppx in the same package). Without the entry
+        # every unpinned Install-MsixSdkTool rolled back.
+
+        BeforeAll {
+            $script:KitsProbe = Join-Path -Path $TestDrive -ChildPath 'appxsip.dll'
+            Set-Content -LiteralPath $script:KitsProbe -Value 'stub' -Encoding ascii
+        }
+
+        It 'lists CN=Microsoft Windows Kits Publisher, with its audit trail' {
+            $entry = @($script:SignersDoc.publishers | Where-Object { $_.subjectPrefix -eq 'CN=Microsoft Windows Kits Publisher,' })
+            $entry.Count | Should -Be 1
+            $entry[0].addedBy | Should -Not -BeNullOrEmpty
+            $entry[0].addedAt | Should -Match '^\d{4}-\d{2}-\d{2}$'
+        }
+
+        It 'accepts the exact Subject Microsoft signs appxsip.dll with' {
+            $threw = InModuleScope MSIX -Parameters @{ Probe = $script:KitsProbe } {
+                param($Probe)
+                $path = $Probe
+                Mock Write-MsixLog {}
+                Mock Get-AuthenticodeSignature {
+                    [pscustomobject]@{
+                        Status            = 'Valid'
+                        StatusMessage     = 'Signature verified.'
+                        SignerCertificate = [pscustomobject]@{
+                            Subject    = 'CN=Microsoft Windows Kits Publisher, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+                            Thumbprint = '2C3BD48A6836D6CEBAC6FFB4A972A0A69B5D6B49'
+                        }
+                    }
+                }
+                try { $null = _MsixVerifyAuthenticode -Path $path -ToolName 'appxsip.dll'; $false } catch { $true }
+            }
+            $threw | Should -BeFalse
+        }
+
+        It 'does not trust a longer common name that merely starts with it' {
+            $err = InModuleScope MSIX -Parameters @{ Probe = $script:KitsProbe } {
+                param($Probe)
+                $path = $Probe
+                Mock Get-AuthenticodeSignature {
+                    [pscustomobject]@{
+                        Status            = 'Valid'
+                        StatusMessage     = 'Signature verified.'
+                        SignerCertificate = [pscustomobject]@{
+                            Subject    = 'CN=Microsoft Windows Kits Publisher Test, O=Contoso, C=US'
+                            Thumbprint = '0000000000000000000000000000000000000000'
+                        }
+                    }
+                }
+                try { $null = _MsixVerifyAuthenticode -Path $path -ToolName 'appxsip.dll'; $null } catch { $_ }
+            }
+            $err | Should -Not -BeNullOrEmpty
+            $err.Exception.Message | Should -BeLike '*NOT in the trusted-publisher allowlist*'
+            $err.Exception.Data['MsixAuthenticodeReason'] | Should -Be 'UntrustedPublisher'
+        }
+    }
 }

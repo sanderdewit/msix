@@ -212,6 +212,11 @@ function Get-MsixToolsRoot {
           4. Windows 10/11 SDK             %ProgramFiles(x86)%\Windows Kits\10\bin
           5. Auto-install (if -AutoInstall) one-call download from NuGet
 
+        If nothing is found it throws with the remedies. When an
+        Install-MsixSdkTool earlier in the session failed (for example a
+        BuildTools release rejected by Authenticode verification), that failure
+        is quoted first, because it is almost always the cause.
+
     .PARAMETER AutoInstall
         If set and nothing was found, run Install-MsixSdkTool to fetch
         Microsoft.Windows.SDK.BuildTools and use that.
@@ -323,9 +328,7 @@ function Get-MsixToolsRoot {
         }
     }
 
-    throw @"
-MakeAppx.exe not found. Pick ONE of these:
-
+    $remedies = @"
   # Easiest -- auto-download MakeAppx + signtool from the official Microsoft
   # NuGet package (Microsoft.Windows.SDK.BuildTools), once per machine:
   Install-MsixSdkTool
@@ -337,6 +340,15 @@ MakeAppx.exe not found. Pick ONE of these:
   `$env:MSIX_TOOLS_PATH = 'C:\path\to\toolsroot'
   Set-MsixToolsRoot     -Path 'C:\path\to\toolsroot'
 "@
+    # A failed Install-MsixSdkTool leaves no Tools\MakeAppx.exe behind, so this
+    # error is usually what the caller sees next. Without the cause it sends
+    # them straight back to the install that just failed.
+    $lastSdkError = $script:MsixLastSdkInstallError
+    if ($lastSdkError) {
+        $indented = @(($lastSdkError -split '\r?\n') | ForEach-Object { "    $_" }) -join "`n"
+        throw "MakeAppx.exe not found. The last Install-MsixSdkTool attempt in this session failed, which is the likely cause:`n`n$indented`n`nOnce that is resolved, pick ONE of these:`n`n$remedies"
+    }
+    throw "MakeAppx.exe not found. Pick ONE of these:`n`n$remedies"
 }
 
 function Set-MsixToolsRoot {

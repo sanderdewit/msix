@@ -394,6 +394,22 @@ Describe 'Update-MsixSdkTool' -Tag 'Toolchain', 'Security' {
 
 Describe 'Initialize-MsixToolchain with a rejected SDK BuildTools release' -Tag 'Toolchain', 'Security' {
 
+    BeforeAll {
+        # Initialize-MsixToolchain has no -Destination, so its SDK step always
+        # targets the module's own folder. The mock below runs the REAL
+        # Update-MsixSdkTool, captured here before anything mocks it, against a
+        # test folder instead, so the module's own Tools\ is never touched.
+        # A -ParameterFilter mock that calls Update-MsixSdkTool again by name
+        # cannot do this: that call reaches the mock again, and Pester 6, which
+        # CI installs, then throws because no filter matches. Pester 5 fell back
+        # to the real command there.
+        InModuleScope MSIX { $script:RealUpdateMsixSdkTool = ${function:Update-MsixSdkTool} }
+    }
+
+    AfterAll {
+        InModuleScope MSIX { Remove-Variable -Name RealUpdateMsixSdkTool -Scope Script -ErrorAction SilentlyContinue }
+    }
+
     BeforeEach {
         InModuleScope MSIX {
             Mock Write-MsixLog {}
@@ -418,12 +434,9 @@ Describe 'Initialize-MsixToolchain with a rejected SDK BuildTools release' -Tag 
             }
             Mock _MsixDownloadFile { Copy-Item -LiteralPath $script:TestNupkg -Destination $Destination }
             Mock Invoke-RestMethod { [pscustomobject]@{ versions = @('10.0.28000.2705', '10.0.29000.100') } }
-            # Initialize-MsixToolchain has no -Destination. Send its default-folder
-            # call on to the real Update-MsixSdkTool with the test folder, so the
-            # module's own Tools\ is never touched.
-            Mock Update-MsixSdkTool -ParameterFilter { -not $Destination } -MockWith {
-                Update-MsixSdkTool -Destination $script:TestDestination
-            }
+            # Initialize-MsixToolchain's default-folder call: the real function,
+            # with the test folder (see BeforeAll).
+            Mock Update-MsixSdkTool { & $script:RealUpdateMsixSdkTool -Destination $script:TestDestination }
         }
     }
 

@@ -5,6 +5,76 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.75.2 - 2026-11-15 — Process Monitor, DebugView and msixmgr installs copy their files again
+
+### Fixed: `Install-MsixProcMon`, `Install-MsixDebugView` and `Install-MsixMgr` installed nothing
+
+The three installers share `_MsixInstallArchiveTool`. It downloads the zip, extracts it to a
+stage folder, Authenticode-verifies the stage, copies it into the destination and writes an
+`.installed` marker. Since v0.71.0 (the named-parameter sweep) the copy was:
+
+```powershell
+Copy-Item -LiteralPath (Join-Path -Path $stage -ChildPath '*') -Destination $Destination -Recurse -Force
+```
+
+`-LiteralPath` never expands wildcards, so this looked for an item literally named `*` and
+copied nothing:
+
+- **Windows PowerShell 5.1** raised no error at all.
+- **PowerShell 7** raised `Cannot find path '...\extracted\*' because it does not exist.` as a
+  non-terminating error. That rolled the install back only when the caller's
+  `ErrorActionPreference` was `Stop`.
+
+Otherwise the install carried on, wrote its marker and returned `Updated = $true`. The tool
+looked installed while its folder held only the marker, and every later `Install-*` call
+reported it as already installed. `Initialize-MsixToolchain` installs all three by default, so
+a default toolchain had no Process Monitor, DebugView or msixmgr. Commands that use them, such
+as `Start-MsixDebugSession` and `New-MsixAppAttachImage`, reported them as not found.
+
+The copy now lists the stage with `Get-ChildItem -LiteralPath` and copies each item with
+`Copy-Item -LiteralPath`, so the `-LiteralPath` rule still holds, and a destination with `[` or
+`]` in its path works. The copy also runs with `-ErrorAction Stop`, so a failed copy rolls the
+install back instead of being followed by a marker.
+
+### Folders the bug left behind are repaired automatically
+
+A tool folder that holds its install marker and nothing else now counts as not installed:
+
+- `Install-MsixProcMon`, `Install-MsixDebugView` and `Install-MsixMgr` reinstall it, with a
+  warning, instead of reporting it as already installed.
+- `Update-MsixProcMon`, `Update-MsixDebugView` and `Update-MsixMgr`, and so
+  `Initialize-MsixToolchain`, reinstall it instead of reporting it fresh. Before, a recent
+  marker kept the empty folder for up to 30 days (60 for msixmgr).
+
+No `-Force` is needed. A real install leaves the archive's files beside the marker, so this
+never reinstalls one.
+
+### Tests
+
+- The new `MSIX.ArchiveToolInstall.Tests.ps1` runs the three installers end to end on a real
+  zip, with only the download and `Get-AuthenticodeSignature` mocked. It covers:
+  - the DebugView and Process Monitor layouts, and msixmgr's per-architecture folders;
+  - `-Force` over an existing install;
+  - a destination path with `[` and `]` in it;
+  - an unsigned binary, which leaves no destination and no marker;
+  - a copy error, which no longer leaves a marker;
+  - the marker-only repair, through `Install-MsixDebugView` and `Update-MsixDebugView`.
+
+  Against the previous code every case except the unsigned binary fails, under both Windows
+  PowerShell 5.1 and PowerShell 7.
+- `Install-MsixDebugView`, `Install-MsixMgr` and `Install-MsixProcMon` come off the coverage
+  map's environment-bound list, and `Update-MsixDebugView` comes off its permanent exclusions.
+
+CI provisions the toolchain with `-Skip Procmon,DebugView,MsixMgr,Runtime`, and no test ran
+these installers, which is how the regression went unnoticed.
+
+### Docs
+
+- `TEST-PLAN.md` Scenario 12 ran `Initialize-MsixToolchain -ToolsRoot`, a parameter that does
+  not exist. It now runs `Initialize-MsixToolchain` and says where the tools land. It also
+  notes that msixmgr is not Authenticode-verified by default, and checks that the tool folders
+  hold the tools rather than only their markers.
+
 ## v0.75.1 - 2026-11-15 — The Windows Kits Publisher SDK signer, and saying why an SDK install failed
 
 ### Fixed: unpinned `Install-MsixSdkTool` / `Initialize-MsixToolchain` failed on every fresh machine

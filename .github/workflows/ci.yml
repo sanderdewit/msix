@@ -88,14 +88,22 @@ jobs:
       #     no business being exercised on every push.
       # Failure is FATAL: a toolchain we could not provision must fail the build
       # rather than silently reduce coverage (#151).
+      #
+      # PSF is PINNED to the module's own $script:PsfKnownGoodVersion rather than
+      # the latest release: TMurgent v2026.10.13 and v2026.11.14 ship PsfLauncher,
+      # PsfRuntime and every fixup unsigned, which the module rightly refuses.
+      # Provisioning that exact tag also re-verifies the version a PSF rejection
+      # tells users to pin. The SDK still follows the newest stable BuildTools.
       - name: Provision toolchain (SDK + PSF)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module ./MSIX.psd1 -Force
-          Initialize-MsixToolchain -Skip Procmon,DebugView,MsixMgr,Runtime | Out-Null
+          Initialize-MsixToolchain -Skip Psf,Procmon,DebugView,MsixMgr,Runtime | Out-Null
+          $psfVersion = & (Get-Module MSIX) { $script:PsfKnownGoodVersion }
+          Update-MsixPsfBinary -Version $psfVersion | Out-Null
           $root = & (Get-Module MSIX) { Get-MsixToolsRoot }
-          "Tools root: $root"
+          "Tools root: $root (PSF $psfVersion)"
           foreach ($probe in @('Tools\MakeAppx.exe', 'psf\PsfLauncher64.exe')) {
             if (-not (Test-Path -LiteralPath (Join-Path $root $probe))) {
               throw "Provisioning incomplete: $probe is missing under '$root'."
@@ -283,12 +291,14 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module ./MSIX.psd1 -Force
-          # Same one-call setup as the Pester lane, so both lanes provision
-          # identically and the module's own entry point is exercised. See that
-          # lane for why Procmon/DebugView/MsixMgr/Runtime are skipped.
-          Initialize-MsixToolchain -Skip Procmon,DebugView,MsixMgr,Runtime | Out-Null
+          # Same setup as the Pester lane, so both lanes provision identically
+          # and the module's own entry points are exercised. See that lane for
+          # why Procmon/DebugView/MsixMgr/Runtime are skipped and PSF is pinned.
+          Initialize-MsixToolchain -Skip Psf,Procmon,DebugView,MsixMgr,Runtime | Out-Null
+          $psfVersion = & (Get-Module MSIX) { $script:PsfKnownGoodVersion }
+          Update-MsixPsfBinary -Version $psfVersion | Out-Null
           $root = & (Get-Module MSIX) { Get-MsixToolsRoot }
-          "Tools root: $root"
+          "Tools root: $root (PSF $psfVersion)"
           foreach ($probe in @('Tools\MakeAppx.exe', 'psf\PsfLauncher64.exe')) {
             $p = Join-Path $root $probe
             if (-not (Test-Path -LiteralPath $p)) { throw "Provisioning incomplete: $p is missing." }

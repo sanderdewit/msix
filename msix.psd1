@@ -284,6 +284,16 @@ CLEARER FAILURE when a BuildTools release is rejected:
 - Get-MsixToolsRoot's "MakeAppx.exe not found" quotes that failure first when
   an install failed earlier in the session.
 
+PSF PIN: TMurgent PSF v2026.10.13 and v2026.11.14 ship PsfLauncher, PsfRuntime
+and every fixup unsigned, which the module refuses. v2026.07.01 is the last
+signed release.
+- Install-MsixPsfBinary / Update-MsixPsfBinary take -Version <tag> to install or
+  keep a specific release. A rejected release now names that tag
+  (Install-MsixPsfBinary -Version v2026.07.01, then Initialize-MsixToolchain
+  -Skip Psf).
+- CI provisions PSF at that verified tag. For users, the default is still the
+  latest release.
+
 Full history: CHANGELOG.md.
 '@
         }

@@ -60,6 +60,31 @@ binaries) and for x86 (42).
   in the session, the "MakeAppx.exe not found" error now starts with that failure. It
   no longer sends you straight back to the install that just failed.
 
+### TMurgent PSF: pin a release with `-Version`; CI uses the last signed one
+
+TMurgent PSF **v2026.10.13** and **v2026.11.14** ship `PsfLauncher*`, `PsfRuntime*` and
+every fixup **unsigned**: 25 of 33 binaries are `NotSigned`, and only the Microsoft
+redistributables in the zip are signed. The module rightly refuses them, because
+`signers.json` cannot vouch for an unsigned binary. So `Install-MsixPsfBinary` and
+`Initialize-MsixToolchain` have failed on fresh machines since 2026-10-14, and CI with
+them. **v2026.07.01** is the last release signed by `CN=TMurgent Technologies LLP`
+(`890C5C4E…3296`).
+
+- **Pin a release:** `Install-MsixPsfBinary` and `Update-MsixPsfBinary` take
+  **`-Version <tag>`** to install or keep a specific release. It is verified exactly
+  like the latest. When that release is already installed, `Update-MsixPsfBinary
+  -Version` does nothing and makes no GitHub query.
+- **Actionable rejection:** a rejected PSF release gets the same error layout as the
+  SDK. It covers:
+  - that nothing was copied, and that an existing install was kept;
+  - which files were rejected;
+  - `Install-MsixPsfBinary -Version v2026.07.01` (`$script:PsfKnownGoodVersion`), with
+    `Initialize-MsixToolchain -Skip Psf` as the follow-up;
+  - for unsigned files, that `signers.json` cannot fix them.
+- **CI provisions PSF at `$script:PsfKnownGoodVersion`** instead of the latest
+  release, so the version a rejection tells you to pin is re-verified on every build.
+  For users, the default is still the latest release.
+
 ### Tests
 
 - The new `MSIX.SdkToolInstall.Tests.ps1` runs `Install-MsixSdkTool` end to end with
@@ -74,6 +99,15 @@ binaries) and for x86 (42).
   `Install-MsixSdkTool` therefore comes off the coverage map's environment-bound list.
 - `MSIX.TrustedPublishers.Tests.ps1` checks the new entry, and checks that a longer
   CN that only starts with it is still rejected.
+- `MSIX.PsfBinaries.Tests.ps1` covers:
+  - the PSF `-Version` pin;
+  - the unsigned-release rejection, with rollback;
+  - a pinned install surviving a rejected update to the latest release;
+  - `Update-MsixPsfBinary -Version` doing nothing when the release is already
+    installed, and installing it otherwise;
+  - the URL escaping of the tag.
+
+  `Update-MsixPsfBinary` therefore comes off the coverage map's permanent exclusions.
 
 ## v0.75.0 - 2026-08-04 — Bulk / fleet analysis
 

@@ -13,6 +13,14 @@
 # =============================================================================
 
 $script:TMurgentRepo  = 'TimMangan/MSIX-PackageSupportFramework'
+
+# Newest TMurgent PSF release tag whose binaries pass _MsixVerifyAuthenticodeFolder.
+# v2026.10.13 and v2026.11.14 ship PsfLauncher*, PsfRuntime* and every fixup
+# UNSIGNED (25 of 33 binaries NotSigned); v2026.07.01 is the last release signed by
+# CN=TMurgent Technologies LLP. Install-MsixPsfBinary still defaults to the latest
+# release. This tag is what a rejection offers as -Version, and what CI provisions,
+# so the hint is re-verified on every build. Bump it once a newer release verifies.
+$script:PsfKnownGoodVersion = 'v2026.07.01'
 $script:ProcmonZipUrl    = 'https://download.sysinternals.com/files/ProcessMonitor.zip'
 $script:DebugViewZipUrl  = 'https://download.sysinternals.com/files/DebugView.zip'
 $script:SdkToolsNuGet = 'Microsoft.Windows.SDK.BuildTools'   # publishes MakeAppx + signtool
@@ -398,6 +406,79 @@ function _MsixFormatAuthenticodeRejection {
     return ($lines -join $nl)
 }
 
+function _MsixFormatToolRejection {
+    <#
+    .SYNOPSIS
+        Builds a toolchain installer's error for a release whose binaries failed
+        Authenticode verification (Install-MsixSdkTool, Install-MsixPsfBinary).
+        Internal.
+    .DESCRIPTION
+        The folder-verification detail says WHAT was rejected. An operator on a
+        fresh build agent also needs to know that nothing was installed, what to
+        run to get going again, and where the trust decision is made. When
+        BuildTools 10.0.26100.9457 / 10.0.28000.2957 moved AppxSip.dll to
+        CN=Microsoft Windows Kits Publisher, every unpinned install failed and
+        most callers only ever saw the downstream "MakeAppx.exe not found".
+        TMurgent PSF v2026.10.13 / v2026.11.14 ship their PSF binaries unsigned,
+        which is the same situation for Install-MsixPsfBinary.
+    .PARAMETER PinCommand
+        Ready-to-run command that installs -KnownGoodVersion.
+    .PARAMETER SkipComponent
+        The Initialize-MsixToolchain -Skip value for this tool, so the one-call
+        setup does not immediately move off the pinned release again.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [string]$Release,
+        [Parameter(Mandatory)] [string]$TargetDir,
+        [string]$PreviousInstall,
+        [Parameter(Mandatory)] [string]$DetailToolName,
+        [Parameter(Mandatory)] [object[]]$Rejected,
+        [Parameter(Mandatory)] [int]$TotalCount,
+        [Parameter(Mandatory)] [string]$Version,
+        [string]$KnownGoodVersion,
+        [string]$PinCommand,
+        [Parameter(Mandatory)] [string]$UpdaterName,
+        [Parameter(Mandatory)] [string]$SkipComponent
+    )
+    $nl = [Environment]::NewLine
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add("$Release was NOT installed: nothing was copied to $TargetDir.")
+    if ($PreviousInstall) {
+        $lines.Add("The tools already installed there ($PreviousInstall) were left as they were.")
+    }
+    $lines.Add('')
+    $lines.Add((_MsixFormatAuthenticodeRejection -ToolName $DetailToolName -Rejected $Rejected -TotalCount $TotalCount -NoAdvice))
+    $lines.Add('')
+    $lines.Add('What you can do:')
+
+    if ($KnownGoodVersion -and $KnownGoodVersion -ne $Version -and $PinCommand) {
+        $lines.Add('  - Pin the newest version this module release was verified against:')
+        $lines.Add("        $PinCommand")
+        $lines.Add("    Initialize-MsixToolchain and $UpdaterName always move to the newest version,")
+        $lines.Add('    so after pinning use:')
+        $lines.Add("        Initialize-MsixToolchain -Skip $SkipComponent")
+    } else {
+        $lines.Add("  - $Version is the version this module release was verified against, so this points at a")
+        $lines.Add('    changed signers.json, a revoked certificate or a tampered download rather than a new')
+        $lines.Add('    upstream signer. Investigate before adding trust.')
+    }
+
+    $signerRejections = @($Rejected | Where-Object { $_.Reason -in 'UntrustedPublisher', 'ThumbprintNotPinned' })
+    if ($signerRejections.Count -gt 0) {
+        $lines.Add('  - If your security policy trusts the signer above, add it to signers.json')
+        $lines.Add("    ($($script:MsixTrustedPublishersPath)) as described under")
+        $lines.Add('    "Trusted-publisher governance" in CONTRIBUTING.md:')
+        $lines.Add('    https://github.com/sanderdewit/msix/blob/main/CONTRIBUTING.md#trusted-publisher-governance-signersjson')
+    }
+    $unsigned = @($Rejected | Where-Object { $_.Reason -notin 'UntrustedPublisher', 'ThumbprintNotPinned' })
+    if ($unsigned.Count -gt 0) {
+        $lines.Add('  - Unsigned or invalid binaries cannot be made trustworthy through signers.json. Stay on')
+        $lines.Add('    the pinned release and ask the publisher for signed builds.')
+    }
+    return ($lines -join $nl)
+}
+
 function _MsixVerifyAuthenticodeMsixBundle {
     <#
     .SYNOPSIS
@@ -495,6 +576,28 @@ function _MsixGitHubLatest {
     $hdr = @{ 'User-Agent' = 'MSIX-PowerShell-Module' }
     if ($env:GITHUB_TOKEN) { $hdr['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
     return Invoke-RestMethod -Uri $api -Headers $hdr -UseBasicParsing -ErrorAction Stop
+}
+
+function _MsixGitHubRelease {
+    <#
+    .SYNOPSIS
+        Fetches one GitHub release by tag (the pinned counterpart of
+        _MsixGitHubLatest). Internal.
+    #>
+    param(
+        [Parameter(Mandatory)] [string]$Repo,
+        [Parameter(Mandatory)] [string]$Tag
+    )
+    # The tag lands in the URL path: escape it so a caller-supplied value cannot
+    # walk to another API endpoint.
+    $api = "https://api.github.com/repos/$Repo/releases/tags/$([uri]::EscapeDataString($Tag))"
+    $hdr = @{ 'User-Agent' = 'MSIX-PowerShell-Module' }
+    if ($env:GITHUB_TOKEN) { $hdr['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
+    try {
+        return Invoke-RestMethod -Uri $api -Headers $hdr -UseBasicParsing -ErrorAction Stop
+    } catch {
+        throw "Could not find release '$Tag' of $Repo on GitHub ($($_.Exception.Message)). Release tags look like '$($script:PsfKnownGoodVersion)'; see https://github.com/$Repo/releases."
+    }
 }
 
 
@@ -736,6 +839,13 @@ function Install-MsixPsfBinary {
         rolls back the install (the destination folder is removed if this
         cmdlet created it). See signers.json for the allowlist.
 
+        A rejected release says so: nothing was copied, an existing install was
+        left as it was, every rejected file with its signer (or the fact that it
+        is unsigned), and the newest release this module release was verified
+        against, to pass to -Version. TMurgent v2026.10.13 and v2026.11.14 ship
+        their PSF binaries unsigned, so an unpinned install is rejected until
+        a signed release appears; v2026.07.01 is the last signed one.
+
         Related: Update-MsixPsfBinary (re-installs only when GitHub publishes a
         newer tag), Get-MsixPsfBinariesVersion (queries what's currently
         installed), Add-MsixPsfV2 (the consumer that uses the binaries).
@@ -748,6 +858,10 @@ function Install-MsixPsfBinary {
 
     .PARAMETER AssetPattern
         Regex matched against asset names. Defaults to '\.zip$' so any zip works.
+
+    .PARAMETER Version
+        Release tag to install instead of the latest, e.g. 'v2026.07.01'. The
+        binaries are verified exactly as for the latest release.
 
     .OUTPUTS
         [pscustomobject] with Path, Version, Updated, and Source (download URL).
@@ -763,19 +877,33 @@ function Install-MsixPsfBinary {
     .EXAMPLE
         # Install into a custom location.
         Install-MsixPsfBinary -Destination 'D:\msix-tools\psf'
+
+    .EXAMPLE
+        # Pin a release (the last signed one, while newer releases ship unsigned),
+        # then let the one-call setup handle everything else.
+        Install-MsixPsfBinary -Version 'v2026.07.01'
+        Initialize-MsixToolchain -Skip Psf
     #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$Destination,
         [switch]$Force,
-        [string]$AssetPattern = '\.zip$'
+        [string]$AssetPattern = '\.zip$',
+        [string]$Version
     )
 
+    $destinationGiven = [bool]$Destination
     if (-not $Destination) { $Destination = Join-Path -Path (Get-MsixToolsRoot) -ChildPath 'psf' }
 
-    $release = _MsixGitHubLatest -Repo $script:TMurgentRepo
-    $tag     = $release.tag_name
-    Write-MsixLog -Level Info -Message "Latest TMurgent PSF release: $tag"
+    if ($Version) {
+        $release = _MsixGitHubRelease -Repo $script:TMurgentRepo -Tag $Version
+        $tag     = $release.tag_name
+        Write-MsixLog -Level Info -Message "Pinned TMurgent PSF release: $tag"
+    } else {
+        $release = _MsixGitHubLatest -Repo $script:TMurgentRepo
+        $tag     = $release.tag_name
+        Write-MsixLog -Level Info -Message "Latest TMurgent PSF release: $tag"
+    }
 
     $marker = Join-Path -Path $Destination -ChildPath 'psf.version'
     if ((Test-Path -LiteralPath $marker) -and -not $Force) {
@@ -797,6 +925,10 @@ function Install-MsixPsfBinary {
 
     if ($PSCmdlet.ShouldProcess($Destination, "Install PSF $tag")) {
         $destinationCreated = $false
+        $previousInstall = $null
+        if (Test-Path -LiteralPath $marker -PathType Leaf) {
+            $previousInstall = ([string](Get-Content -LiteralPath $marker -Raw -ErrorAction SilentlyContinue)).Trim()
+        }
         try {
             _MsixDownloadFile -Url $asset.browser_download_url -Destination $zip
             _MsixExpandZip -ArchivePath $zip -DestinationPath $tmp
@@ -845,9 +977,36 @@ function Install-MsixPsfBinary {
             Write-MsixLog -Level Info -Message "PSF $tag installed to $Destination"
 
         } catch {
-            Write-MsixLog -Level Error -Message "PSF install rolled back: $_"
+            $failure = $_
+            Write-MsixLog -Level Error -Message "PSF install rolled back: $failure"
             if ($destinationCreated) {
                 Remove-Item -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            $failureData = $failure.Exception.Data
+            if ($failureData -and $failureData.Contains('MsixAuthenticodeRejected')) {
+                # Verification runs before the copy, so nothing reached
+                # $Destination; turn the per-file detail into steps.
+                $records = @($failureData['MsixAuthenticodeRejected'])
+                $totalCount = $records.Count
+                if ($failureData.Contains('MsixAuthenticodeTotalCount')) { $totalCount = [int]$failureData['MsixAuthenticodeTotalCount'] }
+                $pin = "Install-MsixPsfBinary -Version $($script:PsfKnownGoodVersion)"
+                if ($destinationGiven) { $pin += " -Destination '$Destination'" }
+                $formatArgs = @{
+                    Release          = "TMurgent PSF $tag"
+                    TargetDir        = $Destination
+                    PreviousInstall  = $previousInstall
+                    DetailToolName   = "PSF $tag"
+                    Rejected         = $records
+                    TotalCount       = $totalCount
+                    Version          = $tag
+                    KnownGoodVersion = $script:PsfKnownGoodVersion
+                    PinCommand       = $pin
+                    UpdaterName      = 'Update-MsixPsfBinary'
+                    SkipComponent    = 'Psf'
+                }
+                $wrapped = [System.Management.Automation.RuntimeException]::new((_MsixFormatToolRejection @formatArgs), $failure.Exception)
+                $wrapped.Data['MsixAuthenticodeRejected'] = $records
+                throw $wrapped
             }
             throw
         } finally {
@@ -917,30 +1076,45 @@ function Update-MsixPsfBinary {
     .PARAMETER Destination
         Folder containing PSF. Defaults to "(Get-MsixToolsRoot)\psf".
 
+    .PARAMETER Version
+        Release tag to keep installed instead of following the latest release,
+        e.g. 'v2026.07.01'. Installs it when a different (or no) release is
+        present; a no-op (no download, no GitHub query) when it already is.
+
     .OUTPUTS
         [pscustomobject] from Install-MsixPsfBinary or Get-MsixPsfBinariesVersion.
 
     .EXAMPLE
         # Refresh PSF if a newer release has appeared upstream.
         Update-MsixPsfBinary
+
+    .EXAMPLE
+        # Keep a CI agent on a pinned release.
+        Update-MsixPsfBinary -Version 'v2026.07.01'
     #>
     [CmdletBinding(SupportsShouldProcess)]
-    param([string]$Destination)
+    param(
+        [string]$Destination,
+        [string]$Version
+    )
 
     if (-not $PSCmdlet.ShouldProcess($Destination, 'Update PSF Binaries')) { return }
+    $installArgs = @{ Destination = $Destination }
+    if ($Version) { $installArgs['Version'] = $Version }
     $current = Get-MsixPsfBinariesVersion -Path $Destination
     if (-not $current.Installed) {
         Write-MsixLog -Level Info -Message "No PSF found locally; installing."
-        return Install-MsixPsfBinary -Destination $Destination
+        return Install-MsixPsfBinary @installArgs
     }
 
-    $latest = (_MsixGitHubLatest -Repo $script:TMurgentRepo).tag_name
-    if ($current.Version -eq $latest) {
-        Write-MsixLog -Level Info -Message "PSF up to date ($latest)"
+    $target = $Version
+    if (-not $target) { $target = (_MsixGitHubLatest -Repo $script:TMurgentRepo).tag_name }
+    if ($current.Version -eq $target) {
+        Write-MsixLog -Level Info -Message "PSF up to date ($target)"
         return $current
     }
-    Write-MsixLog -Level Info -Message "Update available: $($current.Version) -> $latest"
-    return Install-MsixPsfBinary -Destination $Destination -Force
+    Write-MsixLog -Level Info -Message "Update available: $($current.Version) -> $target"
+    return Install-MsixPsfBinary @installArgs -Force
 }
 
 
@@ -1183,67 +1357,6 @@ function Get-MsixDebugViewVersion {
 }
 
 
-function _MsixFormatSdkRejection {
-    <#
-    .SYNOPSIS
-        Builds Install-MsixSdkTool's error for a BuildTools release whose
-        binaries failed Authenticode verification. Internal.
-    .DESCRIPTION
-        The folder-verification detail says WHAT was rejected. An operator on a
-        fresh build agent also needs to know that nothing was installed, what to
-        run to get going again, and where the trust decision is made. When
-        10.0.26100.9457 / 10.0.28000.2957 moved AppxSip.dll to CN=Microsoft
-        Windows Kits Publisher, every unpinned install failed and most callers
-        only ever saw the downstream "MakeAppx.exe not found".
-    #>
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)] [string]$Version,
-        [Parameter(Mandatory)] [string]$Architecture,
-        [Parameter(Mandatory)] [string]$Destination,
-        [string]$PreviousInstall,
-        [Parameter(Mandatory)] [object[]]$Rejected,
-        [Parameter(Mandatory)] [int]$TotalCount
-    )
-    $nl = [Environment]::NewLine
-    $toolsDir = Join-Path -Path $Destination -ChildPath 'Tools'
-    $lines = [System.Collections.Generic.List[string]]::new()
-    $lines.Add("$($script:SdkToolsNuGet) $Version ($Architecture) was NOT installed: nothing was copied to $toolsDir.")
-    if ($PreviousInstall) {
-        $lines.Add("The SDK tools already installed there ($PreviousInstall) were left as they were.")
-    }
-    $lines.Add('')
-    $lines.Add((_MsixFormatAuthenticodeRejection -ToolName "SDK BuildTools $Version/$Architecture" -Rejected $Rejected -TotalCount $TotalCount -NoAdvice))
-    $lines.Add('')
-    $lines.Add('What you can do:')
-
-    $knownGood = $script:SdkToolsKnownGoodVersion
-    if ($knownGood -and $knownGood -ne $Version) {
-        $pin = "Install-MsixSdkTool -Version $knownGood"
-        if ($Architecture -ne 'x64') { $pin += " -Architecture $Architecture" }
-        if ($Destination -ne $PSScriptRoot) { $pin += " -Destination '$Destination'" }
-        $lines.Add('  - Pin the newest version this module release was verified against:')
-        $lines.Add("        $pin")
-        $lines.Add('    Initialize-MsixToolchain and Update-MsixSdkTool always move to the newest version,')
-        $lines.Add('    so after pinning use:')
-        $lines.Add('        Initialize-MsixToolchain -Skip Sdk')
-    } else {
-        $lines.Add("  - $Version is the version this module release was verified against, so this points at a")
-        $lines.Add('    changed signers.json, a revoked certificate or a tampered download rather than a new')
-        $lines.Add('    upstream signer. Investigate before adding trust.')
-    }
-
-    $signerRejections = @($Rejected | Where-Object { $_.Reason -in 'UntrustedPublisher', 'ThumbprintNotPinned' })
-    if ($signerRejections.Count -gt 0) {
-        $lines.Add('  - If your security policy trusts the signer above, add it to signers.json')
-        $lines.Add("    ($($script:MsixTrustedPublishersPath)) as described under")
-        $lines.Add('    "Trusted-publisher governance" in CONTRIBUTING.md:')
-        $lines.Add('    https://github.com/sanderdewit/msix/blob/main/CONTRIBUTING.md#trusted-publisher-governance-signersjson')
-    }
-    return ($lines -join $nl)
-}
-
-
 function Install-MsixSdkTool {
     <#
     .SYNOPSIS
@@ -1415,15 +1528,23 @@ function Install-MsixSdkTool {
                 $records = @($failureData['MsixAuthenticodeRejected'])
                 $totalCount = $records.Count
                 if ($failureData.Contains('MsixAuthenticodeTotalCount')) { $totalCount = [int]$failureData['MsixAuthenticodeTotalCount'] }
+                $pin = "Install-MsixSdkTool -Version $($script:SdkToolsKnownGoodVersion)"
+                if ($Architecture -ne 'x64') { $pin += " -Architecture $Architecture" }
+                if ($Destination -ne $PSScriptRoot) { $pin += " -Destination '$Destination'" }
                 $formatArgs = @{
-                    Version         = $Version
-                    Architecture    = $Architecture
-                    Destination     = $Destination
-                    PreviousInstall = $previousInstall
-                    Rejected        = $records
-                    TotalCount      = $totalCount
+                    Release          = "$($script:SdkToolsNuGet) $Version ($Architecture)"
+                    TargetDir        = $toolsDir
+                    PreviousInstall  = $previousInstall
+                    DetailToolName   = "SDK BuildTools $Version/$Architecture"
+                    Rejected         = $records
+                    TotalCount       = $totalCount
+                    Version          = $Version
+                    KnownGoodVersion = $script:SdkToolsKnownGoodVersion
+                    PinCommand       = $pin
+                    UpdaterName      = 'Update-MsixSdkTool'
+                    SkipComponent    = 'Sdk'
                 }
-                $actionable = _MsixFormatSdkRejection @formatArgs
+                $actionable = _MsixFormatToolRejection @formatArgs
                 $script:MsixLastSdkInstallError = $actionable
                 $wrapped = [System.Management.Automation.RuntimeException]::new($actionable, $failure.Exception)
                 $wrapped.Data['MsixAuthenticodeRejected'] = $records

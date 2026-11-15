@@ -512,6 +512,10 @@ Initialize-MsixToolchain -ToolsRoot 'C:\msix-tools'
   `Initialize-MsixToolchain -Skip Sdk`, and links the signers.json governance.
   A following `Get-MsixToolsRoot` (on a machine with no other toolchain)
   quotes that failure before its usual remedies.
+- PSF: while the latest TMurgent release ships unsigned binaries (v2026.10.13
+  and v2026.11.14 do), `Install-MsixPsfBinary` without `-Version` fails, lists
+  the unsigned files, and offers `-Version v2026.07.01`. With that tag it
+  installs, and `Update-MsixPsfBinary -Version v2026.07.01` is then a no-op.
 
 ---
 

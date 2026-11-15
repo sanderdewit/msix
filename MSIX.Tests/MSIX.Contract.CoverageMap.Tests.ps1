@@ -37,7 +37,8 @@ Describe 'Coverage map: every mutator is exercised by a test' -Tag 'Meta' {
             'Update-MsixAppRuntime'
             'Update-MsixDebugView'
             'Update-MsixProcMon'
-            'Update-MsixPsfBinary'
+            # Update-MsixPsfBinary left this list in 0.75.1: its -Version pin is
+            # driven with GitHub mocked in MSIX.PsfBinaries.Tests.ps1.
             # Added in #152: the AST-based detector below showed these two were
             # only ever "covered" by a Get-Command existence check. They are the
             # same network-updater class as the four above - their whole job is

@@ -246,6 +246,11 @@ function Verb-MsixNoun {
   (`MSIX.PsfBinaries.ps1`) as the version to pin. Bump that constant once a newer
   release has been verified. CI provisions the newest release, so a green CI run
   on a newer version is the signal.
+- `Install-MsixPsfBinary` works the same way with `$script:PsfKnownGoodVersion`.
+  The difference is that CI provisions PSF **at** that tag, because the newest
+  TMurgent releases ship unsigned. To move on, run
+  `Install-MsixPsfBinary -Version <newer tag>` locally. If every binary verifies,
+  bump the constant; CI then re-verifies it.
 
 ## Signing
 

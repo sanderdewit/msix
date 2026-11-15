@@ -617,6 +617,45 @@ function _MsixGitHubRelease {
 # such alongside the helper.
 # =============================================================================
 
+function _MsixIsMarkerOnlyInstall {
+    <#
+    .SYNOPSIS
+        Internal: $true when a tool folder holds its install marker and
+        nothing else.
+
+    .DESCRIPTION
+        From v0.71.0 the stage copy in _MsixInstallArchiveTool passed '*' to
+        Copy-Item -LiteralPath, which never expands wildcards, so it copied
+        nothing. Windows PowerShell 5.1 raised no error. PowerShell 7 raised a
+        non-terminating one, which only rolled the install back when the
+        caller's ErrorActionPreference was Stop. Otherwise the install wrote
+        its marker anyway: the tool looked installed, its folder held only the
+        marker, and every later Install-* / Update-* call skipped it.
+
+        _MsixInstallArchiveTool and _MsixUpdateToolByAge use this to treat
+        such a folder as not installed. A real install leaves the archive's
+        files beside the marker, so this matches only the broken state.
+
+    .PARAMETER Destination
+        The tool folder.
+
+    .PARAMETER MarkerFile
+        Full path to the tool's install marker.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)] [string]$Destination,
+        [Parameter(Mandatory)] [string]$MarkerFile
+    )
+    if (-not (Test-Path -LiteralPath $MarkerFile -PathType Leaf)) { return $false }
+    $markerName = [System.IO.Path]::GetFileName($MarkerFile)
+    $others = @(Get-ChildItem -LiteralPath $Destination -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne $markerName })
+    return ($others.Count -eq 0)
+}
+
+
 function _MsixInstallArchiveTool {
     <#
     .SYNOPSIS
@@ -627,8 +666,10 @@ function _MsixInstallArchiveTool {
     .DESCRIPTION
         Common scaffolding for "download a single zip from a stable URL and
         unpack it under Destination" installers. Idempotent via a marker file
-        (re-runs are no-ops unless -Force). Rolls back the Destination folder
-        if the install fails AND the folder didn't exist before the call.
+        (re-runs are no-ops unless -Force; a marker with no files beside it
+        does not count, see _MsixIsMarkerOnlyInstall). Rolls back the
+        Destination folder if the install fails AND the folder didn't exist
+        before the call.
 
         Authenticode verification is on by default. msixmgr is the one tool in
         the module that opts out (upstream signing is broken — see
@@ -700,8 +741,12 @@ function _MsixInstallArchiveTool {
     }
 
     if ((Test-Path -LiteralPath $MarkerFile) -and -not $Force) {
-        Write-MsixLog -Level Info -Message $IdempotencyLogMessage
-        return [pscustomobject]@{ Path = $Destination; Updated = $false }
+        if (_MsixIsMarkerOnlyInstall -Destination $Destination -MarkerFile $MarkerFile) {
+            Write-MsixLog -Level Warning -Message "$ToolName at $Destination has an install marker but no files (earlier module versions could leave it like this). Reinstalling."
+        } else {
+            Write-MsixLog -Level Info -Message $IdempotencyLogMessage
+            return [pscustomobject]@{ Path = $Destination; Updated = $false }
+        }
     }
 
     # ShouldProcess-skipped path: preserve legacy behaviour of returning
@@ -728,7 +773,17 @@ function _MsixInstallArchiveTool {
         }
 
         New-Item -Path $Destination -ItemType Directory -Force | Out-Null
-        Copy-Item -LiteralPath (Join-Path -Path $stage -ChildPath '*') -Destination $Destination -Recurse -Force
+        # Copy what is IN the stage, not the stage folder, one item at a time.
+        # -LiteralPath never expands wildcards, so the earlier "$stage\*" form
+        # looked for an item literally named '*' and copied nothing. Windows
+        # PowerShell 5.1 raised no error; PowerShell 7 raised a non-terminating
+        # one. Either way the marker below was still written, so the tool
+        # looked installed with an empty folder. -ErrorAction Stop sends any
+        # copy failure to the rollback instead. -Force on both calls keeps what
+        # the original wildcard copy included (hidden items too).
+        foreach ($item in @(Get-ChildItem -LiteralPath $stage -Force -ErrorAction Stop)) {
+            Copy-Item -LiteralPath $item.FullName -Destination $Destination -Recurse -Force -ErrorAction Stop
+        }
         (Get-Date -Format o) | Set-Content -LiteralPath $MarkerFile -Encoding ascii
 
         if ($PostInstall) { & $PostInstall $Destination }
@@ -802,6 +857,12 @@ function _MsixUpdateToolByAge {
 
     if (-not (Test-Path -LiteralPath $MarkerFile)) {
         return & $InstallFresh
+    }
+    # A marker with nothing beside it is not an install, however recent its
+    # date (see _MsixIsMarkerOnlyInstall). Reinstall instead of reporting fresh.
+    if (_MsixIsMarkerOnlyInstall -Destination $Destination -MarkerFile $MarkerFile) {
+        Write-MsixLog -Level Warning -Message "$ToolName at $Destination has an install marker but no files. Reinstalling."
+        return & $InstallForce
     }
     $stamp = [datetime](Get-Content -LiteralPath $MarkerFile -Raw).Trim()
     $age   = (Get-Date) - $stamp

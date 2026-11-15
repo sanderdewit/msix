@@ -490,17 +490,27 @@ against the trusted-publisher allowlist.
 ### Setup
 
 - Fresh machine with no MSIX module toolchain yet.
+- `Initialize-MsixToolchain` takes no tools-root parameter. It installs into
+  the module folder: the SDK tools in `Tools\`, the other tools in `psf\`,
+  `procmon\`, `debugview\`, `msixmgr\` and `runtime\` beside it. Use a module
+  copy you can write to and throw away afterwards.
 
 ### Steps
 
 ```powershell
-Initialize-MsixToolchain -ToolsRoot 'C:\msix-tools'
+Initialize-MsixToolchain
 ```
 
 ### Expected
 
-- Each tool download (PSF, Procmon, msixmgr, SDK tools, App Runtime, DebugView)
-  is followed by an `Authenticode verified:` log line naming the leaf signer.
+- Each tool download (PSF, Procmon, SDK tools, App Runtime, DebugView) is
+  followed by `Authenticode verified:` log lines naming the leaf signer.
+  msixmgr is the exception: its verification is off by default (upstream
+  signing is broken, microsoft/msix-packaging#710) and a warning says so.
+- `procmon\`, `debugview\` and `msixmgr\` hold the tools (`Procmon.exe`,
+  `Dbgview64.exe`, `msixmgr.exe`), not only their `.installed` marker. A
+  regression once left just the marker there while the install reported
+  success.
 - If you tamper with a downloaded binary (e.g. replace `signtool.exe` with a
   random EXE) and re-run, the verification fails with a clear error naming the
   file and the actual signer's Subject.

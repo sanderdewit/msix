@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.75.0'
+    ModuleVersion     = '0.75.1'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, deployment-script templates, heuristic heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -259,35 +259,30 @@
             ProjectUri  = 'https://github.com/sanderdewit/msix'
             LicenseUri  = 'https://github.com/sanderdewit/msix/blob/main/LICENSE.md'
             ReleaseNotes = @'
-## v0.75.0 (bulk / fleet analysis)
+## v0.75.1 (Windows SDK BuildTools signer)
 
-The module's unit of work was one package. A packaging team's unit of work is a
-CATALOGUE - "we have 200 apps to migrate, which break and which can you fix?".
+FIXED: an unpinned Install-MsixSdkTool / Initialize-MsixToolchain failed on
+every fresh machine. Microsoft.Windows.SDK.BuildTools 10.0.26100.9457 and
+10.0.28000.2957 (2026-10-28) sign appxsip.dll (x64 and x86) with
+"CN=Microsoft Windows Kits Publisher, O=Microsoft Corporation, ...". That CN was
+not in signers.json, so the install rolled back and callers only saw
+"MakeAppx.exe not found".
+- signers.json now trusts "CN=Microsoft Windows Kits Publisher," (prefix-only,
+  like the other Microsoft entries). Its chain was verified: Microsoft Windows
+  Code Signing PCA 2024 -> Microsoft Root Certificate Authority 2010, the same
+  intermediate and root as the CN=Microsoft Corporation certs on signtool and
+  MakeAppx in the same package.
 
-NEW: Invoke-MsixBulkAnalysis
-- Runs investigate -> plan over a folder of packages and emits one comparable
-  row each: Clean / AutoFixable / NeedsManual / Incomplete / Error, with finding
-  count, categories and the planned fixes.
-- ISOLATION: every package runs in its own try/catch, so a corrupt or hostile
-  package produces an Error row instead of ending the run.
-- STREAMING: each row is appended to -ReportPath as it completes, so a run
-  killed at package 180 keeps the first 179 results.
-- RESUMABLE: -Resume skips packages already recorded, so a multi-day corpus run
-  can be stopped and restarted at will.
-- NO DUPLICATED LOGIC: the AutoFixable verdict comes from asking the real
-  planner (Invoke-MsixAutoFixFromAnalysis -DryRun) what it would do, rather than
-  keeping a second copy of the fixable-category list that would drift.
-- A package whose scan hit a ScannerError or an unavailable offline-registry API
-  is reported Incomplete, never Clean: an incomplete scan must not be
-  presentable as a clean one.
-
-Deliberately serial for now. The module keeps session state in script scope
-(tools root, memoized offreg probe, log file handle), so concurrent analyses in
-one process would race on it. Throughput comes from -Resume plus long runs until
-that state is concurrency-safe; correctness first.
-
-Also: README rewritten problem-first with PSGallery/CI/test badges, and the
-repository given a real description and topics.
+CLEARER FAILURE when a BuildTools release is rejected:
+- Every rejected file is reported, grouped by signer, instead of only the first.
+  Invalid or missing signatures are listed separately and are never presented
+  as fixable through signers.json.
+- Install-MsixSdkTool says that nothing was installed (and that an existing
+  install was kept). It names the signer, offers the newest verified version to
+  pin (Install-MsixSdkTool -Version 10.0.28000.2957, then
+  Initialize-MsixToolchain -Skip Sdk), and links the signers.json governance.
+- Get-MsixToolsRoot's "MakeAppx.exe not found" quotes that failure first when
+  an install failed earlier in the session.
 
 Full history: CHANGELOG.md.
 '@

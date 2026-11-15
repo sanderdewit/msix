@@ -1,5 +1,5 @@
 ﻿@{
-    ModuleVersion     = '0.75.2'
+    ModuleVersion     = '0.75.3'
     GUID              = 'a3f1c2d4-8e5b-4f7a-9c3d-1b2e4f6a8c0d'
     Author            = 'Sander de Wit'
     Description       = 'Enterprise-grade MSIX packaging automation. PSF (TMurgent) injection with the full RegLegacy + MFR fixup palette, context menus, signing, CI/CD pipeline, compatibility investigation (procmon + DebugView trace parsing), sandbox debug helper, App Attach VHDX/CIM generator, Win32 App Isolation, AppData helpers, accelerator import, deployment-script templates, heuristic heuristic auto-fixers (uninstaller / Run-key / VC runtime / capability / splash / alias / version-bump), package compare, and a Pester test suite.'
@@ -259,6 +259,26 @@
             ProjectUri  = 'https://github.com/sanderdewit/msix'
             LicenseUri  = 'https://github.com/sanderdewit/msix/blob/main/LICENSE.md'
             ReleaseNotes = @'
+## v0.75.3 (keep a verified SDK toolchain when an update is rejected)
+
+FIXED: Initialize-MsixToolchain failed on machines that already had working SDK
+tools whenever the newest Microsoft.Windows.SDK.BuildTools release was rejected
+by Authenticode verification, as 10.0.28000.2957 was before 0.75.1.
+Install-MsixSdkTool left the installed tools alone, but Update-MsixSdkTool
+passed its error on.
+- Update-MsixSdkTool now re-verifies the installed tools with the check
+  Get-MsixToolsRoot applies, and keeps them. It writes one warning (a real
+  Write-Warning, so -WarningVariable and CI logs see it) that names the
+  rejected version and repeats the install error's advice. The result has
+  Updated = $false and a new RejectedVersion property.
+- Still an error: no SDK tools installed yet, installed tools that no longer
+  pass verification, and any failure other than a rejection (NuGet
+  unreachable, download failed).
+- The SDK advice no longer offers to pin the verified version when the
+  installed tools are already at least that version, and no longer claims
+  that Initialize-MsixToolchain always replaces a pinned SDK install. PSF is
+  unchanged: Update-MsixPsfBinary still fails on a rejected latest release.
+
 ## v0.75.2 (Process Monitor / DebugView / msixmgr installs copy their files again)
 
 FIXED: since v0.71.0, Install-MsixProcMon, Install-MsixDebugView and

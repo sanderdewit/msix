@@ -522,6 +522,13 @@ Initialize-MsixToolchain
   `Initialize-MsixToolchain -Skip Sdk`, and links the signers.json governance.
   A following `Get-MsixToolsRoot` (on a machine with no other toolchain)
   quotes that failure before its usual remedies.
+- With that entry still removed, install a release the trimmed list still
+  trusts (`Install-MsixSdkTool -Version 10.0.28000.2705 -Force`) and run
+  `Initialize-MsixToolchain -Skip Psf`. It completes: the SDK tools stay at
+  2705, one `WARNING:` names the rejected newest release and repeats that
+  error's advice, and the `Sdk` result shows `Updated = False` with
+  `RejectedVersion` set. `Get-MsixToolsRoot -Refresh` resolves the kept tools.
+  Restore `signers.json` afterwards.
 - PSF: while the latest TMurgent release ships unsigned binaries (v2026.10.13
   and v2026.11.14 do), `Install-MsixPsfBinary` without `-Version` fails, lists
   the unsigned files, and offers `-Version v2026.07.01`. With that tag it

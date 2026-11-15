@@ -185,6 +185,296 @@ Describe 'Install-MsixSdkTool' -Tag 'Toolchain', 'Security' {
     }
 }
 
+# =============================================================================
+# Update-MsixSdkTool - which Initialize-MsixToolchain calls first - always moves
+# to the newest stable BuildTools. When that release was rejected (10.0.28000.2957
+# before signers.json trusted CN=Microsoft Windows Kits Publisher),
+# Install-MsixSdkTool left the existing Tools\ install in place but its error
+# still propagated, so Initialize-MsixToolchain failed on machines that had a
+# working older toolchain. A rejected update now keeps a verified install and
+# warns; with nothing usable to keep, the rejection is still the error.
+# =============================================================================
+
+Describe 'Update-MsixSdkTool' -Tag 'Toolchain', 'Security' {
+
+    BeforeAll {
+        # Tools\ as Install-MsixSdkTool leaves it: the arch folder's binaries plus
+        # the "<version>|<arch>" marker. The 'previous' content tells the kept
+        # files apart from anything a rejected release could have copied over them.
+        function script:New-FakeSdkInstall {
+            param(
+                [Parameter(Mandatory)][string]$Destination,
+                [Parameter(Mandatory)][string]$Marker,
+                [string[]]$Files = @('MakeAppx.exe', 'signtool.exe', 'makepri.exe', 'appxsip.dll', 'wintrust.dll')
+            )
+            $tools = Join-Path -Path $Destination -ChildPath 'Tools'
+            New-Item -ItemType Directory -Path $tools -Force | Out-Null
+            foreach ($f in $Files) {
+                Set-Content -LiteralPath (Join-Path -Path $tools -ChildPath $f) -Value 'previous' -Encoding ascii
+            }
+            Set-Content -LiteralPath (Join-Path -Path $tools -ChildPath 'sdk.version') -Value $Marker -Encoding ascii
+            return $tools
+        }
+
+        $script:Contoso = @{ Subject = 'CN=Contoso Kits Signer, O=Contoso, C=US'; Thumbprint = 'AAAABBBBCCCCDDDDEEEEFFFF0000111122223333' }
+    }
+
+    BeforeEach {
+        InModuleScope MSIX {
+            Mock Write-MsixLog {}
+            # Deterministic even on a host whose operator set the machine-wide bypass.
+            Mock _MsixIsToolVerificationBypassed { $false }
+            # The installed tools and the downloaded release are signed separately,
+            # as in a real upgrade: the installed appxsip.dll came from an older
+            # release signed by CN=Microsoft Corporation, whatever signs the new one.
+            Mock Get-AuthenticodeSignature {
+                $path    = [string]@($LiteralPath)[0]
+                $signers = $script:TestSigners
+                if ($script:TestInstalledTools -and $path.StartsWith("$($script:TestInstalledTools)\", [StringComparison]::OrdinalIgnoreCase)) {
+                    $signers = $script:TestInstalledSigners
+                }
+                $signer = $null
+                if ($signers) { $signer = $signers[[IO.Path]::GetFileName($path)] }
+                if (-not $signer) {
+                    $signer = @{ Subject = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'; Thumbprint = 'B835FC295FFB94EA2FCA23B0E9C1EDA3FBA4E07D' }
+                }
+                $status = 'Valid'
+                if ($signer.Status) { $status = $signer.Status }
+                [pscustomobject]@{
+                    Status            = $status
+                    StatusMessage     = 'mocked'
+                    SignerCertificate = [pscustomobject]@{ Subject = $signer.Subject; Thumbprint = $signer.Thumbprint }
+                }
+            }
+            Mock _MsixDownloadFile { Copy-Item -LiteralPath $script:TestNupkg -Destination $Destination }
+            Mock Invoke-RestMethod { [pscustomobject]@{ versions = @('10.0.28000.2705', '10.0.28000.2957', '10.0.29000.100') } }
+        }
+    }
+
+    AfterEach {
+        InModuleScope MSIX {
+            $script:ToolsRoot = $null
+            $script:MsixLastSdkInstallError = $null
+            Remove-Variable -Name TestNupkg, TestSigners, TestInstalledTools, TestInstalledSigners, TestDestination -Scope Script -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'keeps the verified install and warns, instead of failing, when the newest release is rejected' {
+        $nupkg = New-FakeBuildToolsPackage -WorkDir $TestDrive -SdkFolder '10.0.29000.0'
+        $dest  = Join-Path -Path $TestDrive -ChildPath 'existing'
+        $tools = New-FakeSdkInstall -Destination $dest -Marker '10.0.28000.2705|x64'
+        $r = InModuleScope MSIX -Parameters @{ Nupkg = $nupkg; Dest = $dest; Tools = $tools; Rejected = $script:Contoso } {
+            param($Nupkg, $Dest, $Tools, $Rejected)
+            $script:TestNupkg          = $Nupkg
+            $script:TestInstalledTools = $Tools
+            $script:TestSigners        = @{ 'appxsip.dll' = $Rejected }
+            $out = Update-MsixSdkTool -Destination $Dest -WarningVariable warnings -WarningAction SilentlyContinue
+            [pscustomobject]@{
+                Out       = $out
+                Warnings  = @($warnings)
+                LastError = $script:MsixLastSdkInstallError
+                ToolsRoot = $script:ToolsRoot
+                KnownGood = $script:SdkToolsKnownGoodVersion
+            }
+        }
+        $r.Out.Updated         | Should -BeFalse
+        $r.Out.Version         | Should -Be '10.0.28000.2705' -Because 'the result describes the install that is actually in place'
+        $r.Out.Architecture    | Should -Be 'x64'
+        $r.Out.RejectedVersion | Should -Be '10.0.29000.100'
+        $r.Out.Path            | Should -Be $tools
+        (Get-Content -LiteralPath (Join-Path -Path $tools -ChildPath 'appxsip.dll') -Raw).Trim() | Should -Be 'previous'
+        (Get-Content -LiteralPath (Join-Path -Path $tools -ChildPath 'sdk.version') -Raw).Trim() | Should -Be '10.0.28000.2705|x64'
+
+        $r.Warnings.Count | Should -Be 1 -Because 'a real Write-Warning, which -WarningVariable and CI logs capture'
+        $msg = [string]$r.Warnings[0]
+        $msg | Should -BeLike 'SDK tools NOT updated: Microsoft.Windows.SDK.BuildTools 10.0.29000.100 (x64) was rejected by Authenticode verification.*'
+        $msg | Should -BeLike "*The verified install already in $tools (10.0.28000.2705, x64) was kept*"
+        # ...followed by Install-MsixSdkTool's actionable message.
+        $msg | Should -BeLike '*10.0.29000.100 (x64) was NOT installed: nothing was copied*'
+        $msg | Should -BeLike '*Subject:    CN=Contoso Kits Signer, O=Contoso, C=US*Files (1): appxsip.dll*'
+        $msg | Should -BeLike "*Install-MsixSdkTool -Version $($r.KnownGood)*" -Because '2705 is older than the verified version, so pinning moves it forward'
+        $msg | Should -BeLike '*Initialize-MsixToolchain -Skip Sdk*'
+        $msg | Should -BeLike '*signers.json*Trusted-publisher governance*CONTRIBUTING.md*'
+
+        $r.LastError | Should -BeNullOrEmpty -Because 'Get-MsixToolsRoot must not blame a later missing MakeAppx.exe on an update that was held back'
+        $r.ToolsRoot | Should -BeNullOrEmpty -Because 'keeping an install does not change the tools root this session resolves to'
+    }
+
+    It 'still fails with the rejection on a machine with no SDK tools installed' {
+        $nupkg = New-FakeBuildToolsPackage -WorkDir $TestDrive -SdkFolder '10.0.29000.0'
+        $dest  = Join-Path -Path $TestDrive -ChildPath 'fresh'
+        $r = InModuleScope MSIX -Parameters @{ Nupkg = $nupkg; Dest = $dest; Rejected = $script:Contoso } {
+            param($Nupkg, $Dest, $Rejected)
+            $script:TestNupkg   = $Nupkg
+            $script:TestSigners = @{ 'appxsip.dll' = $Rejected }
+            $caught = $null
+            $warnings = $null
+            try { $null = Update-MsixSdkTool -Destination $Dest -WarningVariable warnings -WarningAction SilentlyContinue } catch { $caught = $_ }
+            [pscustomobject]@{ Error = $caught; Warnings = $warnings; LastError = $script:MsixLastSdkInstallError }
+        }
+        $r.Error | Should -Not -BeNullOrEmpty -Because 'there is no install to keep'
+        $r.Error.Exception.Message | Should -BeLike 'Microsoft.Windows.SDK.BuildTools 10.0.29000.100 (x64) was NOT installed: nothing was copied*'
+        $r.Error.Exception.Message | Should -BeLike '*Files (1): appxsip.dll*'
+        @($r.Error.Exception.Data['MsixAuthenticodeRejected']).Count | Should -Be 1
+        $r.Warnings | Should -BeNullOrEmpty -Because 'the rejection is the error here, not a warning'
+        Test-Path -LiteralPath (Join-Path -Path $dest -ChildPath 'Tools') | Should -BeFalse
+        $r.LastError | Should -Be $r.Error.Exception.Message -Because 'Get-MsixToolsRoot still quotes it'
+    }
+
+    It 'does not keep installed tools that no longer pass verification: the rejection stands' {
+        $nupkg = New-FakeBuildToolsPackage -WorkDir $TestDrive -SdkFolder '10.0.29000.0'
+        $dest  = Join-Path -Path $TestDrive -ChildPath 'tampered'
+        $tools = New-FakeSdkInstall -Destination $dest -Marker '10.0.28000.2705|x64'
+        $r = InModuleScope MSIX -Parameters @{ Nupkg = $nupkg; Dest = $dest; Tools = $tools; Rejected = $script:Contoso } {
+            param($Nupkg, $Dest, $Tools, $Rejected)
+            $script:TestNupkg            = $Nupkg
+            $script:TestInstalledTools   = $Tools
+            $script:TestSigners          = @{ 'appxsip.dll' = $Rejected }
+            # signtool.exe in Tools\ was replaced after it was installed.
+            $script:TestInstalledSigners = @{
+                'signtool.exe' = @{ Status = 'HashMismatch'; Subject = 'CN=Microsoft Corporation, O=Microsoft Corporation'; Thumbprint = 'B835FC295FFB94EA2FCA23B0E9C1EDA3FBA4E07D' }
+            }
+            $caught = $null
+            $warnings = $null
+            try { $null = Update-MsixSdkTool -Destination $Dest -WarningVariable warnings -WarningAction SilentlyContinue } catch { $caught = $_ }
+            [pscustomobject]@{ Error = $caught; Warnings = $warnings; ToolsRoot = $script:ToolsRoot }
+        }
+        $r.Error | Should -Not -BeNullOrEmpty
+        $r.Error.Exception.Message | Should -BeLike '*10.0.29000.100 (x64) was NOT installed*'
+        $r.Error.Exception.Data.Contains('MsixAuthenticodeRejected') | Should -BeTrue -Because 'the caller gets the rejection itself'
+        $r.Warnings | Should -BeNullOrEmpty
+        $r.ToolsRoot | Should -BeNullOrEmpty -Because 'a root that failed verification is not left cached'
+        Should -Invoke -CommandName Write-MsixLog -ModuleName MSIX -Times 1 -Exactly -ParameterFilter {
+            "$Level" -eq 'Warning' -and $Message -like '*cannot be kept instead of the rejected update*Status: HashMismatch*'
+        }
+        (Get-Content -LiteralPath (Join-Path -Path $tools -ChildPath 'signtool.exe') -Raw).Trim() | Should -Be 'previous'
+    }
+
+    It 'still fails when the update failed for a reason other than a rejection' {
+        $dest = Join-Path -Path $TestDrive -ChildPath 'download-fails'
+        $null = New-FakeSdkInstall -Destination $dest -Marker '10.0.28000.2705|x64'
+        $r = InModuleScope MSIX -Parameters @{ Dest = $dest } {
+            param($Dest)
+            Mock _MsixDownloadFile { throw 'The remote name could not be resolved: api.nuget.org' }
+            $caught = $null
+            $warnings = $null
+            try { $null = Update-MsixSdkTool -Destination $Dest -WarningVariable warnings -WarningAction SilentlyContinue } catch { $caught = $_ }
+            [pscustomobject]@{ Error = $caught; Warnings = $warnings }
+        }
+        $r.Error | Should -Not -BeNullOrEmpty -Because 'only an Authenticode rejection is held back'
+        $r.Error.Exception.Message | Should -BeLike '*could not be resolved*'
+        $r.Warnings | Should -BeNullOrEmpty
+    }
+
+    It 'does not offer a pin that would not move <Case> forward' -ForEach @(
+        @{ Case = 'an install of the verified version'; Bump = 0 }
+        @{ Case = 'a newer install that also passed';   Bump = 1 }
+    ) {
+        $knownGood = InModuleScope MSIX { $script:SdkToolsKnownGoodVersion }
+        $v = [version]$knownGood
+        $installed = '{0}.{1}.{2}.{3}' -f $v.Major, $v.Minor, $v.Build, ($v.Revision + $Bump)
+        $nupkg = New-FakeBuildToolsPackage -WorkDir $TestDrive -SdkFolder '10.0.29000.0'
+        $dest  = Join-Path -Path $TestDrive -ChildPath "current-$Bump"
+        $tools = New-FakeSdkInstall -Destination $dest -Marker "$installed|x64"
+        $r = InModuleScope MSIX -Parameters @{ Nupkg = $nupkg; Dest = $dest; Tools = $tools; Rejected = $script:Contoso } {
+            param($Nupkg, $Dest, $Tools, $Rejected)
+            $script:TestNupkg          = $Nupkg
+            $script:TestInstalledTools = $Tools
+            $script:TestSigners        = @{ 'appxsip.dll' = $Rejected }
+            $out = Update-MsixSdkTool -Destination $Dest -WarningVariable warnings -WarningAction SilentlyContinue
+            [pscustomobject]@{ Out = $out; Warnings = @($warnings) }
+        }
+        $r.Out.Version | Should -Be $installed
+        $msg = [string]$r.Warnings[0]
+        $msg | Should -BeLike "*Nothing to pin: the tools installed there are not older than $knownGood*"
+        $msg | Should -Not -BeLike '*Install-MsixSdkTool -Version*' -Because 'pinning the verified version would be a no-op or a downgrade'
+        $msg | Should -BeLike '*Initialize-MsixToolchain -Skip Sdk*'
+    }
+}
+
+Describe 'Initialize-MsixToolchain with a rejected SDK BuildTools release' -Tag 'Toolchain', 'Security' {
+
+    BeforeEach {
+        InModuleScope MSIX {
+            Mock Write-MsixLog {}
+            Mock _MsixIsToolVerificationBypassed { $false }
+            # The downloaded release's appxsip.dll is signed by a publisher that is
+            # not in signers.json; everything else, including every installed file,
+            # by CN=Microsoft Corporation.
+            Mock Get-AuthenticodeSignature {
+                $path    = [string]@($LiteralPath)[0]
+                $subject = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+                $thumb   = 'B835FC295FFB94EA2FCA23B0E9C1EDA3FBA4E07D'
+                $installedFile = $path.StartsWith("$($script:TestDestination)\Tools\", [StringComparison]::OrdinalIgnoreCase)
+                if (-not $installedFile -and [IO.Path]::GetFileName($path) -eq 'appxsip.dll') {
+                    $subject = 'CN=Contoso Kits Signer, O=Contoso, C=US'
+                    $thumb   = 'AAAABBBBCCCCDDDDEEEEFFFF0000111122223333'
+                }
+                [pscustomobject]@{
+                    Status            = 'Valid'
+                    StatusMessage     = 'mocked'
+                    SignerCertificate = [pscustomobject]@{ Subject = $subject; Thumbprint = $thumb }
+                }
+            }
+            Mock _MsixDownloadFile { Copy-Item -LiteralPath $script:TestNupkg -Destination $Destination }
+            Mock Invoke-RestMethod { [pscustomobject]@{ versions = @('10.0.28000.2705', '10.0.29000.100') } }
+            # Initialize-MsixToolchain has no -Destination. Send its default-folder
+            # call on to the real Update-MsixSdkTool with the test folder, so the
+            # module's own Tools\ is never touched.
+            Mock Update-MsixSdkTool -ParameterFilter { -not $Destination } -MockWith {
+                Update-MsixSdkTool -Destination $script:TestDestination
+            }
+        }
+    }
+
+    AfterEach {
+        InModuleScope MSIX {
+            $script:ToolsRoot = $null
+            $script:MsixLastSdkInstallError = $null
+            Remove-Variable -Name TestNupkg, TestDestination -Scope Script -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'carries on with the installed SDK tools, and warns' {
+        $nupkg = New-FakeBuildToolsPackage -WorkDir $TestDrive -SdkFolder '10.0.29000.0'
+        $dest  = Join-Path -Path $TestDrive -ChildPath 'init-existing'
+        $tools = Join-Path -Path $dest -ChildPath 'Tools'
+        New-Item -ItemType Directory -Path $tools -Force | Out-Null
+        foreach ($f in 'MakeAppx.exe', 'signtool.exe', 'appxsip.dll') {
+            Set-Content -LiteralPath (Join-Path -Path $tools -ChildPath $f) -Value 'previous' -Encoding ascii
+        }
+        Set-Content -LiteralPath (Join-Path -Path $tools -ChildPath 'sdk.version') -Value '10.0.28000.2705|x64' -Encoding ascii
+        $r = InModuleScope MSIX -Parameters @{ Nupkg = $nupkg; Dest = $dest } {
+            param($Nupkg, $Dest)
+            $script:TestNupkg       = $Nupkg
+            $script:TestDestination = $Dest
+            $out = Initialize-MsixToolchain -Skip Psf, Procmon, DebugView, MsixMgr, Runtime -WarningVariable warnings -WarningAction SilentlyContinue
+            [pscustomobject]@{ Out = $out; Warnings = @($warnings) }
+        }
+        $r.Out.Sdk.Updated         | Should -BeFalse
+        $r.Out.Sdk.Version         | Should -Be '10.0.28000.2705'
+        $r.Out.Sdk.RejectedVersion | Should -Be '10.0.29000.100'
+        $r.Warnings.Count          | Should -Be 1
+        [string]$r.Warnings[0]     | Should -BeLike 'SDK tools NOT updated: *10.0.29000.100 (x64) was rejected*'
+        (Get-Content -LiteralPath (Join-Path -Path $tools -ChildPath 'sdk.version') -Raw).Trim() | Should -Be '10.0.28000.2705|x64'
+    }
+
+    It 'still fails on a machine without SDK tools, with the actionable rejection' {
+        $nupkg = New-FakeBuildToolsPackage -WorkDir $TestDrive -SdkFolder '10.0.29000.0'
+        $dest  = Join-Path -Path $TestDrive -ChildPath 'init-fresh'
+        $err = InModuleScope MSIX -Parameters @{ Nupkg = $nupkg; Dest = $dest } {
+            param($Nupkg, $Dest)
+            $script:TestNupkg       = $Nupkg
+            $script:TestDestination = $Dest
+            try { $null = Initialize-MsixToolchain -Skip Psf, Procmon, DebugView, MsixMgr, Runtime; $null } catch { $_ }
+        }
+        $err | Should -Not -BeNullOrEmpty
+        $err.Exception.Message | Should -BeLike 'Microsoft.Windows.SDK.BuildTools 10.0.29000.100 (x64) was NOT installed: nothing was copied*'
+        $err.Exception.Message | Should -BeLike '*Install-MsixSdkTool -Version*Initialize-MsixToolchain -Skip Sdk*'
+        Test-Path -LiteralPath (Join-Path -Path $dest -ChildPath 'Tools') | Should -BeFalse
+    }
+}
+
 Describe '_MsixVerifyAuthenticodeFolder' -Tag 'Security' {
 
     BeforeEach {

@@ -38,15 +38,17 @@ Describe 'Coverage map: every mutator is exercised by a test' -Tag 'Meta' {
             'Update-MsixProcMon'
             # Update-MsixPsfBinary left this list in 0.75.1: its -Version pin is
             # driven with GitHub mocked in MSIX.PsfBinaries.Tests.ps1.
-            # Added in #152: the AST-based detector below showed these two were
-            # only ever "covered" by a Get-Command existence check. They are the
-            # same network-updater class as the ones above - their whole job is
-            # downloading toolchain binaries - so they belong here rather than in
+            # Added in #152: the AST-based detector below showed this one was
+            # only ever "covered" by a Get-Command existence check. It is the
+            # same network-updater class as the updaters above - its whole job is
+            # downloading toolchain binaries - so it belongs here rather than in
             # the debt list. Manual coverage: TEST-PLAN.md Scenario 12.
             'Update-MsixMgr'
-            'Update-MsixSdkTool'
             # Update-MsixDebugView left this list in 0.75.2:
             # MSIX.ArchiveToolInstall.Tests.ps1 drives it with the download mocked.
+            # Update-MsixSdkTool, added alongside Update-MsixMgr in #152, left this
+            # list in 0.75.3: MSIX.SdkToolInstall.Tests.ps1 drives it end to end
+            # with the NuGet calls and Authenticode mocked.
         )
 
         $psd1     = Resolve-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath '..\MSIX.psd1')
@@ -63,13 +65,15 @@ Describe 'Coverage map: every mutator is exercised by a test' -Tag 'Meta' {
             # --- Network: whole job is downloading toolchain binaries. Testing
             # them would pin the build to GitHub/Sysinternals/NuGet availability.
             # Manual coverage: TEST-PLAN.md Scenario 12.
-            'Initialize-MsixToolchain'
             'Install-MsixAppRuntime'
             # Install-MsixSdkTool left this list in 0.75.1: MSIX.SdkToolInstall.Tests.ps1
             # drives it end to end with the NuGet calls and Authenticode mocked.
             # Install-MsixDebugView, Install-MsixMgr and Install-MsixProcMon left
             # this list in 0.75.2: MSIX.ArchiveToolInstall.Tests.ps1 drives them
             # end to end on a real zip, with the download and Authenticode mocked.
+            # Initialize-MsixToolchain left it in 0.75.3: MSIX.SdkToolInstall.Tests.ps1
+            # runs its SDK step with NuGet and Authenticode mocked and the other
+            # components skipped.
 
             # --- Hyper-V / VHDX / CIM: needs the Hyper-V PowerShell module, a
             # mountable virtual disk, and usually elevation.

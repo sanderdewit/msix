@@ -220,4 +220,25 @@ Describe '_MsixGitHubRelease' -Tag 'PsfBinaries', 'Security' {
         }
         $uri | Should -Be 'https://api.github.com/repos/TimMangan/MSIX-PackageSupportFramework/releases/tags/..%2F..%2F..%2Fuser'
     }
+
+    It 'authenticates with GITHUB_TOKEN when it is set' {
+        # CI maps the job token into this variable: anonymous API calls from
+        # shared runner IPs hit "403 (rate limit exceeded)".
+        $saved = $env:GITHUB_TOKEN
+        try {
+            $env:GITHUB_TOKEN = 'test-token'
+            $auth = InModuleScope MSIX {
+                $script:capturedAuth = $null
+                Mock Invoke-RestMethod {
+                    $script:capturedAuth = $Headers['Authorization']
+                    [pscustomobject]@{ tag_name = 'v2026.07.01'; assets = @() }
+                }
+                $null = _MsixGitHubRelease -Repo 'TimMangan/MSIX-PackageSupportFramework' -Tag 'v2026.07.01'
+                $script:capturedAuth
+            }
+            $auth | Should -Be 'Bearer test-token'
+        } finally {
+            $env:GITHUB_TOKEN = $saved
+        }
+    }
 }

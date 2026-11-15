@@ -84,6 +84,11 @@ them. **v2026.07.01** is the last release signed by `CN=TMurgent Technologies LL
 - **CI provisions PSF at `$script:PsfKnownGoodVersion`** instead of the latest
   release, so the version a rejection tells you to pin is re-verified on every build.
   For users, the default is still the latest release.
+- **CI authenticates its GitHub API lookups.** The provisioning steps map the job
+  token into `GITHUB_TOKEN`, which the module already sends only to
+  `api.github.com`. Anonymous calls from shared runner IPs failed with
+  `403 (rate limit exceeded)`. The workflow now also declares
+  `permissions: contents: read`.
 
 ### Tests
 

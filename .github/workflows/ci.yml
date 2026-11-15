@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: ["**"]
 
+# Least privilege. The provisioning steps hand the job token to the module so
+# its GitHub API lookups (PSF releases) are authenticated; nothing here writes.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: PSScriptAnalyzer
@@ -96,6 +101,11 @@ jobs:
       # tells users to pin. The SDK still follows the newest stable BuildTools.
       - name: Provision toolchain (SDK + PSF)
         shell: pwsh
+        env:
+          # The module sends this to api.github.com (and nowhere else) for the
+          # PSF release lookup. Anonymous calls from shared runner IPs share a
+          # 60/hour budget and failed with "403 (rate limit exceeded)".
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module ./MSIX.psd1 -Force
@@ -288,6 +298,9 @@ jobs:
       # guards had never once run on a CI runner.
       - name: Provision toolchain (SDK + PSF)
         shell: pwsh
+        env:
+          # Authenticated GitHub API lookups; see the Pester lane.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module ./MSIX.psd1 -Force

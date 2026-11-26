@@ -204,6 +204,402 @@ function Add-MsixCapability {
 }
 #endregion
 
+#region Manifest-aware payload removal --------------------------------------
+# Every stage that strips files out of a package goes through
+# _MsixRemoveWorkspaceFile. Deleting a file the manifest still names makes
+# MakeAppx reject the package ("0x80080204 - The package manifest is not
+# valid ... doesn't exist in the package"): RemoveUpdaters took a captured
+# Chrome's updater.exe out but left the two windows.service extensions that
+# start it.
+
+# Package-format files no removal pattern may ever take out of the payload.
+$script:MsixPackageFormatFiles = @('AppxManifest.xml', 'AppxBlockMap.xml', 'AppxSignature.p7x', '[Content_Types].xml')
+
+function _MsixNormalizePackagePath {
+    <#
+    Canonical form of a package-relative path, for comparing what the manifest
+    names with what is on disk: backslashes, no leading '.\' or '\', doubled
+    separators collapsed, and the '[{Package}]\' token (desktop7:Shortcut
+    Icon) stripped. Returns $null for an empty value or a token that does not
+    point into the package ('[{Common Programs}]\App.lnk'). Case is kept;
+    compare with OrdinalIgnoreCase.
+    #>
+    [OutputType([string])]
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+    $p = $Path.Trim().Replace('/', '\')
+    if ($p -match '^\[\{Package\}\]\\*(.*)$') {
+        $p = $Matches[1]
+    } elseif ($p.StartsWith('[{')) {
+        return $null
+    }
+    while ($p.StartsWith('.\')) { $p = $p.Substring(2) }
+    $p = $p.TrimStart('\')
+    while ($p.Contains('\\')) { $p = $p.Replace('\\', '\') }
+    if (-not $p) { return $null }
+    return $p
+}
+
+function _MsixGetPackagePayloadPath {
+    <#
+    The payload files of a packed .msix as package-relative paths (backslashes,
+    OPC percent-encoding decoded). Reads only the zip central directory, so it
+    is cheap on a large package. Compare with OrdinalIgnoreCase.
+    #>
+    [OutputType([string[]])]
+    param([Parameter(Mandatory)][string]$PackagePath)
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+    $zip = [System.IO.Compression.ZipFile]::OpenRead((Get-Item -LiteralPath $PackagePath -ErrorAction Stop).FullName)
+    try {
+        foreach ($entry in $zip.Entries) {
+            if (-not $entry.Name) { continue }   # a directory entry
+            $rel = _MsixNormalizePackagePath -Path ([Uri]::UnescapeDataString($entry.FullName))
+            if ($rel) { $rel }
+        }
+    } finally {
+        $zip.Dispose()
+    }
+}
+
+function _MsixTestDirectoryEmpty {
+    # $true when the folder has no entries. Disposes the enumerator so its find
+    # handle cannot keep the folder from being deleted right after.
+    [OutputType([bool])]
+    param([Parameter(Mandatory)][string]$Path)
+    $entries = [IO.Directory]::EnumerateFileSystemEntries($Path).GetEnumerator()
+    try { return -not $entries.MoveNext() } finally { $entries.Dispose() }
+}
+
+function _MsixTestXmlNodeAttached {
+    # $true while the node still hangs off its document (an ancestor removed
+    # earlier detaches the whole subtree).
+    [OutputType([bool])]
+    param([System.Xml.XmlNode]$Node)
+    for ($n = $Node; $null -ne $n; $n = $n.ParentNode) {
+        if ($n -is [System.Xml.XmlDocument]) { return $true }
+    }
+    return $false
+}
+
+function _MsixRemoveXmlElement {
+    # Removes an element plus the indentation whitespace in front of it, so the
+    # saved manifest keeps its layout.
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Pure in-memory edit of a caller-owned XmlDocument.')]
+    param([Parameter(Mandatory)][System.Xml.XmlNode]$Node)
+    $parent = $Node.ParentNode
+    if ($null -eq $parent) { return }
+    $prev = $Node.PreviousSibling
+    if ($null -ne $prev -and ($prev.NodeType -eq [System.Xml.XmlNodeType]::Whitespace -or
+                              $prev.NodeType -eq [System.Xml.XmlNodeType]::SignificantWhitespace)) {
+        [void]$parent.RemoveChild($prev)
+    }
+    [void]$parent.RemoveChild($Node)
+}
+
+function _MsixDescribeManifestElement {
+    # One-line description of a manifest element for the log, e.g.
+    #   <desktop6:Extension Category='windows.service'> (Service 'GoogleUpdaterService')
+    # (the file it named is in the rest of the log line).
+    [OutputType([string])]
+    param([Parameter(Mandatory)][System.Xml.XmlElement]$Element)
+    $text = "<$($Element.Name)"
+    foreach ($attr in 'Category', 'Name', 'Id', 'Clsid', 'Type') {
+        $value = $Element.GetAttribute($attr)
+        if ($value) { $text += " $attr='$value'" }
+    }
+    $text += '>'
+    if ($Element.LocalName -eq 'Extension') {
+        $named = $Element.SelectSingleNode('.//*[@Name or @Alias]')
+        if ($named) {
+            $label = $named.GetAttribute('Name')
+            if (-not $label) { $label = $named.GetAttribute('Alias') }
+            $text += " ($($named.LocalName) '$label')"
+        }
+    }
+    return $text
+}
+
+function _MsixGetManifestFileReference {
+    <#
+    Lists the manifest elements that name a payload file or folder, and what may
+    happen to each when that file leaves the package:
+      Prune    the declaration goes. Unit is the element to remove: an
+               Extension with that Executable (service, alias, startup task,
+               protocol, file type association, ...), a com ExeServer,
+               SurrogateServer Class, InProcessServer or ProxyStub, a TypeLib
+               Win32Path/Win64Path, a desktop2 FirewallRules block, or a uap6
+               LoaderSearchPathEntry (Kind 'Folder').
+      Protect  the file has to stay: an Application's own Executable (an
+               Application is never removed), a visual asset or logo, a
+               shortcut icon, a font or CustomInstall action file, or a
+               reference outside any Extension.
+    #>
+    [OutputType([object[]])]
+    param([Parameter(Mandatory)][xml]$Manifest)
+
+    # Elements that are a removable unit in their own right; any other
+    # reference inside an Extension takes the whole Extension with it.
+    $ownUnits = @('Extension', 'ExeServer', 'Class', 'FirewallRules', 'InProcessServer', 'ProxyStub', 'Win32Path', 'Win64Path')
+    $refs = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($el in @($Manifest.SelectNodes('//*'))) {
+        $ext = $null
+        for ($n = $el; $n -is [System.Xml.XmlElement]; $n = $n.ParentNode) {
+            if ($n.LocalName -eq 'Extension') { $ext = $n; break }
+        }
+
+        $candidates = [System.Collections.Generic.List[object]]::new()
+        foreach ($attr in @($el.Attributes)) {
+            if ($attr.Prefix -eq 'xmlns' -or $attr.LocalName -eq 'xmlns') { continue }
+            $kind = $null
+            switch -Regex ($attr.LocalName) {
+                '^(Executable|Path)$' { $kind = 'File';   break }
+                '^FolderPath$'        { $kind = 'Folder'; break }
+                '^(Icon|Image|File)$' { $kind = 'Keep';   break }
+                'Logo$'               { $kind = 'Keep';   break }
+            }
+            if (-not $kind) { continue }
+            $value = $attr.Value
+            if ($attr.LocalName -eq 'File') {
+                # CustomInstall actions name their file relative to the
+                # CustomInstall Folder.
+                for ($n = $el.ParentNode; $n -is [System.Xml.XmlElement]; $n = $n.ParentNode) {
+                    if ($n.LocalName -eq 'CustomInstall' -and $n.GetAttribute('Folder')) {
+                        $value = $n.GetAttribute('Folder') + '\' + $value
+                        break
+                    }
+                }
+            }
+            $candidates.Add([pscustomobject]@{ Kind = $kind; Value = $value; Via = "$($el.Name) $($attr.LocalName)" })
+        }
+        # Element text: com Path children (InProcessServer, ProxyStub) and Logo.
+        if (-not $el.SelectSingleNode('*') -and $el.LocalName -in @('Path', 'Logo')) {
+            $kind = if ($el.LocalName -eq 'Path') { 'File' } else { 'Keep' }
+            $candidates.Add([pscustomobject]@{ Kind = $kind; Value = $el.InnerText; Via = $el.Name })
+        }
+
+        foreach ($c in $candidates) {
+            $path = _MsixNormalizePackagePath -Path $c.Value
+            if (-not $path) { continue }
+            $action = 'Protect'; $unit = $null; $why = $null
+            if ($c.Kind -eq 'Folder') {
+                $action = 'Prune'; $unit = $el
+            } elseif ($c.Kind -eq 'File' -and $el.LocalName -eq 'Application' -and $el.ParentNode.LocalName -eq 'Applications') {
+                $why = "it is the Executable of Application '$($el.GetAttribute('Id'))', and an Application is never removed"
+            } elseif ($c.Kind -eq 'File' -and $ext) {
+                $action = 'Prune'
+                if ($el.LocalName -eq 'Path' -and $el.ParentNode.LocalName -in @('InProcessServer', 'ProxyStub')) {
+                    $unit = $el.ParentNode
+                } elseif ($el.LocalName -in $ownUnits) {
+                    $unit = $el
+                } else {
+                    $unit = $ext
+                }
+            } else {
+                $why = "the manifest names it in <$($c.Via)>, which cannot be dropped"
+            }
+            $refs.Add([pscustomobject]@{
+                Kind   = $c.Kind
+                Path   = $path
+                Value  = $c.Value
+                Node   = $el
+                Unit   = $unit
+                Action = $action
+                Reason = $why
+            })
+        }
+    }
+    return $refs.ToArray()
+}
+
+function _MsixRemoveWorkspaceFile {
+    <#
+    .SYNOPSIS
+        Deletes payload files from an unpacked package and keeps the manifest
+        consistent with what is left.
+
+    .DESCRIPTION
+        The one helper every file-stripping stage uses (Remove-MsixUninstallerArtifact,
+        Remove-MsixUpdaterArtifact, Remove-MsixDesktopShortcut, Remove-MsixPsf and
+        the bundled-runtime strip):
+
+          1. A file the manifest cannot lose is KEPT and logged as a warning:
+             an Application's own Executable (an Application is never
+             removed), a visual asset, a shortcut icon, a font or CustomInstall
+             file. Package-format files (AppxManifest.xml, AppxBlockMap.xml,
+             AppxSignature.p7x, [Content_Types].xml, AppxMetadata\) are never
+             touched.
+          2. The other files are deleted; folders they leave empty go too.
+          3. Every declaration that named a deleted file or a now-missing
+             folder is removed and logged (see _MsixGetManifestFileReference).
+             Elements that named a removed COM class by CLSID - context-menu
+             verbs, preview/property/thumbnail handlers, ProgIds, toast
+             activators - are removed with it, and containers left empty
+             (ComServer, the Extension, an empty Extensions) are removed so
+             the manifest stays schema-valid. The manifest is saved only when
+             something changed.
+
+    .PARAMETER Workspace
+        The unpacked package folder.
+
+    .PARAMETER RelativePath
+        Package-relative paths of the files to remove.
+
+    .OUTPUTS
+        [pscustomobject] Removed (string[]), Kept (string[]) and
+        ManifestChanges (string[], one line per removed declaration).
+    #>
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)] [string]$Workspace,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [string[]]$RelativePath
+    )
+
+    $root = [IO.Path]::GetFullPath($Workspace).TrimEnd('\')
+    $removed = [System.Collections.Generic.List[string]]::new()
+    $kept    = [System.Collections.Generic.List[string]]::new()
+    $changes = [System.Collections.Generic.List[string]]::new()
+
+    $manifestPath = Join-Path -Path $root -ChildPath 'AppxManifest.xml'
+    $manifest = $null
+    $refs = @()
+    if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+        [xml]$manifest = Get-MsixManifest -Path $manifestPath
+        $refs = @(_MsixGetManifestFileReference -Manifest $manifest)
+    }
+
+    $protected = @{}
+    foreach ($ref in $refs) {
+        if ($ref.Action -eq 'Protect' -and -not $protected.ContainsKey($ref.Path.ToLowerInvariant())) {
+            $protected[$ref.Path.ToLowerInvariant()] = $ref.Reason
+        }
+    }
+    # Folder references are pruned only when THIS removal emptied the folder.
+    $foldersBefore = @{}
+    foreach ($ref in @($refs | Where-Object Kind -eq 'Folder')) {
+        $foldersBefore[$ref.Path.ToLowerInvariant()] = [IO.Directory]::Exists([IO.Path]::Combine($root, $ref.Path))
+    }
+
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($item in @($RelativePath)) {
+        $rel = _MsixNormalizePackagePath -Path $item
+        if (-not $rel -or -not $seen.Add($rel)) { continue }
+        if (($rel -notmatch '\\' -and $script:MsixPackageFormatFiles -contains $rel) -or $rel -match '^AppxMetadata\\') {
+            Write-MsixLog -Level Warning -Message "Kept '$rel': it is a package-format file, never payload."
+            continue
+        }
+        # SECURITY: never delete outside the workspace, whatever the caller passed.
+        $full = [IO.Path]::GetFullPath([IO.Path]::Combine($root, $rel))
+        if (-not $full.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            Write-MsixLog -Level Warning -Message "Not removing '$item': it resolves outside the package workspace."
+            continue
+        }
+        if (-not [IO.File]::Exists($full)) { continue }
+        $reason = $protected[$rel.ToLowerInvariant()]
+        if ($reason) {
+            Write-MsixLog -Level Warning -Message "Kept '$rel' in the package: $reason."
+            $kept.Add($item)
+            continue
+        }
+        $file = [IO.FileInfo]::new($full)
+        if ($file.Attributes -band [IO.FileAttributes]::ReadOnly) {
+            $file.Attributes = $file.Attributes -band (-bnot [IO.FileAttributes]::ReadOnly)
+        }
+        $file.Delete()
+        $removed.Add($item)
+        # Drop the folders the delete left empty (MakeAppx packs no empty
+        # folders anyway); this also makes the folder-reference check exact.
+        $dir = [IO.Path]::GetDirectoryName($full)
+        while ($dir -and $dir.Length -gt $root.Length -and
+               $dir.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase) -and
+               (_MsixTestDirectoryEmpty -Path $dir)) {
+            [IO.Directory]::Delete($dir, $false)
+            $dir = [IO.Path]::GetDirectoryName($dir)
+        }
+    }
+
+    if ($manifest -and $removed.Count -gt 0) {
+        $gone = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        foreach ($item in $removed) { [void]$gone.Add((_MsixNormalizePackagePath -Path $item)) }
+        $removedClsids = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        $touched = [System.Collections.Generic.List[object]]::new()
+
+        # ── Declarations that named a removed file / emptied folder ────────
+        foreach ($ref in $refs) {
+            if ($ref.Action -ne 'Prune') { continue }
+            if ($ref.Kind -eq 'Folder') {
+                $key = $ref.Path.ToLowerInvariant()
+                $hit = $foldersBefore[$key] -and -not [IO.Directory]::Exists([IO.Path]::Combine($root, $ref.Path))
+            } else {
+                $hit = $gone.Contains($ref.Path)
+            }
+            if (-not $hit -or -not (_MsixTestXmlNodeAttached -Node $ref.Unit)) { continue }
+            foreach ($class in @($ref.Unit.SelectNodes("descendant-or-self::*[local-name()='Class']"))) {
+                $id = $class.GetAttribute('Id').Trim().Trim('{', '}')
+                if ($id) { [void]$removedClsids.Add($id) }
+            }
+            $changes.Add("Removed $(_MsixDescribeManifestElement -Element $ref.Unit) from the manifest: it named '$($ref.Value)', which is no longer in the package.")
+            $touched.Add($ref.Unit.ParentNode)
+            _MsixRemoveXmlElement -Node $ref.Unit
+        }
+
+        # ── Elements that named a removed COM class by CLSID ───────────────
+        $ownClsidUnits = @('Verb', 'ExtensionHandler', 'DesktopPreviewHandler', 'DesktopPropertyHandler', 'ThumbnailHandler', 'ProgId')
+        foreach ($clsid in @($removedClsids)) {
+            $stillDeclared = @($manifest.SelectNodes("//*[local-name()='Class' and @Id]") | Where-Object {
+                $_.GetAttribute('Id').Trim().Trim('{', '}') -eq $clsid
+            })
+            if ($stillDeclared) { continue }
+            foreach ($el in @($manifest.SelectNodes('//*[@Clsid or @ToastActivatorCLSID]'))) {
+                if (-not (_MsixTestXmlNodeAttached -Node $el)) { continue }
+                $value = $el.GetAttribute('Clsid')
+                if (-not $value) { $value = $el.GetAttribute('ToastActivatorCLSID') }
+                if ($value.Trim().Trim('{', '}') -ne $clsid) { continue }
+                $unit = $null
+                if ($el.LocalName -in $ownClsidUnits) {
+                    $unit = $el
+                } else {
+                    for ($n = $el; $n -is [System.Xml.XmlElement]; $n = $n.ParentNode) {
+                        if ($n.LocalName -eq 'Extension') { $unit = $n; break }
+                    }
+                }
+                if (-not $unit) { continue }
+                $changes.Add("Removed $(_MsixDescribeManifestElement -Element $unit) from the manifest: it named COM class $clsid, whose server was removed.")
+                $touched.Add($unit.ParentNode)
+                _MsixRemoveXmlElement -Node $unit
+            }
+        }
+
+        # ── Containers the removals left empty ─────────────────────────────
+        $containers = @('Extensions', 'Extension', 'ComServer', 'ComInterface', 'SurrogateServer', 'ExeServer',
+                        'TypeLib', 'Version', 'FileExplorerContextMenus', 'FileExplorerClassicContextMenuHandler',
+                        'ItemType', 'LoaderSearchPathOverride')
+        foreach ($node in $touched) {
+            $current = $node
+            while ($current -is [System.Xml.XmlElement] -and $current.LocalName -in $containers -and
+                   -not $current.SelectSingleNode('*') -and (_MsixTestXmlNodeAttached -Node $current)) {
+                $up = $current.ParentNode
+                Write-MsixLog -Level Debug -Message "Removed the now-empty <$($current.Name)>."
+                _MsixRemoveXmlElement -Node $current
+                $current = $up
+            }
+        }
+
+        if ($changes.Count -gt 0) {
+            foreach ($line in $changes) { Write-MsixLog -Level Info -Message $line }
+            Save-MsixManifest -Manifest $manifest -Path $manifestPath
+        }
+    }
+
+    return [pscustomobject]@{
+        Removed         = [string[]]$removed.ToArray()
+        Kept            = [string[]]$kept.ToArray()
+        ManifestChanges = [string[]]$changes.ToArray()
+    }
+}
+#endregion
+
 # ---------------------------------------------------------------------------
 # Uninstaller / updater / shell-registry mutators
 # ---------------------------------------------------------------------------
@@ -219,7 +615,12 @@ function Remove-MsixUninstallerArtifact {
         Mutator counterpart to Get-MsixUninstallerCandidate /
         Get-MsixUninstallRegistryEntry. Two-step cleanup:
 
-          1. Remove files inside the package matching -PathPatterns.
+          1. Remove files inside the package matching -PathPatterns. A file
+             that is an Application's own Executable is kept (and logged): an
+             Application is never removed. Manifest declarations that named a
+             removed file (a service, alias, startup task or firewall rule
+             Extension, a COM server, ...) are removed with it, so MakeAppx
+             never sees a manifest pointing at a missing file.
           2. Load Registry.dat (when elevated and -KeepRegistry not set) and
              delete Uninstall\<key> subkeys whose DisplayName matches
              -UninstallKeyFilter.
@@ -274,7 +675,9 @@ function Remove-MsixUninstallerArtifact {
 
     .OUTPUTS
         [pscustomobject] with FilesRemoved (string[]), KeysRemoved (string[]),
-        and Output (final package path). Returns nothing when nothing matched.
+        and Output (final package path); FilesKept (string[]) and
+        ManifestElementsRemoved (string[]) when there were any. Returns nothing
+        when nothing matched.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UninstallKeyFilter',
         Justification = 'Captured by the -Mutator scriptblock via GetNewClosure() (issue #37).')]
@@ -308,16 +711,18 @@ function Remove-MsixUninstallerArtifact {
             param($workspace)
 
             # ── Strip files ────────────────────────────────────────────────
-            $removedFiles = @()
-            Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
+            # Through the shared helper: an Application's own Executable is
+            # kept (logged), and every manifest declaration that named a
+            # removed file is removed with it - otherwise MakeAppx rejects
+            # the manifest ("... doesn't exist in the package").
+            $matched = @(Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
                 Where-Object {
                     $name = $_.Name
                     ($PathPatterns | Where-Object { $name -match $_ }).Count -gt 0
                 } |
-                ForEach-Object {
-                    Remove-Item -LiteralPath $_.FullName -Force
-                    $removedFiles += $_.FullName.Substring($workspace.Length + 1)
-                }
+                ForEach-Object { $_.FullName.Substring($workspace.Length + 1) })
+            $strip = _MsixRemoveWorkspaceFile -Workspace $workspace -RelativePath $matched
+            $removedFiles = @($strip.Removed)
 
             # ── Strip Registry.dat Uninstall\* entries ────────────────────
             $removedKeys = @()
@@ -383,7 +788,10 @@ function Remove-MsixUninstallerArtifact {
             if (-not $removedFiles -and -not $removedKeys) { return $null }
             if ($removedFiles) { Write-MsixLog -Level Info -Message "Files removed:    $($removedFiles -join ', ')" }
             if ($removedKeys)  { Write-MsixLog -Level Info -Message "Reg keys removed: $($removedKeys -join ', ')" }
-            @{ FilesRemoved = $removedFiles; KeysRemoved = $removedKeys }
+            $summary = @{ FilesRemoved = $removedFiles; KeysRemoved = $removedKeys }
+            if ($strip.Kept.Count)            { $summary['FilesKept']        = @($strip.Kept) }
+            if ($strip.ManifestChanges.Count) { $summary['ManifestElementsRemoved'] = @($strip.ManifestChanges) }
+            $summary
         }.GetNewClosure()
 }
 
@@ -401,6 +809,13 @@ function Remove-MsixUpdaterArtifact {
           2. Remove *.xml files under any Tasks\ or VFS\Windows\Tasks\
              subdirectory (scheduled-task artefacts that ship with installers
              but cannot fire from inside the MSIX container).
+
+        Manifest declarations that named a removed file go with it (for
+        example the windows.service extensions that start the updater, or
+        an AppExecutionAlias / startup task / firewall rule on it), so MakeAppx
+        never sees a manifest pointing at a missing file. A file that is an
+        Application's own Executable is kept and logged instead: an
+        Application is never removed.
 
         Repacks via a scratch path and re-signs at the end. Idempotent — a
         second run on a clean package logs "No updater artefacts found."
@@ -447,7 +862,9 @@ function Remove-MsixUpdaterArtifact {
 
     .OUTPUTS
         [pscustomobject] with FilesRemoved (string[]), TasksRemoved (string[]),
-        and Output (final package path). Returns nothing when nothing matched.
+        and Output (final package path); FilesKept (string[]) and
+        ManifestElementsRemoved (string[]) when there were any. Returns
+        nothing when nothing matched.
 
     .NOTES
         Pair with Get-MsixRunKeyEntry to surface Run-key autostart leftovers
@@ -488,9 +905,8 @@ function Remove-MsixUpdaterArtifact {
         -Mutator {
             param($workspace)
 
-            # ── Strip updater binaries ─────────────────────────────────────
-            $removedFiles = @()
-            Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
+            # ── Updater binaries ───────────────────────────────────────────
+            $binaries = @(Get-ChildItem -LiteralPath $workspace -Recurse -File -ErrorAction SilentlyContinue |
                 Where-Object {
                     $name = $_.Name
                     $skip = $false
@@ -500,27 +916,34 @@ function Remove-MsixUpdaterArtifact {
                     if ($skip) { return $false }
                     ($PathPatterns | Where-Object { $name -match $_ }).Count -gt 0
                 } |
-                ForEach-Object {
-                    Remove-Item -LiteralPath $_.FullName -Force
-                    $removedFiles += $_.FullName.Substring($workspace.Length + 1)
-                }
+                ForEach-Object { $_.FullName.Substring($workspace.Length + 1) })
 
-            # ── Strip scheduled-task XMLs ──────────────────────────────────
-            $removedTasks = @()
-            Get-ChildItem -LiteralPath $workspace -Recurse -File -Filter '*.xml' -ErrorAction SilentlyContinue |
+            # ── Scheduled-task XMLs ────────────────────────────────────────
+            $tasks = @(Get-ChildItem -LiteralPath $workspace -Recurse -File -Filter '*.xml' -ErrorAction SilentlyContinue |
                 Where-Object {
                     $rel = $_.FullName.Substring($workspace.Length + 1).ToLowerInvariant()
                     ($rel -match '(^|\\)tasks\\') -or ($rel -match '\\vfs\\windows\\tasks\\')
                 } |
-                ForEach-Object {
-                    Remove-Item -LiteralPath $_.FullName -Force
-                    $removedTasks += $_.FullName.Substring($workspace.Length + 1)
-                }
+                ForEach-Object { $_.FullName.Substring($workspace.Length + 1) })
+
+            # One pass through the shared helper: an Application's own
+            # Executable is kept (logged), and the manifest declarations that
+            # named a removed file go with it. A captured Chrome declared two
+            # windows.service extensions on GoogleUpdater\...\updater.exe;
+            # deleting only the file made MakeAppx reject the manifest.
+            $strip = _MsixRemoveWorkspaceFile -Workspace $workspace -RelativePath (@($binaries) + @($tasks))
+            $gone = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+            foreach ($rel in $strip.Removed) { [void]$gone.Add($rel) }
+            $removedFiles = @($binaries | Where-Object { $gone.Contains($_) })
+            $removedTasks = @($tasks    | Where-Object { $gone.Contains($_) })
 
             if (-not $removedFiles -and -not $removedTasks) { return $null }
             if ($removedFiles) { Write-MsixLog -Level Info -Message "Files removed: $($removedFiles -join ', ')" }
             if ($removedTasks) { Write-MsixLog -Level Info -Message "Tasks removed: $($removedTasks -join ', ')" }
-            @{ FilesRemoved = $removedFiles; TasksRemoved = $removedTasks }
+            $summary = @{ FilesRemoved = $removedFiles; TasksRemoved = $removedTasks }
+            if ($strip.Kept.Count)            { $summary['FilesKept']        = @($strip.Kept) }
+            if ($strip.ManifestChanges.Count) { $summary['ManifestElementsRemoved'] = @($strip.ManifestChanges) }
+            $summary
         }.GetNewClosure()
 }
 
@@ -981,6 +1404,7 @@ function Add-MsixPackageCertificate {
     .PARAMETER CertificatePath
         Path to a DER/Base64 .cer file on disk (copied into the package), OR a
         package-relative path of a certificate already inside the payload.
+        Several paths are declared in one unpack/repack, all into -StoreName.
 
     .PARAMETER StoreName
         Certificate store: Root, CA, TrustedPeople or TrustedPublisher.
@@ -1004,6 +1428,11 @@ function Add-MsixPackageCertificate {
         Add-MsixPackageCertificate -PackagePath app.msix `
             -CertificatePath .\internal-ca.cer -StoreName CA -SkipSigning
 
+    .EXAMPLE
+        # Two bundled certificates, one unpack/repack
+        Add-MsixPackageCertificate -PackagePath app.msix -StoreName TrustedPeople `
+            -CertificatePath 'Certs\root.cer', 'Certs\issuing.cer' -SkipSigning
+
     .LINK
         https://learn.microsoft.com/windows/apps/desktop/modernize/desktop-to-uwp-extensions
     #>
@@ -1014,7 +1443,7 @@ function Add-MsixPackageCertificate {
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory)] [string]$PackagePath,
-        [Parameter(Mandatory)] [string]$CertificatePath,
+        [Parameter(Mandatory)] [string[]]$CertificatePath,
         [Parameter(Mandatory)]
         [ValidateSet('Root', 'CA', 'TrustedPeople', 'TrustedPublisher')]
         [string]$StoreName,
@@ -1033,21 +1462,6 @@ function Add-MsixPackageCertificate {
         -Mutator {
             param($workspace)
 
-            # Resolve: on-disk file (copy in) vs already-package-relative.
-            $isExternal = Test-Path -LiteralPath $CertificatePath -PathType Leaf
-            if ($isExternal) {
-                $leaf = [IO.Path]::GetFileName($CertificatePath)
-                $certDir = Join-Path -Path $workspace -ChildPath 'Certificates'
-                if (-not (Test-Path -LiteralPath $certDir)) { New-Item -ItemType Directory -Path $certDir -Force | Out-Null }
-                Copy-Item -LiteralPath $CertificatePath -Destination (Join-Path -Path $certDir -ChildPath $leaf) -Force
-                $content = "Certificates\$leaf"
-            } else {
-                $content = $CertificatePath.Replace('/', '\')
-                if (-not (Test-Path -LiteralPath (Join-Path -Path $workspace -ChildPath $content))) {
-                    throw "Certificate not found: '$CertificatePath' is neither an on-disk file nor a package-relative path inside the payload."
-                }
-            }
-
             $manifestPath = Join-Path -Path $workspace -ChildPath 'AppxManifest.xml'
             [xml]$manifest = Get-MsixManifest -Path $manifestPath
             # windows.certificates is a PACKAGE-level extension in the plain
@@ -1055,30 +1469,55 @@ function Add-MsixPackageCertificate {
             # validation ("uap Extension is unexpected ... parent Extensions").
             $foundationUri = $manifest.Package.NamespaceURI
 
-            $pkgExt = _MsixGetOrCreatePackageExtensions -Manifest $manifest
-            $certs = $manifest.SelectSingleNode("//*[local-name()='Extension' and @Category='windows.certificates']/*[local-name()='Certificates']")
-            if (-not $certs) {
-                $ext = $manifest.CreateElement('Extension', $foundationUri)
-                $ext.SetAttribute('Category', 'windows.certificates')
-                $certs = $manifest.CreateElement('Certificates', $foundationUri)
-                $null = $ext.AppendChild($certs)
-                $null = $pkgExt.AppendChild($ext)
-            }
+            # Every certificate goes into ONE manifest edit (one repack for the
+            # lot); each one is resolved exactly as a single-path call did.
+            $declared = @()
+            foreach ($certPath in $CertificatePath) {
+                # Resolve: on-disk file (copied in below, unless it is already
+                # declared) vs already-package-relative.
+                $isExternal = Test-Path -LiteralPath $certPath -PathType Leaf
+                if ($isExternal) {
+                    $leaf = [IO.Path]::GetFileName($certPath)
+                    $content = "Certificates\$leaf"
+                } else {
+                    $content = $certPath.Replace('/', '\')
+                    if (-not (Test-Path -LiteralPath (Join-Path -Path $workspace -ChildPath $content))) {
+                        throw "Certificate not found: '$certPath' is neither an on-disk file nor a package-relative path inside the payload."
+                    }
+                }
 
-            $dup = @($certs.ChildNodes) | Where-Object {
-                $_.LocalName -eq 'Certificate' -and
-                $_.GetAttribute('Content') -eq $content -and
-                $_.GetAttribute('StoreName') -eq $StoreName
-            }
-            if ($dup) { return $null }
+                $pkgExt = _MsixGetOrCreatePackageExtensions -Manifest $manifest
+                $certs = $manifest.SelectSingleNode("//*[local-name()='Extension' and @Category='windows.certificates']/*[local-name()='Certificates']")
+                if (-not $certs) {
+                    $ext = $manifest.CreateElement('Extension', $foundationUri)
+                    $ext.SetAttribute('Category', 'windows.certificates')
+                    $certs = $manifest.CreateElement('Certificates', $foundationUri)
+                    $null = $ext.AppendChild($certs)
+                    $null = $pkgExt.AppendChild($ext)
+                }
 
-            $cert = $manifest.CreateElement('Certificate', $foundationUri)
-            $cert.SetAttribute('StoreName', $StoreName)
-            $cert.SetAttribute('Content',   $content)
-            $null = $certs.AppendChild($cert)
+                $dup = @($certs.ChildNodes) | Where-Object {
+                    $_.LocalName -eq 'Certificate' -and
+                    $_.GetAttribute('Content') -eq $content -and
+                    $_.GetAttribute('StoreName') -eq $StoreName
+                }
+                if ($dup) { continue }
+
+                if ($isExternal) {
+                    $certDir = Join-Path -Path $workspace -ChildPath 'Certificates'
+                    if (-not (Test-Path -LiteralPath $certDir)) { New-Item -ItemType Directory -Path $certDir -Force | Out-Null }
+                    Copy-Item -LiteralPath $certPath -Destination (Join-Path -Path $certDir -ChildPath $leaf) -Force
+                }
+                $cert = $manifest.CreateElement('Certificate', $foundationUri)
+                $cert.SetAttribute('StoreName', $StoreName)
+                $cert.SetAttribute('Content',   $content)
+                $null = $certs.AppendChild($cert)
+                Write-MsixLog -Level Info -Message "Package certificate declared: $content -> $StoreName store."
+                $declared += $content
+            }
+            if (-not $declared) { return $null }
             Save-MsixManifest -Manifest $manifest -Path $manifestPath
-            Write-MsixLog -Level Info -Message "Package certificate declared: $content -> $StoreName store."
-            @{ Certificate = $content; StoreName = $StoreName }
+            @{ Certificate = $declared; StoreName = $StoreName }
         }
 }
 

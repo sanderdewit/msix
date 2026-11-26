@@ -627,6 +627,11 @@ Add-MsixShellHandlerExtension -PackagePath app.msix -Kind Preview `
     -Clsid '{D7E6F1A2-3B4C-4D5E-9F00-112233445566}' `
     -Dll 'VFS\ProgramFilesX64\App\PreviewHandler.dll' -FileTypes '.contoso' -SkipSigning
 
+# Every handler the scanner found, in ONE unpack/repack (each call repacks the
+# whole package, so one call per file type is slow on a big package)
+$handlers = @(Get-MsixShellHandlerEntry -PackagePath app.msix | Where-Object CanAutoFix)
+Add-MsixShellHandlerExtension -PackagePath app.msix -Handlers $handlers -SkipSigning
+
 # Toast clicks re-activate the app
 Add-MsixToastActivator -PackagePath app.msix `
     -Clsid '{ff1a2b3c-4d5e-6f70-8899-aabbccddeeff}' `

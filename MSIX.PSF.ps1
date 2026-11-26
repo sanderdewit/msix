@@ -884,6 +884,153 @@ function Add-MsixPsfV2 {
 
 #endregion
 
+#region PSF config lookup -----------------------------------------------------
+
+function _MsixGetPsfTargetExecutable {
+    <#
+    The program a PSF launcher starts for one Application, from the package's
+    PSF config.json (applications[].id -> .executable), as a package-relative
+    path with backslashes, or $null when no config maps the Application.
+    Looks at the config.json next to the launcher first (where Add-MsixPsfV2
+    writes it), then the one at the package root, then any other config.json
+    that has an 'applications' list. A config that does not parse is skipped.
+    #>
+    [OutputType([string])]
+    param(
+        [string]$Workspace,
+        [string]$LauncherPath,
+        [string]$AppId
+    )
+    if (-not $Workspace -or -not $AppId -or -not (Test-Path -LiteralPath $Workspace -PathType Container)) { return $null }
+
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    $launcher = _MsixNormalizePackagePath -Path $LauncherPath
+    if ($launcher) {
+        $launcherDir = [IO.Path]::GetDirectoryName($launcher)
+        if ($launcherDir) { $candidates.Add([IO.Path]::Combine($Workspace, $launcherDir, 'config.json')) }
+    }
+    $candidates.Add([IO.Path]::Combine($Workspace, 'config.json'))
+    foreach ($file in @(Get-ChildItem -LiteralPath $Workspace -Recurse -File -Filter 'config.json' -ErrorAction SilentlyContinue)) {
+        $candidates.Add($file.FullName)
+    }
+
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in $candidates) {
+        if (-not $seen.Add($path) -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        try {
+            $cfg = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            continue
+        }
+        if (-not $cfg -or -not $cfg.PSObject.Properties['applications']) { continue }
+        $entry = @($cfg.applications) | Where-Object { $_ -and [string]$_.id -eq $AppId } | Select-Object -First 1
+        if ($entry -and $entry.executable) { return ([string]$entry.executable).Replace('/', '\') }
+    }
+    return $null
+}
+
+#endregion
+
+#region Chromium-based targets (no PSF) ---------------------------------------
+# PSF's runtime does not work inside Chromium-based apps (Chrome, Edge, Opera,
+# Brave, Electron, CEF): their sandboxed child processes (renderer, GPU,
+# utility) refuse the injected third-party DLLs. Launch-tested on a captured
+# Chrome: with PSF the window took 50.5 s and 74 s CPU and one chrome.exe
+# exited 0x1; without PSF it took 9.3 s and 26 s CPU and every process exited
+# 0x0. The auto-fix stages therefore leave PSF out for such a target.
+
+# A strong marker alone identifies a Chromium-based executable; a V8 snapshot
+# counts only next to Chromium's ICU data file (icudtl.dat).
+$script:MsixChromiumStrongMarkers   = @('chrome_elf.dll', 'msedge_elf.dll', 'libcef.dll', 'resources\app.asar')
+$script:MsixChromiumSnapshotMarkers = @('v8_context_snapshot.bin', 'snapshot_blob.bin')
+
+function _MsixFindChromiumMarker {
+    <#
+    The marker file (package-relative) that shows a package executable is
+    Chromium-based, or $null. Looks in the executable's own folder and in its
+    version-named subfolders: Chrome and Edge keep everything but chrome.exe /
+    msedge.exe in Application\<version>\, Squirrel-installed Electron apps
+    (Figma, Slack, ...) in app-<version>\ next to a stub launcher.
+    -Payload is a case-insensitive set of the package's relative file paths.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [System.Collections.Generic.HashSet[string]]$Payload,
+        [string]$Executable
+    )
+    $exe = _MsixNormalizePackagePath -Path $Executable
+    if (-not $exe) { return $null }
+    $dir = [IO.Path]::GetDirectoryName($exe)
+    $prefix = ''
+    if ($dir) { $prefix = "$dir\" }
+
+    $folders = [System.Collections.Generic.List[string]]::new()
+    $folders.Add($prefix)
+    $versionRx = '^' + [regex]::Escape($prefix) + '((?:app-)?\d+(?:\.\d+){1,3})\\[^\\]+'
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in $Payload) {
+        if ($path -match $versionRx -and $seen.Add($Matches[1])) { $folders.Add($prefix + $Matches[1] + '\') }
+    }
+    foreach ($folder in $folders) {
+        foreach ($marker in $script:MsixChromiumStrongMarkers) {
+            if ($Payload.Contains($folder + $marker)) { return $folder + $marker }
+        }
+        if ($Payload.Contains($folder + 'icudtl.dat')) {
+            foreach ($marker in $script:MsixChromiumSnapshotMarkers) {
+                if ($Payload.Contains($folder + $marker)) { return $folder + $marker }
+            }
+        }
+    }
+    return $null
+}
+
+function _MsixGetChromiumPsfTarget {
+    <#
+    When PSF would wrap a Chromium-based executable, returns AppId, Executable
+    and Marker for the log; otherwise $null. PSF (Add-MsixPsfV2) wraps the
+    first Application, so that is the one checked. A package that already
+    carries PSF (a PsfLauncher entry point or the PSF runtime in its payload)
+    is left alone: $null. Reads only the zip directory and the manifest, and
+    returns $null for a package path that does not exist.
+    #>
+    [OutputType([pscustomobject])]
+    param([string]$PackagePath)
+    if (-not $PackagePath -or -not (Test-Path -LiteralPath $PackagePath -PathType Leaf)) { return $null }
+    try {
+        $payload = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        foreach ($file in @(_MsixGetPackagePayloadPath -PackagePath $PackagePath)) { [void]$payload.Add($file) }
+        [xml]$manifest = Get-MsixManifest -Path $PackagePath
+    } catch {
+        Write-MsixLog -Level Debug -Message "Chromium check skipped for '$PackagePath': $($_.Exception.Message)"
+        return $null
+    }
+    $apps = @(Get-MsixManifestApplication -Manifest $manifest -All | Where-Object { $null -ne $_ })
+    if ($apps.Count -eq 0) { return $null }
+    foreach ($app in $apps) {
+        if ($app.GetAttribute('Executable') -match 'PsfLauncher\d*(?:_\d+)?\.exe$') { return $null }
+    }
+    foreach ($path in $payload) {
+        if ([IO.Path]::GetFileName($path) -match '^(?:PsfRuntime\d*\.dll|PsfLauncher\d*(?:_\d+)?\.exe)$') { return $null }
+    }
+    $target = $apps[0]
+    $marker = _MsixFindChromiumMarker -Payload $payload -Executable $target.GetAttribute('Executable')
+    if (-not $marker) { return $null }
+    return [pscustomobject]@{
+        AppId      = $target.GetAttribute('Id')
+        Executable = $target.GetAttribute('Executable')
+        Marker     = $marker
+    }
+}
+
+function _MsixFormatChromiumPsfSkip {
+    # The warning a stage logs when it leaves PSF out for a Chromium-based target.
+    [OutputType([string])]
+    param([Parameter(Mandatory)][string]$Stage, [Parameter(Mandatory)]$Target)
+    return "${Stage}: not injecting PSF: Application '$($Target.AppId)' runs a Chromium-based executable ($($Target.Executable); found $($Target.Marker)). Chromium's sandboxed child processes (renderer, GPU, utility) don't take the injected PSF runtime, which slows or breaks the start."
+}
+
+#endregion
+
 #region Remove PSF -----------------------------------------------------------
 
 function Remove-MsixPsf {
@@ -1003,6 +1150,17 @@ function Remove-MsixPsf {
                 $manifestDirty = $true
                 Write-MsixLog -Level Info -Message "Application '$appId': Executable restored to '$target' (was '$exe')."
 
+                # An extension of this app that names the same launcher (an
+                # alias or protocol some tools point at PsfLauncher) follows the
+                # app back to its real executable instead of dangling once the
+                # launcher is deleted below.
+                $launcherKey = _MsixNormalizePackagePath -Path $exe
+                foreach ($node in @($app.SelectNodes(".//*[local-name()='Extension' and @Executable]"))) {
+                    if ((_MsixNormalizePackagePath -Path $node.GetAttribute('Executable')) -ne $launcherKey) { continue }
+                    $node.SetAttribute('Executable', $target)
+                    Write-MsixLog -Level Info -Message "Application '$appId': $($node.Name) Category='$($node.GetAttribute('Category'))' re-pointed from the PSF launcher to '$target'."
+                }
+
                 # Surface what the PSF config did for this app — all of it is lost.
                 if ($cfgApp.PSObject.Properties['arguments'] -and $cfgApp.arguments) {
                     Write-MsixLog -Level Warning -Message "Application '$appId' had PSF launch arguments ('$($cfgApp.arguments)') — lost with PSF. Bake them into a wrapper or shortcut if still needed."
@@ -1042,11 +1200,14 @@ function Remove-MsixPsf {
             # leaves the operator's file byte-identical.
             if (-not $sawPsfLauncherRef -and $psfBinaries.Count -eq 0) { return $null }
 
-            $removedFiles = 0
+            # Collected here, deleted below in ONE pass through the shared
+            # removal helper: a launcher an Application still names (its
+            # config.json had no mapping) is kept and logged instead of left
+            # dangling, and any other declaration naming a deleted PSF file is
+            # removed with it, so the repack cannot fail on the manifest.
+            $toRemove = [System.Collections.Generic.List[object]]::new()
             foreach ($file in $psfBinaries) {
-                [IO.File]::Delete($file.FullName)
-                $removedFiles++
-                Write-MsixLog -Level Info -Message "Removed PSF file: $($file.FullName.Substring($workspace.Length + 1))"
+                $toRemove.Add([pscustomobject]@{ Rel = $file.FullName.Substring($workspace.Length + 1); Label = 'Removed PSF file' })
             }
 
             # Fixup DLLs: remove only fixups PSF actually ships or the config
@@ -1071,19 +1232,27 @@ function Remove-MsixPsf {
             }
             foreach ($file in @(Get-ChildItem -LiteralPath $workspace -Recurse -File -Filter '*.dll' -ErrorAction SilentlyContinue)) {
                 if (-not $fixupNames.Contains($file.Name)) { continue }
-                [IO.File]::Delete($file.FullName)
-                $removedFiles++
-                Write-MsixLog -Level Info -Message "Removed PSF fixup: $($file.FullName.Substring($workspace.Length + 1))"
+                $rel = $file.FullName.Substring($workspace.Length + 1)
+                if (@($toRemove | Where-Object { $_.Rel -eq $rel }).Count) { continue }
+                $toRemove.Add([pscustomobject]@{ Rel = $rel; Label = 'Removed PSF fixup' })
             }
 
             # config.json: only the PSF config itself, never an app's own file of
             # that name. $cfgItem is the one we parsed as a PSF config above.
             if ($cfgItem -and $cfg -and ($cfg.PSObject.Properties['applications'] -or $cfg.PSObject.Properties['processes'])) {
                 if (Test-Path -LiteralPath $cfgItem.FullName) {
-                    [IO.File]::Delete($cfgItem.FullName)
-                    $removedFiles++
-                    Write-MsixLog -Level Info -Message "Removed PSF file: $($cfgItem.FullName.Substring($workspace.Length + 1))"
+                    $toRemove.Add([pscustomobject]@{ Rel = $cfgItem.FullName.Substring($workspace.Length + 1); Label = 'Removed PSF file' })
                 }
+            }
+
+            $strip = _MsixRemoveWorkspaceFile -Workspace $workspace -RelativePath @($toRemove | ForEach-Object { $_.Rel })
+            $gone = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+            foreach ($rel in $strip.Removed) { [void]$gone.Add($rel) }
+            $removedFiles = 0
+            foreach ($item in $toRemove) {
+                if (-not $gone.Contains($item.Rel)) { continue }
+                $removedFiles++
+                Write-MsixLog -Level Info -Message "$($item.Label): $($item.Rel)"
             }
 
             if ($restored -eq 0 -and $removedFiles -eq 0) { return $null }

@@ -35,10 +35,23 @@ Describe '_MsixRegPathToVfsRelative rejects traversal (#60)' -Tag 'Security' {
     }
 
     It 'maps a normal folder-variable path to its VFS-relative form' {
+        $dll = Join-Path -Path $TestDrive -ChildPath 'VFS\ProgramFilesX64\App\foo.dll'
+        New-Item -ItemType Directory -Path (Split-Path -Path $dll -Parent) -Force | Out-Null
+        [IO.File]::WriteAllBytes($dll, [byte[]](0x4D, 0x5A))
         $r = InModuleScope MSIX -Parameters @{ Ws = $TestDrive } {
             param($Ws)
             _MsixRegPathToVfsRelative -RegPath '[{ProgramFilesX64}]\App\foo.dll' -WorkspacePath $Ws
         }
         $r | Should -Be 'VFS\ProgramFilesX64\App\foo.dll'
+    }
+
+    It 'returns $null for a folder-variable path whose file is not in the package' {
+        # It used to return the mapped path anyway, so callers declared files
+        # that did not exist (K-Lite's handlers on VFS\ProgramFiles(x86)\...).
+        $r = InModuleScope MSIX -Parameters @{ Ws = $TestDrive } {
+            param($Ws)
+            _MsixRegPathToVfsRelative -RegPath '[{ProgramFilesX64}]\App\not-there.dll' -WorkspacePath $Ws
+        }
+        $r | Should -BeNullOrEmpty
     }
 }

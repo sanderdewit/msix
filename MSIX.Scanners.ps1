@@ -415,31 +415,141 @@ function Get-MsixRunKeyEntry {
 #endregion
 #region Shell context-menu entries -------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Registry path -> package VFS path
+# ---------------------------------------------------------------------------
+# The canonical MSIX VFS folder names: the FOLDERID -> VFS mapping the MSIX
+# runtime, the MSIX Packaging Tool and the converter's VfsPathMapper use. A
+# Registry.dat folder token names its VFS folder directly:
+# [{ProgramFilesX86}]\App\x.dll lives at VFS\ProgramFilesX86\App\x.dll. The
+# module used to map four of them to folders MSIX does not have
+# (VFS\ProgramFiles(x86), VFS\System, VFS\ProgramData, VFS\AppData\Roaming,
+# VFS\AppData\Local) and returned such a path even when nothing was there, so
+# every declaration built from it named a DLL or executable that was not in
+# the package: K-Lite Codec Pack's thumbnail/property handlers all pointed at
+# VFS\ProgramFiles(x86)\... while the payload is under VFS\ProgramFilesX86\.
+$script:MsixVfsFolderNames = @(
+    'ProgramFilesX64', 'ProgramFilesX86', 'ProgramFilesCommonX64', 'ProgramFilesCommonX86',
+    'SystemX64', 'SystemX86', 'Windows', 'Fonts',
+    'Common AppData', 'AppData', 'Local AppData', 'LocalAppDataLow',
+    'UserProgramFiles', 'Common Programs', 'Common Desktop', 'Common Documents', 'Profile', 'Personal',
+    'AppVSystem32Catroot', 'AppVSystem32Catroot2', 'AppVSystem32DriversEtc',
+    'AppVSystem32Driverstore', 'AppVSystem32Logfiles', 'AppVSystem32Spool'
+)
+# Other spellings of the same folders that registry values (older tools, App-V
+# style tokens, this module's own earlier tables) use.
+$script:MsixVfsFolderAliases = @{
+    'ProgramFiles6432'       = 'ProgramFilesX64'
+    'ProgramFilesCommon6432' = 'ProgramFilesCommonX64'
+    'System'                 = 'SystemX64'
+    'CommonAppData'          = 'Common AppData'
+    'ProgramData'            = 'Common AppData'
+    'LocalAppData'           = 'Local AppData'
+    'RoamingAppData'         = 'AppData'
+}
+
+function _MsixResolveVfsFolderToken {
+    <#
+    The canonical VFS folder for a registry folder-token name ('ProgramFilesX86',
+    'Common AppData', the older 'CommonAppData', ...): the folder name, '' for
+    the package root ([{AppVPackageRoot}]), or $null for a token that is not a
+    package folder ([{AppVCurrentUserSID}], [{Common Programs}] shortcuts, ...
+    are not resolved here unless listed above).
+    #>
+    [OutputType([string])]
+    param([string]$Token)
+    if ([string]::IsNullOrWhiteSpace($Token)) { return $null }
+    $t = $Token.Trim()
+    if ($t -eq 'AppVPackageRoot') { return '' }
+    $canonical = @($script:MsixVfsFolderNames | Where-Object { $_ -eq $t }) | Select-Object -First 1
+    if ($canonical) { return $canonical }
+    foreach ($alias in $script:MsixVfsFolderAliases.Keys) {
+        if ($alias -eq $t) { return $script:MsixVfsFolderAliases[$alias] }
+    }
+    return $null
+}
+
+function _MsixConvertRegPathToVfs {
+    <#
+    Pure mapping of a folder-token path to its package-relative VFS path, with
+    no file-system check: '[{ProgramFilesX86}]\App\x.dll' ->
+    'VFS\ProgramFilesX86\App\x.dll'; '[{AppVPackageRoot}]\bin\x.dll' ->
+    'bin\x.dll'. Returns $null for a value that is not token-shaped, an unknown
+    token, or a path with '..' segments (SECURITY: a hostile Registry.dat must
+    not map outside the package).
+    #>
+    [OutputType([string])]
+    param([string]$RegPath)
+    if ([string]::IsNullOrWhiteSpace($RegPath)) { return $null }
+    $value = $RegPath.Trim().Trim('"')
+    if ($value -notmatch '^\[\{([^}\]]+)\}\](.*)$') { return $null }
+    $token = $Matches[1]
+    $rest  = $Matches[2].Replace('/', '\').TrimStart('\')
+    $folder = _MsixResolveVfsFolderToken -Token $token
+    if ($null -eq $folder) { return $null }
+    $vfsRel = if ($folder -eq '') { $rest } elseif ($rest) { "VFS\$folder\$rest" } else { "VFS\$folder" }
+    if (-not $vfsRel -or $vfsRel -match '(^|[\\/])\.\.([\\/]|$)') { return $null }
+    return $vfsRel
+}
+
+function _MsixGetHostVfsFolderMap {
+    # This host's absolute folders and the VFS folder each maps to, longest
+    # first, so 'C:\Program Files\Common Files' wins over 'C:\Program Files'.
+    # 64-bit folders come from ProgramW6432 / CommonProgramW6432 and
+    # %windir%\System32, so a 32-bit host process still maps them right.
+    [OutputType([object[]])]
+    param()
+    $is64    = [Environment]::Is64BitOperatingSystem
+    $windows = [Environment]::GetFolderPath('Windows')
+    $pf      = $env:ProgramW6432
+    if (-not $pf) { $pf = [Environment]::GetFolderPath('ProgramFiles') }
+    $cpf     = $env:CommonProgramW6432
+    if (-not $cpf) { $cpf = [Environment]::GetFolderPath('CommonProgramFiles') }
+    $nativeProgramFiles = 'ProgramFilesX86'; $nativeCommon = 'ProgramFilesCommonX86'; $nativeSystem = 'SystemX86'
+    if ($is64) { $nativeProgramFiles = 'ProgramFilesX64'; $nativeCommon = 'ProgramFilesCommonX64'; $nativeSystem = 'SystemX64' }
+    $map = @(
+        @{ Abs = $pf;                                                       Vfs = $nativeProgramFiles }
+        @{ Abs = [Environment]::GetFolderPath('ProgramFilesX86');           Vfs = 'ProgramFilesX86' }
+        @{ Abs = $cpf;                                                      Vfs = $nativeCommon }
+        @{ Abs = [Environment]::GetFolderPath('CommonProgramFilesX86');     Vfs = 'ProgramFilesCommonX86' }
+        @{ Abs = $(if ($windows) { Join-Path -Path $windows -ChildPath 'System32' }); Vfs = $nativeSystem }
+        @{ Abs = $(if ($windows -and $is64) { Join-Path -Path $windows -ChildPath 'SysWOW64' }); Vfs = 'SystemX86' }
+        @{ Abs = [Environment]::GetFolderPath('Fonts');                     Vfs = 'Fonts' }
+        @{ Abs = $windows;                                                  Vfs = 'Windows' }
+        @{ Abs = [Environment]::GetFolderPath('CommonApplicationData');     Vfs = 'Common AppData' }
+        @{ Abs = [Environment]::GetFolderPath('ApplicationData');           Vfs = 'AppData' }
+        @{ Abs = [Environment]::GetFolderPath('LocalApplicationData');      Vfs = 'Local AppData' }
+    )
+    return @($map | Where-Object { $_.Abs } |
+        ForEach-Object { [pscustomobject]@{ Abs = ([string]$_.Abs).TrimEnd('\'); Vfs = $_.Vfs } } |
+        Sort-Object -Property @{ Expression = { $_.Abs.Length }; Descending = $true })
+}
+
 function _MsixAbsoluteToVfsRelativeDirect {
     <#
     .SYNOPSIS
         Translates an absolute DLL path (from Registry.dat) to a VFS-relative
         path within an already-unpacked MSIX workspace.
         Returns $null if the file cannot be mapped / does not exist in the package.
+
+    .DESCRIPTION
+        Environment variables are expanded first (REG_EXPAND_SZ values such as
+        %ProgramFiles%\App\x.dll). Every host folder the path starts with is
+        tried, longest first, with its canonical VFS folder name; the first
+        file that exists in the workspace wins.
     #>
     param([string]$AbsPath, [string]$WorkspacePath)
-    if (-not $AbsPath) { return $null }
-    $mappings = @(
-        [pscustomobject]@{ Abs = [System.Environment]::GetFolderPath('ProgramFiles');           Vfs = 'VFS\ProgramFilesX64' }
-        [pscustomobject]@{ Abs = [System.Environment]::GetFolderPath('ProgramFilesX86');        Vfs = 'VFS\ProgramFiles(x86)' }
-        [pscustomobject]@{ Abs = [System.Environment]::GetFolderPath('System');                 Vfs = 'VFS\SystemX64' }
-        [pscustomobject]@{ Abs = [System.Environment]::GetFolderPath('Windows');                Vfs = 'VFS\Windows' }
-        [pscustomobject]@{ Abs = [System.Environment]::GetFolderPath('CommonApplicationData');  Vfs = 'VFS\ProgramData' }
-    )
-    foreach ($m in $mappings) {
-        if ($AbsPath.StartsWith($m.Abs, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $rel    = $AbsPath.Substring($m.Abs.Length).TrimStart('\')
-            $vfsRel = "$($m.Vfs)\$rel"
-            # SECURITY: reject path-traversal segments so a hostile Registry.dat
-            # cannot map to a file outside the package workspace.
-            if ($vfsRel -match '(^|[\\/])\.\.([\\/]|$)') { return $null }
-            if (Test-Path -LiteralPath (Join-Path -Path $WorkspacePath -ChildPath $vfsRel)) { return $vfsRel }
-        }
+    if (-not $AbsPath -or -not $WorkspacePath) { return $null }
+    $path = [Environment]::ExpandEnvironmentVariables($AbsPath.Trim().Trim('"'))
+    foreach ($m in (_MsixGetHostVfsFolderMap)) {
+        $under = $path.StartsWith($m.Abs + '\', [StringComparison]::OrdinalIgnoreCase)
+        if (-not $under) { continue }
+        $rel    = $path.Substring($m.Abs.Length).TrimStart('\')
+        $vfsRel = "VFS\$($m.Vfs)\$rel"
+        # SECURITY: reject path-traversal segments so a hostile Registry.dat
+        # cannot map to a file outside the package workspace.
+        if ($vfsRel -match '(^|[\\/])\.\.([\\/]|$)') { return $null }
+        if (Test-Path -LiteralPath (Join-Path -Path $WorkspacePath -ChildPath $vfsRel) -PathType Leaf) { return $vfsRel }
     }
     return $null
 }
@@ -452,37 +562,27 @@ function _MsixRegPathToVfsRelative {
         stored in Registry.dat to a VFS-relative path within an already-unpacked workspace.
         Falls through to _MsixAbsoluteToVfsRelativeDirect for plain absolute paths.
         Returns $null if the path cannot be mapped or the file is not present in the package.
+
+    .DESCRIPTION
+        Shared by the service, COM, shell-handler and context-menu scanners. A
+        path that maps but is not in the package returns $null: the entry is
+        then not auto-fixable, and the auto-fix stage skips it with a warning
+        instead of declaring a file that does not exist.
     #>
     param([string]$RegPath, [string]$WorkspacePath)
     if (-not $RegPath) { return $null }
+    $value = $RegPath.Trim().Trim('"')
 
     # Folder-variable format: [{VarName}]\rest\of\path
-    $varMappings = @(
-        [pscustomobject]@{ Var = 'ProgramFilesX64';  Vfs = 'VFS\ProgramFilesX64' }
-        [pscustomobject]@{ Var = 'ProgramFilesX86';  Vfs = 'VFS\ProgramFiles(x86)' }
-        [pscustomobject]@{ Var = 'ProgramFiles6432'; Vfs = 'VFS\ProgramFilesX64' }
-        [pscustomobject]@{ Var = 'System';           Vfs = 'VFS\SystemX64' }
-        [pscustomobject]@{ Var = 'SystemX86';        Vfs = 'VFS\System' }
-        [pscustomobject]@{ Var = 'Windows';          Vfs = 'VFS\Windows' }
-        [pscustomobject]@{ Var = 'CommonAppData';    Vfs = 'VFS\ProgramData' }
-        [pscustomobject]@{ Var = 'AppData';          Vfs = 'VFS\AppData\Roaming' }
-        [pscustomobject]@{ Var = 'LocalAppData';     Vfs = 'VFS\AppData\Local' }
-    )
-    foreach ($m in $varMappings) {
-        if ($RegPath -match ('^\[\{' + [regex]::Escape($m.Var) + '\}\](.*)$')) {
-            $rel    = $Matches[1].TrimStart('\')
-            $vfsRel = "$($m.Vfs)\$rel"
-            # SECURITY: reject path-traversal segments so a hostile Registry.dat
-            # cannot map to a file outside the package workspace.
-            if ($vfsRel -match '(^|[\\/])\.\.([\\/]|$)') { return $null }
-            if (Test-Path -LiteralPath (Join-Path -Path $WorkspacePath -ChildPath $vfsRel)) { return $vfsRel }
-            # Return the mapping even if the file isn't present — caller can use for manifest
-            return $vfsRel
-        }
+    if ($value -match '^\[\{') {
+        $vfsRel = _MsixConvertRegPathToVfs -RegPath $value
+        if (-not $vfsRel -or -not $WorkspacePath) { return $null }
+        if (Test-Path -LiteralPath (Join-Path -Path $WorkspacePath -ChildPath $vfsRel) -PathType Leaf) { return $vfsRel }
+        return $null
     }
 
     # Plain absolute path fallback
-    return _MsixAbsoluteToVfsRelativeDirect -AbsPath $RegPath -WorkspacePath $WorkspacePath
+    return _MsixAbsoluteToVfsRelativeDirect -AbsPath $value -WorkspacePath $WorkspacePath
 }
 
 function _MsixGetClsidInProcServerPath {
@@ -1046,6 +1146,14 @@ function Get-MsixAliasCandidate {
           - .exe under VFS\ProgramFiles* with a manifest entry pointing at it
           - skip msvcr*, vcredist*, setup*, install*, uninst*
 
+        ONE candidate per alias name, not one per Application: an alias name
+        may be declared only once per package, and Applications that share an
+        executable (one per Start-menu shortcut, each with its own
+        uap10:Parameters) would all suggest the same one. The candidate is the
+        Application without uap10:Parameters, else the first; Applications that
+        already have an alias are passed over. AlreadyHasAlias is also $true
+        when another Application already declares that alias name.
+
         Feeds the `AppExecutionAlias` finding in Get-MsixHeuristicFinding.
         Pass the AppId values to Add-MsixAlias to register the suggestions.
 
@@ -1061,7 +1169,8 @@ function Get-MsixAliasCandidate {
 
     .OUTPUTS
         [pscustomobject[]] each with AppId, Executable, SuggestAlias,
-        AlreadyHasAlias.
+        AlreadyHasAlias, and SharedWith (the other Application Ids on the same
+        alias name).
     #>
     [CmdletBinding()]
     param(
@@ -1081,21 +1190,47 @@ function Get-MsixAliasCandidate {
             '^psf','^msix','^api-ms-win-'
         )
 
-        foreach ($app in $apps) {
+        $uap10Uri = 'http://schemas.microsoft.com/appx/manifest/uap/windows10/10'
+        $declared = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        foreach ($node in @($manifest.SelectNodes("//*[local-name()='ExecutionAlias' and @Alias]"))) {
+            [void]$declared.Add($node.GetAttribute('Alias'))
+        }
+
+        $rows = @(foreach ($app in $apps) {
             $exe = $app.Executable
             if (-not $exe) { continue }
             $leaf = ($exe.Split('\')[-1]).ToLower()
             $skip = $skipPatterns | Where-Object { $leaf -match $_ }
             if ($skip) { continue }
 
-            $aliasName = ($leaf -replace '\.exe$','') + '.exe'
-            $hasAlias  = [bool]($app.Extensions.Extension.AppExecutionAlias.ExecutionAlias)
-
             [pscustomobject]@{
-                AppId        = $app.Id
-                Executable   = $exe
-                SuggestAlias = $aliasName
-                AlreadyHasAlias = $hasAlias
+                AppId         = $app.Id
+                Executable    = $exe
+                Alias         = ($leaf -replace '\.exe$','') + '.exe'
+                HasAlias      = [bool]($app.Extensions.Extension.AppExecutionAlias.ExecutionAlias)
+                HasParameters = [bool]$app.GetAttribute('Parameters', $uap10Uri)
+            }
+        })
+
+        # One candidate per alias name, in manifest order: the Application
+        # without uap10:Parameters, else the first, among those that have no
+        # alias yet.
+        $groups = [ordered]@{}
+        foreach ($row in $rows) {
+            $key = $row.Alias.ToLowerInvariant()
+            if (-not $groups.Contains($key)) { $groups[$key] = [System.Collections.Generic.List[object]]::new() }
+            $groups[$key].Add($row)
+        }
+        foreach ($key in @($groups.Keys)) {
+            $members = @($groups[$key])
+            $open = @($members | Where-Object { -not $_.HasAlias })
+            $pick = @(@($open | Where-Object { -not $_.HasParameters }) + $open + $members) | Select-Object -First 1
+            [pscustomobject]@{
+                AppId           = $pick.AppId
+                Executable      = $pick.Executable
+                SuggestAlias    = $pick.Alias
+                AlreadyHasAlias = $pick.HasAlias -or $declared.Contains($pick.Alias)
+                SharedWith      = @($members | Where-Object { -not [object]::ReferenceEquals($_, $pick) } | ForEach-Object { $_.AppId })
             }
         }
     } finally {
@@ -1458,15 +1593,24 @@ function Get-MsixHeuristicFinding {
     try {
         $shellHandlers = @(Get-MsixShellHandlerEntry -PackagePath $PackagePath -WorkspacePath $shared)
         $fixableShellHandlers = @($shellHandlers | Where-Object CanAutoFix)
-        if ($fixableShellHandlers) {
+        # Handlers whose DLL is not in the package are carried along (not
+        # auto-fixable) so the auto-fix stage can skip each one with a warning
+        # instead of the entry silently disappearing.
+        $unresolvedShellHandlers = @($shellHandlers | Where-Object { -not $_.CanAutoFix })
+        if ($fixableShellHandlers -or $unresolvedShellHandlers) {
+            $symptom = "Registry.dat declares $($fixableShellHandlers.Count) preview/property/thumbnail shell handler(s) that should be represented in the manifest."
+            if ($unresolvedShellHandlers) {
+                $symptom += " $($unresolvedShellHandlers.Count) more name a DLL that is not in the package and cannot be declared."
+            }
             $out.Add([pscustomobject]@{
                 Severity             = 'Warning'
                 Category             = 'ManifestFix:ShellHandlerExtension'
-                Symptom              = "Registry.dat declares $($fixableShellHandlers.Count) preview/property/thumbnail shell handler(s) that should be represented in the manifest."
+                Symptom              = $symptom
                 Recommendation       = "Add-MsixShellHandlerExtension -PackagePath '$PackagePath' -Kind <Preview|Property|Thumbnail> -Clsid <clsid> -Dll <VFS-relative-dll> -FileTypes <extensions>"
-                Evidence             = ($fixableShellHandlers | ForEach-Object { "$($_.Kind):$($_.FileType)=$($_.Clsid)" }) -join '; '
+                Evidence             = (@($fixableShellHandlers) + @($unresolvedShellHandlers) | ForEach-Object { "$($_.Kind):$($_.FileType)=$($_.Clsid)" }) -join '; '
                 AppId                = $null
                 ShellHandlerEntries  = $fixableShellHandlers
+                UnresolvedShellHandlerEntries = $unresolvedShellHandlers
             })
         }
     } catch {
@@ -1653,10 +1797,15 @@ function Get-MsixHeuristicFinding {
                         $mf.SelectNodes("//*[local-name()='DesktopPreviewHandler' or local-name()='DesktopPropertyHandler' or local-name()='ThumbnailHandler']/@Clsid") |
                             ForEach-Object { $_.Value }
                     )
+                    $declaredBare = @($declaredHandlerClsids | ForEach-Object { ([string]$_).Trim('{}').ToLowerInvariant() })
                     $stillMissingHandlers = @($shellHandlerFinding.ShellHandlerEntries | Where-Object {
-                        ($_.Clsid.Trim('{}').ToLowerInvariant()) -notin @($declaredHandlerClsids | ForEach-Object { ([string]$_).Trim('{}').ToLowerInvariant() })
+                        ($_.Clsid.Trim('{}').ToLowerInvariant()) -notin $declaredBare
                     })
-                    if (-not $stillMissingHandlers) {
+                    $stillUnresolved = @($shellHandlerFinding.UnresolvedShellHandlerEntries | Where-Object {
+                        $_ -and ($_.Clsid.Trim('{}').ToLowerInvariant()) -notin $declaredBare
+                    })
+                    $shellHandlerFinding.UnresolvedShellHandlerEntries = $stillUnresolved
+                    if (-not $stillMissingHandlers -and -not $stillUnresolved) {
                         [void]$out.Remove($shellHandlerFinding)
                     } elseif ($stillMissingHandlers.Count -lt @($shellHandlerFinding.ShellHandlerEntries).Count) {
                         $shellHandlerFinding.ShellHandlerEntries = $stillMissingHandlers

@@ -187,20 +187,24 @@ function Remove-MsixDesktopShortcut {
         -Mutator {
             param($workspace)
             $patterns = @('VFS\\Common Desktop','VFS\\User Desktop','VFS\\Desktop')
-            $removed  = @()
-            Get-ChildItem -LiteralPath $workspace -Recurse -File -Filter *.lnk -ErrorAction SilentlyContinue |
+            $matched  = @(Get-ChildItem -LiteralPath $workspace -Recurse -File -Filter *.lnk -ErrorAction SilentlyContinue |
                 Where-Object {
                     $rel = $_.FullName.Substring($workspace.Length + 1)
                     ($patterns | Where-Object { $rel -match $_ }).Count -gt 0
                 } |
-                ForEach-Object {
-                    $removed += $_.FullName.Substring($workspace.Length + 1)
-                    Remove-Item -LiteralPath $_.FullName -Force
-                }
+                ForEach-Object { $_.FullName.Substring($workspace.Length + 1) })
+
+            # The shared removal helper keeps the manifest consistent: anything
+            # that still names a removed file is removed with it (or the file
+            # is kept when the manifest cannot lose the reference).
+            $strip   = _MsixRemoveWorkspaceFile -Workspace $workspace -RelativePath $matched
+            $removed = @($strip.Removed)
 
             if (-not $removed) { return $null }
             Write-MsixLog -Level Info -Message "Removed: $($removed -join ', ')"
-            @{ Removed = $removed }
+            $summary = @{ Removed = $removed }
+            if ($strip.ManifestChanges.Count) { $summary['ManifestElementsRemoved'] = @($strip.ManifestChanges) }
+            $summary
         }.GetNewClosure()
 }
 

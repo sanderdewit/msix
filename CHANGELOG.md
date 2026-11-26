@@ -5,6 +5,244 @@ field in `MSIX.psd1` is constrained to PSGallery's 10,600-character
 limit and carries only the current version's highlights — everything
 older lives here.
 
+## v0.75.4 - 2026-11-26 — Auto-fix: one repack per stage, and manifests MakeAppx accepts
+
+Bugs a local compatibility sweep found in `Invoke-MsixAutoFixFromAnalysis` and the scanners
+behind it.
+
+### Fixed: the shell-handler stage repacked the whole package once per file type
+
+Stage `AddShellHandlerExtensions` called `Add-MsixShellHandlerExtension` once per entry,
+one file type each, and every call unpacked and repacked the whole package: about 30 s for
+a 40 MB package. K-Lite Codec Pack declares 83 thumbnail and property handlers, so its
+post-process ran for more than 40 minutes and was killed.
+
+- **`Add-MsixShellHandlerExtension -Handlers`** declares many handlers in one manifest
+  mutation, so one unpack and one repack. Each entry takes the single-handler parameters
+  (`Kind`, `Clsid`, `Dll`, `FileTypes`, optional `FtaName` / `DisplayName`) with the same
+  rules and defaults. The entries `Get-MsixShellHandlerEntry` emits (`VfsDllPath`,
+  `FileType`) work as they are. Every entry is validated before the package is touched.
+- **The stage uses it.** The manifest is the one the per-entry calls produced: the same FTA
+  names and the same elements. An entry the cmdlet would reject (for example a `.c++` file
+  type) is now skipped with a warning instead of failing every other handler with it.
+- **The same pattern in two more stages.** `AddPackagedServices` now makes one
+  `Add-MsixService -Services` call, and `DeclarePackageCertificates` makes one
+  `Add-MsixPackageCertificate` call (`-CertificatePath` takes several paths).
+- **Left as they are**:
+  - `AddLegacyContextMenu`, which handles a few entries at most (one per shell target);
+  - `ImportSparseShellExtension`, which runs once per nested package;
+  - the stages that make two repacks (`PluginDirectory`, `DeduplicateBundledRuntime`).
+
+### Fixed: a file type with a thumbnail and a property handler made the manifest invalid
+
+Each handler kind got its own FTA, so a file type with two handlers was declared twice.
+MakeAppx rejects that: `'.mkv' is a duplicate key for the unique Identity Constraint
+'Extension_FileType'`. A file type may be declared once per package, across all
+Applications, while one FTA may carry a thumbnail, a property and a preview handler
+together. K-Lite has 19 such file types, so it could not have packed even without the time
+limit.
+
+- The second handler now joins the FTA that already declares the type. Without such an
+  overlap nothing changes.
+- If that FTA also declares other file types, the handler is skipped with a warning.
+  Joining it would apply the handler to those types too.
+- File types within one handler are de-duplicated case-insensitively.
+
+### Fixed: removal stages left the manifest pointing at removed files
+
+`RemoveUpdaters` deleted a captured Chrome's `GoogleUpdater\...\updater.exe` and
+`Update\GoogleUpdate.exe`, but kept the two `desktop6` `windows.service` extensions that
+start `updater.exe`. MakeAppx then refused the package with
+`0x80080204 - The specified package format is not valid: The package manifest is not valid`.
+
+Every stage that strips files now goes through one helper, `_MsixRemoveWorkspaceFile`:
+`Remove-MsixUninstallerArtifact`, `Remove-MsixUpdaterArtifact`, `Remove-MsixDesktopShortcut`,
+`Remove-MsixPsf` and the bundled-runtime strip of `DeduplicateBundledRuntime`.
+
+- **Declarations that name a removed file are removed with it**, and each removal is logged:
+  - Extensions with that `Executable`: services, `uap3`/`uap5` AppExecutionAlias, startup
+    tasks, protocols, file type associations and so on;
+  - `com:ExeServer`, a `SurrogateServer` class, a `com4` `InProcessServer` or `ProxyStub`,
+    and a TypeLib path;
+  - a `desktop2` `FirewallRules` block;
+  - a `uap6` `LoaderSearchPathEntry` whose folder the removal emptied.
+- **What depends on a removed COM class goes too**: context-menu verbs,
+  preview/property/thumbnail handlers, ProgIds and the toast activator. MakeAppx requires
+  every handler `Clsid` to resolve to a declared class. Containers left empty (`ComServer`,
+  the Extension, an empty `Extensions`) are removed, so the manifest stays schema-valid.
+- **Never removed**: an `<Application>`. If an Application's own `Executable` matches a
+  removal pattern, the file is kept and a warning is logged. Files the manifest cannot lose
+  a reference to are kept the same way: visual assets and logos, shortcut icons, fonts and
+  CustomInstall files. Package-format files (`AppxManifest.xml`, `AppxBlockMap.xml`,
+  `AppxSignature.p7x`, `[Content_Types].xml`, `AppxMetadata\`) are never deleted.
+- **Folders a removal empties are removed.** MakeAppx packs no empty folders anyway.
+- **The results** of the `Remove-*` mutators gain `FilesKept` and `ManifestElementsRemoved`
+  when there were any.
+- **`AddPackagedServices` skips a service whose executable is no longer in the package.**
+  `RemoveUpdaters` runs first and removes, for example, `maintenanceservice.exe` or
+  `GoogleUpdate.exe`, so declaring their services would recreate the same failure.
+- **`Remove-MsixPsf`** points an Application's extensions that named its PSF launcher (an
+  alias or protocol) at the restored executable, so they keep working once the launcher
+  is deleted.
+
+### Fixed: Applications that share an executable got the same AppExecutionAlias
+
+The converter now declares one Application per Start-menu shortcut. Java's "Configure Java"
+and "About Java" both run `javacpl.exe`, and Python's "Python 3.13" and "Module Docs" both run
+`python.exe`, each with its own `uap10:Parameters`. That is valid MSIX. The `AddAliases` stage
+gave each of them the alias named after the executable, though, and MakeAppx failed:
+`'javacpl.exe' is a duplicate key for the unique Identity Constraint ...Extension_AppEx...`.
+
+- **`Add-MsixAlias`** never declares an alias name the package already has (on any
+  Application, in any `uap3`/`uap5` alias), nor one it added earlier in the same call. When
+  several Applications share an executable, the name goes to one of them: the one without
+  `uap10:Parameters`, else the first. The others are logged.
+- **`Get-MsixAliasCandidate`** returns one candidate per alias name, not one per
+  Application, picked the same way and passing over Applications that already have an
+  alias. A new `SharedWith` property lists the other Application Ids. `AlreadyHasAlias` is
+  also `$true` when another Application already declares that name.
+
+### Fixed: registry folder tokens mapped to VFS folders MSIX does not have
+
+The scanners translate the folder tokens in `Registry.dat` values to package paths. Five of
+them went to folders that MSIX does not have:
+
+| Token | Old mapping | Canonical folder |
+|---|---|---|
+| `[{ProgramFilesX86}]` | `VFS\ProgramFiles(x86)` | `VFS\ProgramFilesX86` |
+| `[{SystemX86}]` | `VFS\System` | `VFS\SystemX86` |
+| `[{CommonAppData}]` | `VFS\ProgramData` | `VFS\Common AppData` |
+| `[{AppData}]` | `VFS\AppData\Roaming` | `VFS\AppData` |
+| `[{LocalAppData}]` | `VFS\AppData\Local` | `VFS\Local AppData` |
+
+The mapped path was also returned when no file was there. Every declaration built from it
+named a file that was not in the package. K-Lite Codec Pack's 83 thumbnail and property
+handlers pointed at `VFS\ProgramFiles(x86)\K-Lite Codec Pack\Icaros\...`, while the payload
+is under `VFS\ProgramFilesX86\`. MakeAppx does not check COM class paths, so the package
+packed with handlers that could not load.
+
+- **Tokens resolve to the canonical MSIX VFS folders.** These are the names the converter
+  writes:
+  - `ProgramFilesX64`, `ProgramFilesX86`, `ProgramFilesCommonX64`, `ProgramFilesCommonX86`;
+  - `SystemX64`, `SystemX86`, `Windows`, `Fonts`;
+  - `Common AppData`, `AppData`, `Local AppData`, `LocalAppDataLow`;
+  - the other folders PSF's MFR fixup lists.
+
+  Older spellings (`ProgramFiles6432`, `System`, `CommonAppData`, `LocalAppData`) map to the
+  same folders. `[{AppVPackageRoot}]` maps to the package root.
+- **Absolute paths:**
+  - environment variables are expanded;
+  - Common Files, SysWOW64, Fonts, ProgramData and the AppData folders now map too;
+  - the longest matching host folder is tried first, then its parent VFS folder;
+  - the 64-bit folders also map correctly from a 32-bit host process.
+- **One table.** The service, COM, shell-handler and context-menu scanners all use it, and
+  so does `Add-MsixLegacyContextMenu` for a raw token path.
+- **A path that maps but is not in the package now maps to nothing.** The entry is then not
+  auto-fixable, and `AddShellHandlerExtensions`, `AddLegacyContextMenu` and
+  `AddPackagedServices` skip it with a warning instead of declaring it. The shell-handler
+  finding keeps such entries in a new `UnresolvedShellHandlerEntries` property.
+- **The shell-handler, context-menu, COM and service stages re-check each file** against the
+  package they are about to change. A file an earlier stage removed is skipped with a
+  warning too.
+
+### Fixed: the alias of a PSF-launched app was named after its Application Id
+
+PSF injection (`PluginDirectory`) runs before `AddAliases`. `Add-MsixAlias` could not see
+the payload, so it named the alias after the Id: Python's IDLE got
+`python.a3.a13.a17.a64.bit.exe` instead of `pythonw.exe`.
+
+- The alias is now named after the program the launcher starts for that Application. The
+  name comes from the PSF `config.json`: the one next to the launcher first, then the one
+  at the package root, then any other with an `applications` list.
+- It falls back to the Id only when no config maps the app. The once-per-package rule still
+  applies.
+- To make this possible, `_MsixMutateManifest` passes the unpacked package folder to the
+  mutate block as a second argument, and `Invoke-MsixManifestTransform` gained
+  `-ArgumentList`.
+
+### Fixed: PSF was injected into Chromium-based apps that did not need it
+
+`PluginDirectory` flagged a captured Chrome's `Application\<version>\Extensions` and
+`Locales` folders and added `PsfLauncher64` plus `FileRedirectionFixup`. Chrome never writes
+to those folders, so the finding is a false positive there. Launch-tested in Windows
+Sandbox:
+
+| | Window appears | CPU | chrome.exe exit codes |
+|---|---|---|---|
+| With PSF | after 50.5 s | 74 s | one exits 0x1 |
+| Without PSF (`Remove-MsixPsf`) | after 9.3 s | 26 s | all 0x0 |
+
+Chromium's sandboxed child processes (renderer, GPU, utility) refuse injected third-party
+DLLs. An Electron app (Azure Storage Explorer) under PSF also exited at once with 0x3, though
+that is not verified without PSF.
+
+- **Chromium-based targets are detected from marker files**, in the executable's folder or a
+  version subfolder (`Application\<version>\` for Chrome and Edge, `app-<version>\` for
+  Squirrel-installed Electron apps):
+  - on their own: `chrome_elf.dll`, `msedge_elf.dll`, `libcef.dll`, `resources\app.asar`;
+  - or a V8 snapshot (`v8_context_snapshot.bin` / `snapshot_blob.bin`) next to Chromium's
+    `icudtl.dat`.
+
+  Checked against real packages: Chrome, Mattermost and Figma (Electron), bare Electron,
+  Opera GX. Telegram (Qt), Java, Python and K-Lite are not flagged.
+- **The rule applies to the Application PSF wraps** (`Add-MsixPsfV2` wraps the first one),
+  and only to a package without PSF yet. A package that already has a PsfLauncher entry
+  point or the PSF runtime is left as it was.
+- **What changes for such a target**, each with a warning that says why:
+  - `PluginDirectory` keeps only its manifest change (write virtualization) and adds no PSF;
+    with `-LegacyPluginFix`, which is PSF only, it is skipped;
+  - `InjectPsf` is skipped;
+  - `DeduplicateBundledRuntime` declares the framework without the `JAVA_HOME` /
+    `DOTNET_ROOT` PSF wiring;
+  - in `Invoke-MsixAutoFix`, the `Recommended:InjectPsf` stage and the PSF-based splash
+    screen are skipped.
+- **Unchanged:** `Add-MsixPsfV2` called directly, playbooks and remediation plans. These
+  are explicit choices.
+
+### Tests
+
+- `MSIX.AutoFixBatching.Tests.ps1`:
+  - each stage makes one call: for 100 handlers, for its services and for two
+    certificates;
+  - an entry that would be rejected is skipped;
+  - a service whose executable was removed is skipped;
+  - `-Handlers` and `-Services` produce byte-identical manifests to one call per item, in
+    one mutation instead of N;
+  - a type is never declared twice;
+  - with real MakeAppx, the batched package packs with the same manifest.
+- `MSIX.RemovalManifestRefs.Tests.ps1`:
+  - the helper is run on a manifest with every kind of reference;
+  - with real MakeAppx: a Chrome-like package without its updater still packs,
+    `setup.exe` survives as an Application entry point, `Remove-MsixPsf` re-points an
+    alias, and `DeduplicateBundledRuntime` strips a JRE together with its alias and
+    loader path.
+- `MSIX.AliasSharedExecutable.Tests.ps1`:
+  - the candidate selection, and `Add-MsixAlias` with `-All` and with explicit AppIds;
+  - a PSF-launched app named after its `config.json` target, the Id fallback, and the
+    once-per-package rule across PSF and plain apps;
+  - with real MakeAppx, the `AddAliases` stage on a Java/Python-shaped package, and a PSF
+    app's `pythonw.exe` alias.
+- `MSIX.VfsPathMapping.Tests.ps1`:
+  - every canonical token and older spelling;
+  - the old folder names are never produced;
+  - absolute host paths;
+  - the shell-handler, context-menu and service scanners return only files in the package;
+  - the stages warn about and skip unresolved or removed files;
+  - `Add-MsixLegacyContextMenu`'s token mapping;
+  - with real MakeAppx, a K-Lite-shaped package whose declared handler DLLs are all in the
+    package.
+- `MSIX.SnippetInjection.Tests.ps1`: the folder-token test now creates the file it maps,
+  and a new test pins `$null` for a file that is not in the package.
+- `MSIX.ChromiumNoPsf.Tests.ps1`:
+  - detection on the Chrome, Edge, Electron (with and without `app.asar`), Squirrel, CEF,
+    Opera and root layouts, and no detection for Qt, a lone V8 snapshot, CEF in a helper
+    subfolder, or a sibling folder;
+  - only the first Application counts, and packages that already carry PSF are left
+    alone;
+  - the planner's decisions: the stages that still run and the ones that are skipped,
+    plain apps unchanged, the runtime wiring, and `Invoke-MsixAutoFix`;
+  - with real MakeAppx, a Chrome-shaped package whose post-process output has no PSF.
+
 ## v0.75.3 - 2026-11-15 — Keep a verified SDK toolchain when the newest release is rejected
 
 ### Fixed: `Initialize-MsixToolchain` failed on machines that already had a working toolchain

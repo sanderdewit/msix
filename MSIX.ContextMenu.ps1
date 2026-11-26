@@ -52,7 +52,8 @@
         Package-relative VFS path to the COM server DLL
         (e.g. VFS\ProgramFilesX64\App\ShellExt.dll).
         MSIX folder-variable prefixes ([{ProgramFilesX64}] etc.) are resolved
-        automatically.
+        automatically to the canonical VFS folder ([{ProgramFilesX86}] ->
+        VFS\ProgramFilesX86).
 
     .PARAMETER Clsid
         GUID of the COM class, with or without curly braces (e.g. '{XXXXXXXX-...}').
@@ -178,23 +179,12 @@
     $ClsidBare = $Clsid.Trim().Trim('{', '}').ToLowerInvariant()
 
     # Resolve MSIX folder-variable prefixes ([{ProgramFilesX64}]\...) to VFS paths.
-    # Callers may pass the raw registry path; normalise it defensively.
-    $varMap = @{
-        'ProgramFilesX64'  = 'VFS\ProgramFilesX64'
-        'ProgramFilesX86'  = 'VFS\ProgramFiles(x86)'
-        'ProgramFiles6432' = 'VFS\ProgramFilesX64'
-        'System'           = 'VFS\SystemX64'
-        'SystemX86'        = 'VFS\System'
-        'Windows'          = 'VFS\Windows'
-        'CommonAppData'    = 'VFS\ProgramData'
-        'AppData'          = 'VFS\AppData\Roaming'
-        'LocalAppData'     = 'VFS\AppData\Local'
-    }
-    foreach ($var in $varMap.Keys) {
-        if ($ShellExtDll -match ('^\[\{' + [regex]::Escape($var) + '\}\](.+)$')) {
-            $ShellExtDll = $varMap[$var] + '\' + $Matches[1].TrimStart('\')
-            break
-        }
+    # Callers may pass the raw registry path; normalise it defensively, with the
+    # scanners' canonical folder table ([{ProgramFilesX86}] is VFS\ProgramFilesX86,
+    # never VFS\ProgramFiles(x86)). An unknown token is left as it is.
+    if ($ShellExtDll -match '^\s*"?\[\{') {
+        $mappedDll = _MsixConvertRegPathToVfs -RegPath $ShellExtDll
+        if ($mappedDll) { $ShellExtDll = $mappedDll }
     }
 
     # Map registry class names to valid desktop5:ItemType/@Type values.

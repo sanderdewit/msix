@@ -398,9 +398,19 @@ function Add-MsixAlias {
 
     .DESCRIPTION
         Adds a windows.appExecutionAlias extension for each targeted application.
-        The alias name matches the application's executable leaf name (or, when
-        the executable is a PsfLauncher, the app Id with a `.exe` suffix).
-        Idempotent: skips apps that already have an alias declared.
+        The alias name matches the application's executable leaf name. When the
+        executable is a PsfLauncher, it is the leaf of the program the launcher
+        starts for that app, read from the package's PSF config.json (e.g.
+        pythonw.exe); only when no config maps the app is it the app Id with a
+        `.exe` suffix. Idempotent: skips apps that already have an alias declared.
+
+        An alias name may be declared only once per package. Applications that
+        share an executable (one per Start-menu shortcut, each with its own
+        uap10:Parameters, e.g. "Configure Java" and "About Java" on
+        javacpl.exe) would all ask for the same name, so the name goes to ONE
+        of them: the one without uap10:Parameters, else the first. A name the
+        package already declares (any Application, any uap3/uap5 alias) is
+        never added again. Every skipped Application is logged.
 
         Suggestions come from Get-MsixAliasCandidate, which also feeds the
         `AppExecutionAlias` finding in Get-MsixHeuristicFinding.
@@ -467,20 +477,30 @@ function Add-MsixAlias {
             -UnsignedOutputPath $UnsignedOutputPath `
             -WhatIfPreview:$isWhatIf `
             -Activity 'Add AppExecutionAlias' -Mutate {
-            param([xml]$manifest)
+            param([xml]$manifest, [string]$workspace)
 
             Add-MsixManifestNamespace -Manifest $manifest -Prefix 'uap3'
             Add-MsixManifestNamespace -Manifest $manifest -Prefix 'desktop'
 
             $uap3Uri    = Get-MsixManifestNamespaceUri -Prefix 'uap3'
             $desktopUri = Get-MsixManifestNamespaceUri -Prefix 'desktop'
+            $uap10Uri   = Get-MsixManifestNamespaceUri -Prefix 'uap10'
 
             $targets = @($manifest.Package.Applications.Application | Where-Object { $null -ne $_ })
             if (-not $targetAll -and $targetAppIds) {
-                $targets = $targets | Where-Object { $targetAppIds -contains $_.Id }
+                $targets = @($targets | Where-Object { $targetAppIds -contains $_.Id })
             }
 
-            foreach ($app in $targets) {
+            # An alias name is unique per PACKAGE. Two Applications on one
+            # executable (one per Start-menu shortcut) both asking for
+            # 'javacpl.exe' made MakeAppx fail: "'javacpl.exe' is a duplicate
+            # key for the unique Identity Constraint ...Extension_AppEx...".
+            $taken = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+            foreach ($declared in @($manifest.SelectNodes("//*[local-name()='ExecutionAlias' and @Alias]"))) {
+                [void]$taken.Add($declared.GetAttribute('Alias'))
+            }
+
+            $wants = @(foreach ($app in $targets) {
                 # Reliable duplicate check: walk child nodes of Extensions
                 $existingAliasExt = @($app.Extensions.Extension) |
                     Where-Object { $_.Category -eq 'windows.appExecutionAlias' }
@@ -492,11 +512,53 @@ function Add-MsixAlias {
                 # Determine the alias name from the real executable
                 $executable = $app.Executable.Replace('\', '/')
                 if ($executable -match 'PsfLauncher') {
-                    # Note: workspace is not available inside _MsixMutateManifest callback;
-                    # fall back to guessing the alias from the app Id
-                    $aliasName = "$($app.Id.ToLower()).exe"
+                    # A PSF-launched app: the alias is named after the program
+                    # the launcher starts for it (its PSF config.json target,
+                    # e.g. pythonw.exe for Python's IDLE), not after the
+                    # launcher. Only when no config maps the app does the name
+                    # fall back to its Id.
+                    $psfTarget = _MsixGetPsfTargetExecutable -Workspace $workspace -LauncherPath $app.Executable -AppId $app.Id
+                    if ($psfTarget) {
+                        $aliasName = $psfTarget.Replace('\', '/').Split('/')[-1]
+                        if ($aliasName -notmatch '\.exe$') { $aliasName += '.exe' }
+                    } else {
+                        $aliasName = "$($app.Id.ToLower()).exe"
+                        Write-MsixLog -Level Info -Message "$($app.Id) runs PsfLauncher but no PSF config.json maps it; its alias is named after the Application Id: $aliasName"
+                    }
                 } else {
                     $aliasName = $executable.Split('/')[-1]
+                }
+                [pscustomobject]@{
+                    App           = $app
+                    Alias         = $aliasName
+                    HasParameters = [bool]$app.GetAttribute('Parameters', $uap10Uri)
+                }
+            })
+
+            # One Application per alias name (case-insensitive, manifest order):
+            # the one without uap10:Parameters (the plain launch), else the first.
+            $groups = [ordered]@{}
+            foreach ($want in $wants) {
+                $key = $want.Alias.ToLowerInvariant()
+                if (-not $groups.Contains($key)) { $groups[$key] = [System.Collections.Generic.List[object]]::new() }
+                $groups[$key].Add($want)
+            }
+            $chosen = [System.Collections.Generic.List[object]]::new()
+            foreach ($key in @($groups.Keys)) {
+                $members = @($groups[$key])
+                $winner = @(@($members | Where-Object { -not $_.HasParameters }) + $members) | Select-Object -First 1
+                foreach ($other in @($members | Where-Object { -not [object]::ReferenceEquals($_, $winner) })) {
+                    Write-MsixLog -Level Info -Message "AppExecutionAlias '$($winner.Alias)' goes to $($winner.App.Id), which runs the same executable; skipped for $($other.App.Id) (an alias name is declared once per package)."
+                }
+                $chosen.Add($winner)
+            }
+
+            foreach ($want in $chosen) {
+                $app       = $want.App
+                $aliasName = $want.Alias
+                if (-not $taken.Add($aliasName)) {
+                    Write-MsixLog -Level Info -Message "AppExecutionAlias '$aliasName' is already declared in the package; skipped for $($app.Id)."
+                    continue
                 }
 
                 # Build: <uap3:Extension Category="windows.appExecutionAlias">

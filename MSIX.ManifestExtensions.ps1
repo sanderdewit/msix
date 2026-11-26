@@ -35,7 +35,8 @@
 function _MsixMutateManifest {
     <#
     Shared unpack/edit/repack/sign cycle. The $Mutate scriptblock receives the
-    parsed [xml] manifest and is expected to mutate it in place.
+    parsed [xml] manifest and is expected to mutate it in place; its optional
+    second parameter receives the unpacked package folder (read-only use).
 
     Atomic pack-then-sign: the new package is always built in a scratch
     location in $env:TEMP. Only after signing succeeds is it moved to
@@ -93,7 +94,10 @@ function _MsixMutateManifest {
         $null = Test-MsixManifest -Path "$workspace\AppxManifest.xml"
         [xml]$manifest = Get-MsixManifest -Path "$workspace\AppxManifest.xml"
 
-        $manifest = Invoke-MsixManifestTransform -Manifest $manifest -Transform $Mutate
+        # The unpacked folder goes along as the transform's second argument
+        # (Add-MsixAlias reads a PSF config.json from it); blocks that declare
+        # only the manifest parameter simply ignore it.
+        $manifest = Invoke-MsixManifestTransform -Manifest $manifest -Transform $Mutate -ArgumentList @($workspace)
 
         Save-MsixManifest -Manifest $manifest -Path "$workspace\AppxManifest.xml"
 
@@ -183,6 +187,11 @@ function Invoke-MsixManifestTransform {
     .PARAMETER Transform
         Scriptblock receiving the [xml] document as its first argument.
 
+    .PARAMETER ArgumentList
+        Further positional arguments for -Transform, after the document. The
+        module's unpack/repack helper passes the unpacked package folder, so a
+        transform can read payload files (for example a PSF config.json).
+
     .EXAMPLE
         [xml]$m = Get-MsixManifest -Path 'C:\work\AppxManifest.xml'
         Invoke-MsixManifestTransform -Manifest $m -Transform {
@@ -196,7 +205,8 @@ function Invoke-MsixManifestTransform {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] $Manifest,
-        [Parameter(Mandatory)] [scriptblock] $Transform
+        [Parameter(Mandatory)] [scriptblock] $Transform,
+        [object[]] $ArgumentList
     )
     # Normalise to raw [xml] — callers that pass MSIX.ManifestDocument get its .Document
     $xml = if ($Manifest.PSTypeNames -contains 'MSIX.ManifestDocument') {
@@ -216,7 +226,11 @@ function Invoke-MsixManifestTransform {
     if ($ExecutionContext.SessionState.Module) {
         try { $boundTransform = $ExecutionContext.SessionState.Module.NewBoundScriptBlock($Transform) } catch { $boundTransform = $Transform }
     }
-    & $boundTransform $xml
+    if ($ArgumentList) {
+        & $boundTransform $xml @ArgumentList
+    } else {
+        & $boundTransform $xml
+    }
     return $xml
 }
 
@@ -1845,6 +1859,132 @@ function Add-MsixComServerExtension {
 
 #region Packaged services (desktop6, issue #112) ----------------------------
 
+function _MsixResolveServiceSpec {
+    <#
+    Validates and normalises ONE packaged-service specification for
+    Add-MsixService -Services. -Spec is a hashtable or object with Executable
+    (or VfsExecutable), Name, and optional StartupType / StartAccount /
+    Arguments / Dependencies - the entries Get-MsixServiceEntry emits work as
+    they are. Rules and defaults are the single-service parameters'; the
+    StartupType / StartAccount values come back in their schema spelling.
+    Throws a message naming the entry on invalid input.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] $Spec,
+        [int]$Index = 1
+    )
+
+    $label = "Service #$Index"
+    $exe = [string]$Spec.Executable
+    if ([string]::IsNullOrWhiteSpace($exe)) { $exe = [string]$Spec.VfsExecutable }
+    if ([string]::IsNullOrWhiteSpace($exe)) { throw "${label}: Executable (or VfsExecutable), the package-relative service executable, is required." }
+
+    $name = [string]$Spec.Name
+    if ($name -notmatch '^[A-Za-z0-9_.-]+$') { throw "${label}: service Name '$name' may only hold letters, digits, '_', '.' and '-'." }
+
+    $startupRaw = [string]$Spec.StartupType
+    if (-not $startupRaw) { $startupRaw = 'auto' }
+    $startup = @('auto', 'demand', 'manual') | Where-Object { $_ -eq $startupRaw } | Select-Object -First 1
+    if (-not $startup) { throw "${label} '$name': StartupType '$startupRaw' is not one of auto, demand, manual." }
+
+    $accountRaw = [string]$Spec.StartAccount
+    if (-not $accountRaw) { $accountRaw = 'localService' }
+    $account = @('localService', 'localSystem', 'networkService') | Where-Object { $_ -eq $accountRaw } | Select-Object -First 1
+    if (-not $account) { throw "${label} '$name': StartAccount '$accountRaw' is not one of localService, localSystem, networkService." }
+
+    return @{
+        Executable   = $exe
+        Name         = $name
+        StartupType  = $startup
+        StartAccount = $account
+        Arguments    = [string]$Spec.Arguments
+        Dependencies = @(@($Spec.Dependencies) | Where-Object { $_ } | ForEach-Object { [string]$_ })
+    }
+}
+
+function _MsixAddServiceToManifest {
+    <#
+    Applies ONE normalised service spec (_MsixResolveServiceSpec) to an
+    in-memory manifest: the body Add-MsixService ran once per call before
+    batching existed, unchanged, so N specs in one mutation give the same
+    manifest as N single calls.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Pure in-memory transform on a caller-owned XmlDocument.')]
+    param(
+        [Parameter(Mandatory)] [xml]$Manifest,
+        [string]$AppId,
+        [Parameter(Mandatory)] [hashtable]$Spec
+    )
+    $M            = $Manifest
+    $Executable   = $Spec.Executable
+    $Name         = $Spec.Name
+    $StartupType  = $Spec.StartupType
+    $StartAccount = $Spec.StartAccount
+    $Arguments    = $Spec.Arguments
+    $Dependencies = @($Spec.Dependencies)
+
+    Add-MsixManifestNamespace -Manifest $M -Prefix 'desktop6'
+    Add-MsixManifestNamespace -Manifest $M -Prefix 'rescap'
+    Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 19041
+    $d6 = Get-MsixManifestNamespaceUri -Prefix 'desktop6'
+
+    $app    = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
+    $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
+
+    # Idempotency: same service Name already declared?
+    if ($M.SelectSingleNode("//*[local-name()='Service' and @Name='$Name']")) {
+        Write-MsixLog -Level Info -Message "Packaged service '$Name' already declared - skipping."
+        return
+    }
+
+    $ext = $M.CreateElement('desktop6:Extension', $d6)
+    $ext.SetAttribute('Category',   'windows.service')
+    $ext.SetAttribute('Executable', $Executable.Replace('/', '\'))
+    $ext.SetAttribute('EntryPoint', 'Windows.FullTrustApplication')
+
+    $svc = $M.CreateElement('desktop6:Service', $d6)
+    $svc.SetAttribute('Name',         $Name)
+    $svc.SetAttribute('StartupType',  $StartupType)
+    $svc.SetAttribute('StartAccount', $StartAccount)
+    if ($Arguments) { $svc.SetAttribute('Arguments', $Arguments) }
+
+    if ($Dependencies) {
+        $depsNode = $M.CreateElement('desktop6:Dependencies', $d6)
+        foreach ($dep in $Dependencies) {
+            $depNode = $M.CreateElement('desktop6:DependentService', $d6)
+            $depNode.SetAttribute('Name', $dep)
+            $null = $depsNode.AppendChild($depNode)
+        }
+        $null = $svc.AppendChild($depsNode)
+    }
+
+    $null = $ext.AppendChild($svc)
+    $null = $appExt.AppendChild($ext)
+
+    # Required restricted capabilities.
+    $capsNode = $M.Package.Capabilities
+    if (-not $capsNode) {
+        $capsNode = $M.CreateElement('Capabilities', $M.Package.NamespaceURI)
+        $null     = $M.Package.AppendChild($capsNode)
+    }
+    $rescapUri = Get-MsixManifestNamespaceUri -Prefix 'rescap'
+    $needed = @('packagedServices')
+    if ($StartAccount -eq 'localSystem') { $needed += 'localSystemServices' }
+    foreach ($cap in $needed) {
+        $exists = $capsNode.ChildNodes | Where-Object {
+            $_.LocalName -eq 'Capability' -and $_.GetAttribute('Name') -eq $cap }
+        if (-not $exists) {
+            $node = $M.CreateElement('rescap:Capability', $rescapUri)
+            $node.SetAttribute('Name', $cap)
+            $null = $capsNode.AppendChild($node)
+            Write-MsixLog -Level Info -Message "Capability added: $cap"
+        }
+    }
+    Write-MsixLog -Level Info -Message "Packaged service '$Name' declared (StartupType=$StartupType, StartAccount=$StartAccount)."
+}
+
 function Add-MsixService {
     <#
     .SYNOPSIS
@@ -1892,6 +2032,14 @@ function Add-MsixService {
     .PARAMETER Dependencies
         Optional service names this service depends on (SCM dependencies).
 
+    .PARAMETER Services
+        Several services to declare in one unpack/repack. Each entry is a
+        hashtable or object with Executable and Name, plus optional
+        StartupType, StartAccount, Arguments and Dependencies: the
+        single-service parameters, with the same rules and defaults. The entry
+        shape Get-MsixServiceEntry emits (VfsExecutable) is accepted as is.
+        Every entry is validated before the package is touched.
+
     .PARAMETER OutputPath
         Write the modified package here instead of overwriting -PackagePath.
 
@@ -1921,10 +2069,17 @@ function Add-MsixService {
             -Name 'ContosoLicense' -StartAccount localSystem `
             -Dependencies 'rpcss' -SkipSigning
 
+    .EXAMPLE
+        # Two services in one unpack/repack
+        Add-MsixService -PackagePath app.msix -SkipSigning -Services @(
+            @{ Executable = 'VFS\ProgramFilesX64\App\agent.exe';  Name = 'ContosoAgent' }
+            @{ Executable = 'VFS\ProgramFilesX64\App\licsvc.exe'; Name = 'ContosoLicense'; StartAccount = 'localSystem' }
+        )
+
     .LINK
         https://learn.microsoft.com/windows/msix/desktop/convert-a-windows-service
     #>
-    [CmdletBinding(SupportsShouldProcess)]
+    [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Single')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
         'PSReviewUnusedParameter', '',
         Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
@@ -1932,16 +2087,23 @@ function Add-MsixService {
         [Parameter(Mandatory)] [string]$PackagePath,
         [ValidatePattern('^[A-Za-z_][A-Za-z0-9_.-]*$')]
         [string]$AppId,
-        [Parameter(Mandatory)] [string]$Executable,
-        [Parameter(Mandatory)]
+        [Parameter(Mandatory, ParameterSetName = 'Single')] [string]$Executable,
+        [Parameter(Mandatory, ParameterSetName = 'Single')]
         [ValidatePattern('^[A-Za-z0-9_.-]+$')]
         [string]$Name,
+        [Parameter(ParameterSetName = 'Single')]
         [ValidateSet('auto', 'demand', 'manual')]
         [string]$StartupType = 'auto',
+        [Parameter(ParameterSetName = 'Single')]
         [ValidateSet('localService', 'localSystem', 'networkService')]
         [string]$StartAccount = 'localService',
+        [Parameter(ParameterSetName = 'Single')]
         [string]$Arguments,
+        [Parameter(ParameterSetName = 'Single')]
         [string[]]$Dependencies,
+        [Parameter(Mandatory, ParameterSetName = 'Batch')]
+        [ValidateNotNullOrEmpty()]
+        [object[]]$Services,
         [string]$OutputPath,
         [Alias('NoSign')]
         [switch]$SkipSigning,
@@ -1950,72 +2112,32 @@ function Add-MsixService {
         [string]$UnsignedOutputPath
     )
 
-    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Add packaged service '$Name'")
+    # Validate everything first; the mutation applies the specs in order to
+    # ONE manifest (one unpack/repack however many services there are).
+    if ($PSCmdlet.ParameterSetName -eq 'Batch') {
+        $specs = @(for ($i = 0; $i -lt $Services.Count; $i++) {
+            _MsixResolveServiceSpec -Spec $Services[$i] -Index ($i + 1)
+        })
+        $activity = "Add $($specs.Count) packaged service(s)"
+    } else {
+        $specs = @(_MsixResolveServiceSpec -Spec @{
+            Executable = $Executable; Name = $Name; StartupType = $StartupType
+            StartAccount = $StartAccount; Arguments = $Arguments; Dependencies = $Dependencies
+        })
+        $activity = "Add packaged service '$Name'"
+    }
+
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, $activity)
 
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -UnsignedOutputPath $UnsignedOutputPath `
                         -WhatIfPreview:$isWhatIf `
-                        -Activity "Add packaged service '$Name'" -Mutate {
+                        -Activity $activity -Mutate {
         param([xml]$M)
-        Add-MsixManifestNamespace -Manifest $M -Prefix 'desktop6'
-        Add-MsixManifestNamespace -Manifest $M -Prefix 'rescap'
-        Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 19041
-        $d6 = Get-MsixManifestNamespaceUri -Prefix 'desktop6'
-
-        $app    = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
-        $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
-
-        # Idempotency: same service Name already declared?
-        if ($M.SelectSingleNode("//*[local-name()='Service' and @Name='$Name']")) {
-            Write-MsixLog -Level Info -Message "Packaged service '$Name' already declared - skipping."
-            return
+        foreach ($spec in $specs) {
+            _MsixAddServiceToManifest -Manifest $M -AppId $AppId -Spec $spec
         }
-
-        $ext = $M.CreateElement('desktop6:Extension', $d6)
-        $ext.SetAttribute('Category',   'windows.service')
-        $ext.SetAttribute('Executable', $Executable.Replace('/', '\'))
-        $ext.SetAttribute('EntryPoint', 'Windows.FullTrustApplication')
-
-        $svc = $M.CreateElement('desktop6:Service', $d6)
-        $svc.SetAttribute('Name',         $Name)
-        $svc.SetAttribute('StartupType',  $StartupType)
-        $svc.SetAttribute('StartAccount', $StartAccount)
-        if ($Arguments) { $svc.SetAttribute('Arguments', $Arguments) }
-
-        if ($Dependencies) {
-            $depsNode = $M.CreateElement('desktop6:Dependencies', $d6)
-            foreach ($dep in $Dependencies) {
-                $depNode = $M.CreateElement('desktop6:DependentService', $d6)
-                $depNode.SetAttribute('Name', $dep)
-                $null = $depsNode.AppendChild($depNode)
-            }
-            $null = $svc.AppendChild($depsNode)
-        }
-
-        $null = $ext.AppendChild($svc)
-        $null = $appExt.AppendChild($ext)
-
-        # Required restricted capabilities.
-        $capsNode = $M.Package.Capabilities
-        if (-not $capsNode) {
-            $capsNode = $M.CreateElement('Capabilities', $M.Package.NamespaceURI)
-            $null     = $M.Package.AppendChild($capsNode)
-        }
-        $rescapUri = Get-MsixManifestNamespaceUri -Prefix 'rescap'
-        $needed = @('packagedServices')
-        if ($StartAccount -eq 'localSystem') { $needed += 'localSystemServices' }
-        foreach ($cap in $needed) {
-            $exists = $capsNode.ChildNodes | Where-Object {
-                $_.LocalName -eq 'Capability' -and $_.GetAttribute('Name') -eq $cap }
-            if (-not $exists) {
-                $node = $M.CreateElement('rescap:Capability', $rescapUri)
-                $node.SetAttribute('Name', $cap)
-                $null = $capsNode.AppendChild($node)
-                Write-MsixLog -Level Info -Message "Capability added: $cap"
-            }
-        }
-        Write-MsixLog -Level Info -Message "Packaged service '$Name' declared (StartupType=$StartupType, StartAccount=$StartAccount)."
     }
 }
 
@@ -2164,6 +2286,193 @@ function Add-MsixPackageDependency {
 
 #region Shell handler extensions (issue #113) --------------------------------
 
+function _MsixResolveShellHandlerSpec {
+    <#
+    Validates and normalises ONE shell-handler specification for
+    Add-MsixShellHandlerExtension. -Spec is a hashtable or object with Kind,
+    Clsid, Dll (or VfsDllPath), FileTypes (or FileType) and optional FtaName /
+    DisplayName - so the entries Get-MsixShellHandlerEntry emits work as they
+    are. The rules and defaults are exactly the single-handler parameters'
+    (ValidateSet / ValidatePattern match case-insensitively, so this does too).
+    Throws a message naming the entry on invalid input; nothing is mutated.
+    #>
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)] $Spec,
+        [int]$Index = 1
+    )
+
+    $label = "Shell handler #$Index"
+    $kindRaw = [string]$Spec.Kind
+    $kind = @('Preview', 'Property', 'Thumbnail') | Where-Object { $_ -eq $kindRaw } | Select-Object -First 1
+    if (-not $kind) { throw "${label}: Kind '$kindRaw' is not one of Preview, Property, Thumbnail." }
+
+    $clsid = [string]$Spec.Clsid
+    if ($clsid -notmatch '^(\{)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\})?$') {
+        throw "${label}: Clsid '$clsid' is not a GUID (12345678-1234-1234-1234-123456789abc, braces optional)."
+    }
+
+    $dll = [string]$Spec.Dll
+    if ([string]::IsNullOrWhiteSpace($dll)) { $dll = [string]$Spec.VfsDllPath }
+    if ([string]::IsNullOrWhiteSpace($dll)) { throw "${label}: Dll (or VfsDllPath), the package-relative handler DLL, is required." }
+
+    $typesRaw = $Spec.FileTypes
+    if (-not $typesRaw) { $typesRaw = $Spec.FileType }
+    # Case-insensitively unique: MakeAppx rejects '.mkv' and '.MKV' in one package.
+    $typeSet = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $fileTypes = @(@($typesRaw) | Where-Object { $_ } | ForEach-Object { [string]$_ } | Where-Object { $typeSet.Add($_) })
+    if ($fileTypes.Count -eq 0) { throw "${label}: FileTypes (or FileType) is required." }
+    foreach ($ft in $fileTypes) {
+        if ($ft -notmatch '^\.[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}$') {
+            throw "${label}: file type '$ft' is not a '.ext' extension (letters, digits, '_', '.', '-'; at most 32 characters after the dot)."
+        }
+    }
+
+    $ftaName = [string]$Spec.FtaName
+    if ($ftaName) {
+        if ($ftaName -notmatch '^[a-z0-9.-]+$') { throw "${label}: FtaName '$ftaName' may only hold lowercase letters, digits, '.' and '-'." }
+    } else {
+        $ftaName = $kind.ToLowerInvariant() + 'handler'
+    }
+    $displayName = [string]$Spec.DisplayName
+    if (-not $displayName) { $displayName = $ftaName }
+
+    return @{
+        Kind        = $kind
+        ClsidBare   = $clsid.Trim().Trim('{', '}').ToLowerInvariant()
+        Dll         = $dll
+        FileTypes   = $fileTypes
+        FtaName     = $ftaName
+        DisplayName = $displayName
+    }
+}
+
+function _MsixAddShellHandlerToManifest {
+    <#
+    Applies ONE normalised shell-handler spec (_MsixResolveShellHandlerSpec)
+    to an in-memory manifest. This is the body Add-MsixShellHandlerExtension
+    ran once per call before batching existed, unchanged, so N specs applied
+    to one document produce the same manifest as N single calls did - minus
+    the N-1 extra unpack/repack cycles.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '',
+        Justification = 'Pure in-memory transform on a caller-owned XmlDocument.')]
+    param(
+        [Parameter(Mandatory)] [xml]$Manifest,
+        [string]$AppId,
+        [Parameter(Mandatory)] [hashtable]$Spec
+    )
+    $M           = $Manifest
+    $Kind        = $Spec.Kind
+    $ClsidBare   = $Spec.ClsidBare
+    $Dll         = $Spec.Dll
+    $FileTypes   = @($Spec.FileTypes)
+    $FtaName     = $Spec.FtaName
+    $DisplayName = $Spec.DisplayName
+
+    Add-MsixManifestNamespace -Manifest $M -Prefix 'com'
+    Add-MsixManifestNamespace -Manifest $M -Prefix 'uap'
+    Add-MsixManifestNamespace -Manifest $M -Prefix 'desktop2'
+    Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 15063
+
+    $comUri = Get-MsixManifestNamespaceUri -Prefix 'com'
+    $uapUri = Get-MsixManifestNamespaceUri -Prefix 'uap'
+    $d2Uri  = Get-MsixManifestNamespaceUri -Prefix 'desktop2'
+
+    $handlerElement = switch ($Kind) {
+        'Preview'   { 'desktop2:DesktopPreviewHandler' }
+        'Property'  { 'desktop2:DesktopPropertyHandler' }
+        'Thumbnail' { 'desktop2:ThumbnailHandler' }
+    }
+
+    $app    = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
+    $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
+
+    # ── Which FTA carries the handler ────────────────────────────────
+    # A file type may be declared by ONE FileTypeAssociation in the whole
+    # package (MakeAppx: "'.mkv' is a duplicate key for the unique Identity
+    # Constraint 'Extension_FileType'"), while one FTA may carry a thumbnail,
+    # a property and a preview handler together. K-Lite Codec Pack registers a
+    # thumbnail AND a property handler for 19 file types: the second handler
+    # joins the FTA the first one created instead of declaring the type again.
+    # Without such an overlap nothing below differs from a plain new FTA.
+    $fta = $appExt.SelectSingleNode("*[local-name()='Extension' and @Category='windows.fileTypeAssociation']/*[local-name()='FileTypeAssociation' and @Name='$FtaName']")
+    $joined = $false
+    if (-not $fta) {
+        $wanted = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        foreach ($ft in $FileTypes) { [void]$wanted.Add($ft) }
+        $owners = [System.Collections.Generic.List[object]]::new()
+        foreach ($typeNode in @($M.SelectNodes("//*[local-name()='FileTypeAssociation']/*[local-name()='SupportedFileTypes']/*[local-name()='FileType']"))) {
+            if (-not $wanted.Contains($typeNode.InnerText.Trim())) { continue }
+            $owner = $typeNode.ParentNode.ParentNode
+            if (-not @($owners | Where-Object { [object]::ReferenceEquals($_, $owner) }).Count) { $owners.Add($owner) }
+        }
+        if ($owners.Count -gt 0) {
+            $declared = @()
+            if ($owners.Count -eq 1) {
+                $declared = @($owners[0].SelectNodes("*[local-name()='SupportedFileTypes']/*[local-name()='FileType']") |
+                    ForEach-Object { $_.InnerText.Trim() })
+            }
+            $sameTypes = ($owners.Count -eq 1) -and ($declared.Count -eq $wanted.Count) -and
+                         -not @($declared | Where-Object { -not $wanted.Contains($_) }).Count
+            if (-not $sameTypes) {
+                $ownerNames = (@($owners | ForEach-Object { "'" + $_.GetAttribute('Name') + "'" }) -join ', ')
+                Write-MsixLog -Level Warning -Message "$Kind handler $ClsidBare not declared for $($FileTypes -join ', '): FTA $ownerNames already declares a requested file type, a file type may be declared only once per package, and joining an FTA that declares other file types would hand the handler those too."
+                return
+            }
+            $fta = $owners[0]
+            $joined = $true
+        }
+    }
+
+    # ── COM surrogate for the handler class (idempotent) ─────────────
+    if (-not $M.SelectSingleNode("//*[local-name()='Class' and @Id='$ClsidBare']")) {
+        $comExt    = $M.CreateElement('com:Extension', $comUri)
+        $comExt.SetAttribute('Category', 'windows.comServer')
+        $comServer = $M.CreateElement('com:ComServer', $comUri)
+        $surrogate = $M.CreateElement('com:SurrogateServer', $comUri)
+        $surrogate.SetAttribute('DisplayName', $DisplayName)
+        $class = $M.CreateElement('com:Class', $comUri)
+        $class.SetAttribute('Id',             $ClsidBare)
+        $class.SetAttribute('Path',           $Dll.Replace('/', '\'))
+        $class.SetAttribute('ThreadingModel', 'STA')
+        $null = $surrogate.AppendChild($class)
+        $null = $comServer.AppendChild($surrogate)
+        $null = $comExt.AppendChild($comServer)
+        $null = $appExt.AppendChild($comExt)
+    }
+
+    # ── FTA carrying the handler element ─────────────────────────────
+    if ($joined) {
+        Write-MsixLog -Level Info -Message "$Kind handler for $($FileTypes -join ', ') joins FTA '$($fta.GetAttribute('Name'))', which already declares that file type (a file type is declared once per package)."
+    }
+    if (-not $fta) {
+        $ftaExt = $M.CreateElement('uap:Extension', $uapUri)
+        $ftaExt.SetAttribute('Category', 'windows.fileTypeAssociation')
+        $fta = $M.CreateElement('uap:FileTypeAssociation', $uapUri)
+        $fta.SetAttribute('Name', $FtaName)
+        $sft = $M.CreateElement('uap:SupportedFileTypes', $uapUri)
+        foreach ($ft in $FileTypes) {
+            $ftNode = $M.CreateElement('uap:FileType', $uapUri)
+            $ftNode.InnerText = $ft.ToLowerInvariant()
+            $null = $sft.AppendChild($ftNode)
+        }
+        $null = $fta.AppendChild($sft)
+        $null = $ftaExt.AppendChild($fta)
+        $null = $appExt.AppendChild($ftaExt)
+    }
+
+    $ftaLabel = $fta.GetAttribute('Name')
+    if ($fta.SelectSingleNode("*[local-name()='$($handlerElement.Split(':')[1])']")) {
+        Write-MsixLog -Level Info -Message "$Kind handler already declared on FTA '$ftaLabel' - skipping."
+        return
+    }
+    $handler = $M.CreateElement($handlerElement, $d2Uri)
+    $handler.SetAttribute('Clsid', $ClsidBare)
+    $null = $fta.AppendChild($handler)
+    Write-MsixLog -Level Info -Message "$Kind handler $ClsidBare declared on FTA '$ftaLabel' ($($FileTypes -join ', '))."
+}
+
 function Add-MsixShellHandlerExtension {
     <#
     .SYNOPSIS
@@ -2182,6 +2491,10 @@ function Add-MsixShellHandlerExtension {
         the given -FtaName, or a minimal FTA (Name + SupportedFileTypes) is
         created. Per the schema, ThumbnailHandler requires the application to
         use the full-trust entry point.
+
+        Every call unpacks and repacks the whole package. To declare many
+        handlers, pass them all with -Handlers: they are applied in ONE
+        manifest mutation, with the same result as one call per handler.
 
     .PARAMETER PackagePath
         The .msix file to modify.
@@ -2208,6 +2521,14 @@ function Add-MsixShellHandlerExtension {
 
     .PARAMETER DisplayName
         Display name for the COM surrogate server. Default: FtaName.
+
+    .PARAMETER Handlers
+        Several handlers to declare in one unpack/repack. Each entry is a
+        hashtable or object with Kind, Clsid, Dll and FileTypes, plus optional
+        FtaName and DisplayName: the single-handler parameters, with the same
+        rules and defaults. The entry shape Get-MsixShellHandlerEntry emits
+        (VfsDllPath, FileType) is accepted as is. The entries are applied in
+        order; every entry is validated before the package is touched.
 
     .PARAMETER OutputPath
         Write the modified package here instead of overwriting -PackagePath.
@@ -2238,10 +2559,15 @@ function Add-MsixShellHandlerExtension {
             -Dll 'VFS\ProgramFilesX64\App\Thumbs.dll' `
             -FileTypes '.cimg' -Pfx cert.pfx -PfxPassword $pw
 
+    .EXAMPLE
+        # Every handler the scanner found, in one unpack/repack
+        $handlers = @(Get-MsixShellHandlerEntry -PackagePath app.msix | Where-Object CanAutoFix)
+        Add-MsixShellHandlerExtension -PackagePath app.msix -Handlers $handlers -SkipSigning
+
     .LINK
         https://learn.microsoft.com/uwp/schemas/appxpackage/uapmanifestschema/element-desktop2-desktoppreviewhandler
     #>
-    [CmdletBinding(SupportsShouldProcess)]
+    [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName = 'Single')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
         'PSReviewUnusedParameter', '',
         Justification = 'Parameters are captured by the -Mutate scriptblock passed to _MsixMutateManifest.')]
@@ -2249,19 +2575,24 @@ function Add-MsixShellHandlerExtension {
         [Parameter(Mandatory)] [string]$PackagePath,
         [ValidatePattern('^[A-Za-z_][A-Za-z0-9_.-]*$')]
         [string]$AppId,
-        [Parameter(Mandatory)]
+        [Parameter(Mandatory, ParameterSetName = 'Single')]
         [ValidateSet('Preview', 'Property', 'Thumbnail')]
         [string]$Kind,
-        [Parameter(Mandatory)]
+        [Parameter(Mandatory, ParameterSetName = 'Single')]
         [ValidatePattern('^(\{)?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(\})?$')]
         [string]$Clsid,
-        [Parameter(Mandatory)] [string]$Dll,
-        [Parameter(Mandatory)]
+        [Parameter(Mandatory, ParameterSetName = 'Single')] [string]$Dll,
+        [Parameter(Mandatory, ParameterSetName = 'Single')]
         [ValidatePattern('^\.[a-zA-Z0-9][a-zA-Z0-9_.-]{0,31}$')]
         [string[]]$FileTypes,
+        [Parameter(ParameterSetName = 'Single')]
         [ValidatePattern('^[a-z0-9.-]+$')]
         [string]$FtaName,
+        [Parameter(ParameterSetName = 'Single')]
         [string]$DisplayName,
+        [Parameter(Mandatory, ParameterSetName = 'Batch')]
+        [ValidateNotNullOrEmpty()]
+        [object[]]$Handlers,
         [string]$OutputPath,
         [Alias('NoSign')]
         [switch]$SkipSigning,
@@ -2270,79 +2601,33 @@ function Add-MsixShellHandlerExtension {
         [string]$UnsignedOutputPath
     )
 
-    $ClsidBare = $Clsid.Trim().Trim('{', '}').ToLowerInvariant()
-    if (-not $FtaName)     { $FtaName = $Kind.ToLowerInvariant() + 'handler' }
-    if (-not $DisplayName) { $DisplayName = $FtaName }
+    # Validate everything before the package is touched; the mutation applies
+    # the specs in order to ONE manifest (one repack per file type made K-Lite
+    # Codec Pack's 83 thumbnail/property handlers run past 40 minutes).
+    if ($PSCmdlet.ParameterSetName -eq 'Batch') {
+        $specs = @(for ($i = 0; $i -lt $Handlers.Count; $i++) {
+            _MsixResolveShellHandlerSpec -Spec $Handlers[$i] -Index ($i + 1)
+        })
+        $activity = "Add $($specs.Count) shell handler(s)"
+    } else {
+        $specs = @(_MsixResolveShellHandlerSpec -Spec @{
+            Kind = $Kind; Clsid = $Clsid; Dll = $Dll; FileTypes = $FileTypes
+            FtaName = $FtaName; DisplayName = $DisplayName
+        })
+        $activity = "Add $Kind handler"
+    }
 
-    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, "Add $Kind handler")
+    $isWhatIf = -not $PSCmdlet.ShouldProcess($PackagePath, $activity)
 
     _MsixMutateManifest -PackagePath $PackagePath -OutputPath $OutputPath `
                         -SkipSigning:$SkipSigning -Pfx $Pfx -PfxPassword $PfxPassword `
                         -UnsignedOutputPath $UnsignedOutputPath `
                         -WhatIfPreview:$isWhatIf `
-                        -Activity "Add $Kind handler" -Mutate {
+                        -Activity $activity -Mutate {
         param([xml]$M)
-        Add-MsixManifestNamespace -Manifest $M -Prefix 'com'
-        Add-MsixManifestNamespace -Manifest $M -Prefix 'uap'
-        Add-MsixManifestNamespace -Manifest $M -Prefix 'desktop2'
-        Set-MsixManifestMaxVersionTested -Manifest $M -MinBuild 15063
-
-        $comUri = Get-MsixManifestNamespaceUri -Prefix 'com'
-        $uapUri = Get-MsixManifestNamespaceUri -Prefix 'uap'
-        $d2Uri  = Get-MsixManifestNamespaceUri -Prefix 'desktop2'
-
-        $handlerElement = switch ($Kind) {
-            'Preview'   { 'desktop2:DesktopPreviewHandler' }
-            'Property'  { 'desktop2:DesktopPropertyHandler' }
-            'Thumbnail' { 'desktop2:ThumbnailHandler' }
+        foreach ($spec in $specs) {
+            _MsixAddShellHandlerToManifest -Manifest $M -AppId $AppId -Spec $spec
         }
-
-        $app    = _MsixGetOrCreateApplicationExtensions -Manifest $M -AppId $AppId
-        $appExt = $app.SelectSingleNode('*[local-name()="Extensions"]')
-
-        # ── COM surrogate for the handler class (idempotent) ─────────────
-        if (-not $M.SelectSingleNode("//*[local-name()='Class' and @Id='$ClsidBare']")) {
-            $comExt    = $M.CreateElement('com:Extension', $comUri)
-            $comExt.SetAttribute('Category', 'windows.comServer')
-            $comServer = $M.CreateElement('com:ComServer', $comUri)
-            $surrogate = $M.CreateElement('com:SurrogateServer', $comUri)
-            $surrogate.SetAttribute('DisplayName', $DisplayName)
-            $class = $M.CreateElement('com:Class', $comUri)
-            $class.SetAttribute('Id',             $ClsidBare)
-            $class.SetAttribute('Path',           $Dll.Replace('/', '\'))
-            $class.SetAttribute('ThreadingModel', 'STA')
-            $null = $surrogate.AppendChild($class)
-            $null = $comServer.AppendChild($surrogate)
-            $null = $comExt.AppendChild($comServer)
-            $null = $appExt.AppendChild($comExt)
-        }
-
-        # ── FTA carrying the handler element ─────────────────────────────
-        $fta = $appExt.SelectSingleNode("*[local-name()='Extension' and @Category='windows.fileTypeAssociation']/*[local-name()='FileTypeAssociation' and @Name='$FtaName']")
-        if (-not $fta) {
-            $ftaExt = $M.CreateElement('uap:Extension', $uapUri)
-            $ftaExt.SetAttribute('Category', 'windows.fileTypeAssociation')
-            $fta = $M.CreateElement('uap:FileTypeAssociation', $uapUri)
-            $fta.SetAttribute('Name', $FtaName)
-            $sft = $M.CreateElement('uap:SupportedFileTypes', $uapUri)
-            foreach ($ft in $FileTypes) {
-                $ftNode = $M.CreateElement('uap:FileType', $uapUri)
-                $ftNode.InnerText = $ft.ToLowerInvariant()
-                $null = $sft.AppendChild($ftNode)
-            }
-            $null = $fta.AppendChild($sft)
-            $null = $ftaExt.AppendChild($fta)
-            $null = $appExt.AppendChild($ftaExt)
-        }
-
-        if ($fta.SelectSingleNode("*[local-name()='$($handlerElement.Split(':')[1])']")) {
-            Write-MsixLog -Level Info -Message "$Kind handler already declared on FTA '$FtaName' - skipping."
-            return
-        }
-        $handler = $M.CreateElement($handlerElement, $d2Uri)
-        $handler.SetAttribute('Clsid', $ClsidBare)
-        $null = $fta.AppendChild($handler)
-        Write-MsixLog -Level Info -Message "$Kind handler $ClsidBare declared on FTA '$FtaName' ($($FileTypes -join ', '))."
     }
 }
 

@@ -204,7 +204,17 @@ function Invoke-MsixAutoFix {
             }
         }
     }
-    if ($PsfFixups -or $PsfAppOptions) {
+    # No PSF for a Chromium-based target (Chrome, Edge, Electron, CEF): its
+    # sandboxed child processes refuse the injected runtime. A package that
+    # already carries PSF is not affected (see _MsixGetChromiumPsfTarget).
+    $chromiumPsfTarget = $null
+    if ($PsfFixups -or $PsfAppOptions -or ($SplashImagePath -and $SplashAppId)) {
+        $chromiumPsfTarget = _MsixGetChromiumPsfTarget -PackagePath $PackagePath
+    }
+    if (($PsfFixups -or $PsfAppOptions) -and $chromiumPsfTarget) {
+        Write-MsixLog -Level Warning -Message (_MsixFormatChromiumPsfSkip -Stage 'Recommended:InjectPsf' -Target $chromiumPsfTarget)
+    }
+    elseif ($PsfFixups -or $PsfAppOptions) {
         _Stage 'Recommended:InjectPsf' {
             $psfArgs = @{
                 PackagePath = $current
@@ -222,7 +232,12 @@ function Invoke-MsixAutoFix {
             Add-MsixVcRuntimeBundle -PackagePath $current -SourceFolder $VcRuntimeSourceFolder -SkipSigning
         }
     }
-    if ($SplashImagePath -and $SplashAppId) {
+    if ($SplashImagePath -and $SplashAppId -and $chromiumPsfTarget) {
+        # The splash screen is a PSF startScript setting: without PSF there is
+        # no config.json to put it in.
+        Write-MsixLog -Level Warning -Message (_MsixFormatChromiumPsfSkip -Stage 'Optional:AddSplashImage' -Target $chromiumPsfTarget)
+    }
+    elseif ($SplashImagePath -and $SplashAppId) {
         _Stage 'Optional:AddSplashImage' {
             Add-MsixSplashScreen -PackagePath $current -ImagePath $SplashImagePath -AppId $SplashAppId -SkipSigning
         }
@@ -290,6 +305,16 @@ function Invoke-MsixAutoFixFromAnalysis {
         Categories that always need extra inputs (VcRuntime, StartupTask,
         LoaderSearchPathOverride) are skipped with a warning unless the
         relevant -* parameter is supplied.
+
+        No PSF for Chromium-based apps: when the Application PSF would wrap
+        runs a Chromium-based executable (Chrome, Edge, Opera, Electron, CEF:
+        chrome_elf.dll, msedge_elf.dll, libcef.dll, resources\app.asar, or a V8
+        snapshot next to icudtl.dat, in its folder or a version subfolder),
+        PluginDirectory keeps only its manifest change, and InjectPsf and the
+        runtime environment wiring are skipped, each with a warning. Their
+        sandboxed child processes refuse the injected PSF runtime, which slows
+        or breaks the start. A package that already carries PSF is not
+        affected.
 
         -DryRun lists the planned fixes without doing anything.
 
@@ -493,6 +518,18 @@ function Invoke-MsixAutoFixFromAnalysis {
         if ($f -and $f.Category) { $byCat[$f.Category] = $true }
     }
 
+    # PSF and Chromium-based apps (Chrome, Edge, Opera, Electron, CEF) do not
+    # mix: their sandboxed child processes refuse the injected PSF runtime (a
+    # captured Chrome took 50.5 s to show its window with PSF, 9.3 s without).
+    # The stages that would inject PSF leave it out for such a target; a
+    # package that already carries PSF is not affected. Checked once, and only
+    # when a PSF stage is possible.
+    $chromiumPsfTarget = $null
+    if ($byCat.ContainsKey('PluginDirectory') -or $byCat.ContainsKey('BundledRuntime') -or
+        ($Report.SuggestedFixups -and @($Report.SuggestedFixups).Count -gt 0)) {
+        $chromiumPsfTarget = _MsixGetChromiumPsfTarget -PackagePath $PackagePath
+    }
+
     # Stage 1 — strip uninstaller artefacts (files + registry)
     if ($byCat.ContainsKey('UninstallerArtifact') -or $byCat.ContainsKey('UninstallRegistry')) {
         $plan.Add([pscustomobject]@{
@@ -548,27 +585,54 @@ function Invoke-MsixAutoFixFromAnalysis {
         Write-MsixLog -Level Warning -Message 'Skipping AddPackagedServices: app isolation was requested, and packaged services (full-trust, runFullTrust) cannot coexist with the partial-trust isolation entry point. Fix the services in a separate non-isolated pass, or drop -AddAppIsolation.'
     }
     elseif ($byCat.ContainsKey('ManifestFix:PackagedService')) {
-        $serviceEntries = @($Report.Findings |
+        $allServiceEntries = @($Report.Findings |
             Where-Object Category -eq 'ManifestFix:PackagedService' |
             ForEach-Object { @($_.ServiceEntries) } |
-            Where-Object { $_ -and $_.CanAutoFix })
+            Where-Object { $_ })
+        # A service whose executable did not map to a file in the package is
+        # skipped with a warning; declaring it would name a missing file.
+        foreach ($svc in @($allServiceEntries | Where-Object { -not $_.VfsExecutable })) {
+            Write-MsixLog -Level Warning -Message "AddPackagedServices: skipping service '$($svc.Name)': Registry.dat starts it from '$($svc.Executable)', which is not in the package."
+        }
+        $serviceEntries = @($allServiceEntries | Where-Object { $_.CanAutoFix })
         if ($serviceEntries) {
             $capturedServiceEntries = $serviceEntries
             $plan.Add([pscustomobject]@{
                 Stage  = 'AddPackagedServices'
                 Reason = "Declare $($capturedServiceEntries.Count) Windows service(s) via desktop6:Service"
                 Action = {
+                    # ONE manifest mutation for every service (one repack, not
+                    # one per service). A service whose executable an earlier
+                    # stage removed (RemoveUpdaters takes maintenanceservice.exe,
+                    # GoogleUpdate.exe, ...) is skipped: declaring it would hand
+                    # MakeAppx a manifest naming a missing file.
+                    $payload  = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+                    foreach ($file in @(_MsixGetPackagePayloadPath -PackagePath $current)) { [void]$payload.Add($file) }
+                    $services = [System.Collections.Generic.List[object]]::new()
                     foreach ($svc in $capturedServiceEntries) {
-                        $svcArgs = @{
-                            PackagePath  = $current
+                        $exeKey = _MsixNormalizePackagePath -Path ([string]$svc.VfsExecutable)
+                        if ($exeKey -and -not $payload.Contains($exeKey)) {
+                            Write-MsixLog -Level Info -Message "AddPackagedServices: skipping service '$($svc.Name)': its executable '$($svc.VfsExecutable)' is no longer in the package (an earlier stage removed it, or its registry path does not map to the payload)."
+                            continue
+                        }
+                        $spec = @{
                             Executable   = $svc.VfsExecutable
                             Name         = $svc.Name
                             StartupType  = $svc.StartupType
                             StartAccount = $svc.StartAccount
-                            SkipSigning  = $true
                         }
-                        if ($svc.Dependencies) { $svcArgs['Dependencies'] = @($svc.Dependencies) }
-                        Add-MsixService @svcArgs
+                        if ($svc.Dependencies) { $spec['Dependencies'] = @($svc.Dependencies) }
+                        try {
+                            $null = _MsixResolveServiceSpec -Spec $spec
+                            $services.Add($spec)
+                        } catch {
+                            Write-MsixLog -Level Warning -Message "AddPackagedServices: skipping service '$($svc.Name)': $($_.Exception.Message)"
+                        }
+                    }
+                    if ($services.Count -gt 0) {
+                        Add-MsixService -PackagePath $current -Services $services.ToArray() -SkipSigning
+                    } else {
+                        Write-MsixLog -Level Info -Message 'AddPackagedServices: no service left to declare.'
                     }
                 }
             })
@@ -590,11 +654,10 @@ function Invoke-MsixAutoFixFromAnalysis {
                     Stage  = 'DeclarePackageCertificates'
                     Reason = "Declare $($capturedCertEntries.Count) bundled certificate(s) into the $capturedCertStore store via windows.certificates"
                     Action = {
-                        foreach ($cert in $capturedCertEntries) {
-                            Add-MsixPackageCertificate -PackagePath $current `
-                                -CertificatePath $cert.RelativePath `
-                                -StoreName $capturedCertStore -SkipSigning
-                        }
+                        # All certificates in ONE manifest mutation (one repack).
+                        Add-MsixPackageCertificate -PackagePath $current `
+                            -CertificatePath @($capturedCertEntries | ForEach-Object { [string]$_.RelativePath }) `
+                            -StoreName $capturedCertStore -SkipSigning
                     }
                 })
             }
@@ -630,11 +693,24 @@ function Invoke-MsixAutoFixFromAnalysis {
                                 $removed = 0
                                 foreach ($root in $capturedStripRoots) {
                                     $full = Join-Path -Path $workspace -ChildPath $root
-                                    if (Test-Path -LiteralPath $full) {
-                                        [IO.Directory]::Delete($full, $true)
-                                        $removed++
-                                        Write-MsixLog -Level Info -Message "Stripped bundled runtime: $root"
+                                    if (-not (Test-Path -LiteralPath $full)) { continue }
+                                    # Through the shared removal helper, so a manifest
+                                    # declaration that named a file in the runtime (an
+                                    # Extension, a COM server, a LoaderSearchPathEntry
+                                    # on one of its folders) goes with it, and an
+                                    # Application's own Executable stays.
+                                    $files = @(Get-ChildItem -LiteralPath $full -Recurse -File -Force -ErrorAction SilentlyContinue |
+                                        ForEach-Object { $_.FullName.Substring($workspace.Length + 1) })
+                                    $strip = _MsixRemoveWorkspaceFile -Workspace $workspace -RelativePath $files
+                                    if ((Test-Path -LiteralPath $full) -and
+                                        -not @(Get-ChildItem -LiteralPath $full -Recurse -File -Force -ErrorAction SilentlyContinue).Count) {
+                                        [IO.Directory]::Delete($full, $true)   # only empty folders were left
                                     }
+                                    if ($strip.Removed.Count -eq 0) { continue }
+                                    $removed++
+                                    $keptNote = ''
+                                    if ($strip.Kept.Count) { $keptNote = " ($($strip.Kept.Count) file(s) kept: the manifest needs them)" }
+                                    Write-MsixLog -Level Info -Message "Stripped bundled runtime: $root$keptNote"
                                 }
                                 if ($removed -eq 0) { return $null }
                                 @{ RuntimesStripped = $removed }
@@ -643,6 +719,12 @@ function Invoke-MsixAutoFixFromAnalysis {
                         $kind = @($capturedRuntimes | Select-Object -First 1).Kind
                         $runtimePreset = 'None'
                         if ($kind -in 'Java', 'DotNet') { $runtimePreset = $kind }
+                        if ($chromiumPsfTarget -and $runtimePreset -ne 'None') {
+                            # The JAVA_HOME / DOTNET_ROOT wiring is a PSF fixup:
+                            # declare the dependency alone.
+                            Write-MsixLog -Level Warning -Message (_MsixFormatChromiumPsfSkip -Stage 'DeduplicateBundledRuntime' -Target $chromiumPsfTarget)
+                            $runtimePreset = 'None'
+                        }
                         Add-MsixRuntimeDependency -PackagePath $current `
                             -FrameworkName $capturedFwName `
                             -FrameworkMinVersion $capturedFwVersion `
@@ -665,7 +747,24 @@ function Invoke-MsixAutoFixFromAnalysis {
         $pluginDirs = @($pluginFindings | ForEach-Object { $_.Evidence } | Where-Object { $_ } | Sort-Object -Unique)
         if ($pluginDirs) {
             $capturedPluginDirs = $pluginDirs
-            if ($LegacyPluginFix) {
+            if ($chromiumPsfTarget) {
+                # No PSF for a Chromium-based target. The finding is a false
+                # positive there anyway: Chrome never writes to its
+                # Application\<version>\Extensions or Locales folders. Only the
+                # manifest-only half (write virtualization) stays.
+                Write-MsixLog -Level Warning -Message (_MsixFormatChromiumPsfSkip -Stage 'PluginDirectory' -Target $chromiumPsfTarget)
+                if (-not $LegacyPluginFix) {
+                    $plan.Add([pscustomobject]@{
+                        Stage  = 'PluginDirectory'
+                        Reason = "Disable write-virtualization for $($capturedPluginDirs.Count) install-dir extension folder(s), manifest only: no PSF for the Chromium-based '$($chromiumPsfTarget.AppId)'"
+                        Action = {
+                            Set-MsixFileSystemWriteVirtualization -PackagePath $current `
+                                -ExcludedDirectories @('$(KnownFolder:LocalAppData)', '$(KnownFolder:RoamingAppData)') `
+                                -SkipSigning
+                        }
+                    })
+                }
+            } elseif ($LegacyPluginFix) {
                 # Wide-compat: PSF FileRedirection per plugin folder.
                 $plan.Add([pscustomobject]@{
                     Stage  = 'PluginDirectory'
@@ -818,13 +917,26 @@ function Invoke-MsixAutoFixFromAnalysis {
     if ($byCat.ContainsKey('ShellExt') -and -not $AddAppIsolation) {
         $shellExtFinding = @($Report.Findings | Where-Object Category -eq 'ShellExt') | Select-Object -First 1
         $autoFixable     = @($shellExtFinding.ShellEntries | Where-Object { $_.Clsid -and $_.VfsDllPath })
+        # A handler whose DLL Registry.dat names but the package does not carry
+        # is skipped with a warning; declaring it would name a missing file.
+        foreach ($entry in @($shellExtFinding.ShellEntries | Where-Object { $_ -and $_.Clsid -and $_.DllPath -and -not $_.VfsDllPath })) {
+            Write-MsixLog -Level Warning -Message "AddLegacyContextMenu: skipping the '$($entry.HandlerName)' handler on '$($entry.Target)': Registry.dat names its DLL '$($entry.DllPath)', which is not in the package."
+        }
         if ($autoFixable) {
             $capturedShellEntries = $autoFixable   # capture for closure
             $plan.Add([pscustomobject]@{
                 Stage  = 'AddLegacyContextMenu'
                 Reason = "Register $($capturedShellEntries.Count) shellex COM handler(s) via desktop4/desktop5"
                 Action = {
+                    # Never declare a DLL an earlier stage removed.
+                    $payload = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+                    foreach ($file in @(_MsixGetPackagePayloadPath -PackagePath $current)) { [void]$payload.Add($file) }
                     foreach ($entry in $capturedShellEntries) {
+                        $dllKey = _MsixNormalizePackagePath -Path ([string]$entry.VfsDllPath)
+                        if (-not $dllKey -or -not $payload.Contains($dllKey)) {
+                            Write-MsixLog -Level Warning -Message "AddLegacyContextMenu: skipping the '$($entry.HandlerName)' handler on '$($entry.Target)': its DLL '$($entry.VfsDllPath)' is no longer in the package."
+                            continue
+                        }
                         $ft = @(if ($entry.Target -eq '*') { '*' } else { $entry.Target })
                         Add-MsixLegacyContextMenu -PackagePath $current `
                             -ShellExtDll $entry.VfsDllPath `
@@ -860,8 +972,15 @@ function Invoke-MsixAutoFixFromAnalysis {
 
     # Stage 2g.5 - preview/property/thumbnail shell handlers.
     if ($byCat.ContainsKey('ManifestFix:ShellHandlerExtension') -and -not $AddAppIsolation) {
-        $handlerEntries = @($Report.Findings |
-            Where-Object Category -eq 'ManifestFix:ShellHandlerExtension' |
+        $handlerFindings = @($Report.Findings | Where-Object Category -eq 'ManifestFix:ShellHandlerExtension')
+        # Handlers whose DLL is not in the package are skipped with a warning;
+        # declaring them would name a missing file.
+        foreach ($entry in @($handlerFindings | ForEach-Object { @($_.UnresolvedShellHandlerEntries) } | Where-Object { $_ })) {
+            $where = "Registry.dat registers no DLL for its CLSID $($entry.Clsid)"
+            if ($entry.DllPath) { $where = "Registry.dat names its DLL '$($entry.DllPath)', which is not in the package" }
+            Write-MsixLog -Level Warning -Message "AddShellHandlerExtensions: skipping the $($entry.Kind) handler for '$($entry.FileType)': $where."
+        }
+        $handlerEntries = @($handlerFindings |
             ForEach-Object { @($_.ShellHandlerEntries) } |
             Where-Object { $_ -and $_.CanAutoFix })
         if ($handlerEntries) {
@@ -870,14 +989,40 @@ function Invoke-MsixAutoFixFromAnalysis {
                 Stage  = 'AddShellHandlerExtensions'
                 Reason = "Declare $($capturedHandlerEntries.Count) preview/property/thumbnail handler(s)"
                 Action = {
+                    # ONE manifest mutation for every handler. One call per
+                    # entry unpacked and repacked the whole package per file
+                    # type: K-Lite Codec Pack's 83 thumbnail/property handlers
+                    # (~30 s per repack of its 40 MB package) ran past 40
+                    # minutes. The manifest is the one the per-entry calls
+                    # produced: same FTA names, same elements. An entry the
+                    # cmdlet would reject, or whose DLL an earlier stage
+                    # removed, is skipped with a warning instead of failing
+                    # every other handler with it.
+                    $payload = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+                    foreach ($file in @(_MsixGetPackagePayloadPath -PackagePath $current)) { [void]$payload.Add($file) }
+                    $handlers = [System.Collections.Generic.List[object]]::new()
                     foreach ($entry in $capturedHandlerEntries) {
-                        Add-MsixShellHandlerExtension -PackagePath $current `
-                            -Kind $entry.Kind `
-                            -Clsid $entry.Clsid `
-                            -Dll $entry.VfsDllPath `
-                            -FileTypes @($entry.FileType) `
-                            -FtaName $entry.FtaName `
-                            -SkipSigning
+                        $dllKey = _MsixNormalizePackagePath -Path ([string]$entry.VfsDllPath)
+                        if (-not $dllKey -or -not $payload.Contains($dllKey)) {
+                            Write-MsixLog -Level Warning -Message "AddShellHandlerExtensions: skipping the $($entry.Kind) handler for '$($entry.FileType)': its DLL '$($entry.VfsDllPath)' is no longer in the package."
+                            continue
+                        }
+                        $spec = @{
+                            Kind      = $entry.Kind
+                            Clsid     = $entry.Clsid
+                            Dll       = $entry.VfsDllPath
+                            FileTypes = @($entry.FileType)
+                            FtaName   = $entry.FtaName
+                        }
+                        try {
+                            $null = _MsixResolveShellHandlerSpec -Spec $spec
+                            $handlers.Add($spec)
+                        } catch {
+                            Write-MsixLog -Level Warning -Message "AddShellHandlerExtensions: skipping the $($entry.Kind) handler for '$($entry.FileType)': $($_.Exception.Message)"
+                        }
+                    }
+                    if ($handlers.Count -gt 0) {
+                        Add-MsixShellHandlerExtension -PackagePath $current -Handlers $handlers.ToArray() -SkipSigning
                     }
                 }
             })
@@ -906,10 +1051,20 @@ function Invoke-MsixAutoFixFromAnalysis {
                 Stage  = 'AddComServer'
                 Reason = "Declare $($capturedComServers.Count) bundled COM InProcessServer(s) in the manifest"
                 Action = {
-                    $serverSpecs = @($capturedComServers | ForEach-Object {
-                        @{ Clsid = $_.Clsid; VfsDllPath = $_.VfsDllPath; ThreadingModel = $_.ThreadingModel }
+                    # Never declare a DLL an earlier stage removed.
+                    $payload = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+                    foreach ($file in @(_MsixGetPackagePayloadPath -PackagePath $current)) { [void]$payload.Add($file) }
+                    $serverSpecs = @(foreach ($server in $capturedComServers) {
+                        $dllKey = _MsixNormalizePackagePath -Path ([string]$server.VfsDllPath)
+                        if (-not $dllKey -or -not $payload.Contains($dllKey)) {
+                            Write-MsixLog -Level Warning -Message "AddComServer: skipping COM class $($server.Clsid): its DLL '$($server.VfsDllPath)' is no longer in the package."
+                            continue
+                        }
+                        @{ Clsid = $server.Clsid; VfsDllPath = $server.VfsDllPath; ThreadingModel = $server.ThreadingModel }
                     })
-                    Add-MsixComServerExtension -PackagePath $current -Servers $serverSpecs -SkipSigning
+                    if ($serverSpecs.Count -gt 0) {
+                        Add-MsixComServerExtension -PackagePath $current -Servers $serverSpecs -SkipSigning
+                    }
                 }
             })
         } else {
@@ -1005,7 +1160,9 @@ function Invoke-MsixAutoFixFromAnalysis {
                 ($skipPsfReg -and $_.dll -eq 'RegLegacyFixups.dll')
             )
         })
-        if ($kept.Count -gt 0) {
+        if ($kept.Count -gt 0 -and $chromiumPsfTarget) {
+            Write-MsixLog -Level Warning -Message (_MsixFormatChromiumPsfSkip -Stage 'InjectPsf' -Target $chromiumPsfTarget)
+        } elseif ($kept.Count -gt 0) {
             $plan.Add([pscustomobject]@{
                 Stage  = 'InjectPsf'
                 Reason = "Apply $($kept.Count) PSF fixup(s) from analysis"
